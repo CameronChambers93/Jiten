@@ -1890,8 +1890,15 @@ public static class JmDictHelper
                 if (reader.NodeType != XmlNodeType.EndElement) continue;
                 if (reader.Name != "entry") continue;
 
+                // Keep the original text when normalising would collide with another form of the entry
+                // (e.g. 2857539 でわでわ / でゎでゎ), which the WordForms unique index rejects.
                 foreach (var form in wordInfo.Forms)
-                    form.Text = form.Text.Replace("ゎ", "わ").Replace("ヮ", "わ");
+                {
+                    var normalised = form.Text.Replace("ゎ", "わ").Replace("ヮ", "わ");
+                    if (normalised != form.Text &&
+                        !wordInfo.Forms.Any(f => f != form && f.FormType == form.FormType && f.Text == normalised))
+                        form.Text = normalised;
+                }
 
                 wordInfos.Add(wordInfo);
 
