@@ -1,7 +1,6 @@
 using Jiten.Core;
 using Jiten.Core.Media;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Caching.Memory;
 
 namespace Jiten.Api.Services;
 
@@ -19,42 +18,22 @@ public interface ISentenceMediaService
 }
 
 /// <summary>Cuts card media out of the local videos linked with <c>--link-video</c>.</summary>
-public class SentenceMediaService(JitenDbContext context, IMemoryCache cache, IConfiguration configuration) : ISentenceMediaService
+public class SentenceMediaService(JitenDbContext context, SentenceCueLookup cueLookup, IConfiguration configuration) : ISentenceMediaService
 {
     private const int PictureHeight = 480;
 
     /// <summary>ffmpeg decodes whole GOPs of 1080p HEVC; a few at once is plenty for one person mining.</summary>
     private static readonly SemaphoreSlim FfmpegSlots = new(3);
 
-    private static readonly TimeSpan MatcherTtl = TimeSpan.FromMinutes(30);
-
     public async Task<SentenceClip?> ResolveAsync(long sentenceId, CancellationToken ct)
     {
-        var sentence = await context.ExampleSentences.AsNoTracking()
-                                    .Where(s => s.SentenceId == sentenceId)
-                                    .Select(s => new { s.DeckId, s.Text, s.Position, s.Deck!.SentenceCount })
-                                    .FirstOrDefaultAsync(ct);
-        if (sentence == null) return null;
-
-        var source = await context.DeckVideoSources.AsNoTracking().FirstOrDefaultAsync(v => v.DeckId == sentence.DeckId, ct);
-        if (source == null || !IsUnderMediaRoot(source.VideoPath)) return null;
-
-        var matcher = await cache.GetOrCreateAsync($"sentence-cues:{sentence.DeckId}", async entry =>
-        {
-            entry.SlidingExpiration = MatcherTtl;
-            var cuesJson = await context.DeckSubtitleTracks.AsNoTracking()
-                                        .Where(t => t.DeckId == sentence.DeckId)
-                                        .Select(t => t.CuesJson)
-                                        .FirstOrDefaultAsync(ct);
-            return cuesJson == null ? null : new SentenceCueMatcher(new Core.Data.DeckSubtitleTrack { CuesJson = cuesJson }.GetCues());
-        });
-
-        var relative = sentence.SentenceCount > 0 ? Math.Clamp(sentence.Position / (double)sentence.SentenceCount, 0, 1) : 0;
-        var cues = matcher?.Find(sentence.Text, relative);
+        var cues = await cueLookup.FindAsync(sentenceId, ct);
         if (cues == null) return null;
 
-        return new SentenceClip(source.VideoPath, source.AudioStreamIndex,
-                                cues.Value.First.StartMs + source.SubtitleOffsetMs, cues.Value.Last.EndMs + source.SubtitleOffsetMs);
+        var source = await context.DeckVideoSources.AsNoTracking().FirstOrDefaultAsync(v => v.DeckId == cues.DeckId, ct);
+        if (source == null || !IsUnderMediaRoot(source.VideoPath)) return null;
+
+        return new SentenceClip(source.VideoPath, source.AudioStreamIndex, cues.StartMs + source.SubtitleOffsetMs, cues.EndMs + source.SubtitleOffsetMs);
     }
 
     public Task<byte[]> CutAudioAsync(SentenceClip clip, int padStartMs, int padEndMs, CancellationToken ct) =>

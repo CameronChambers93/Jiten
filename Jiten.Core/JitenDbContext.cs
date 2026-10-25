@@ -68,6 +68,9 @@ public class JitenDbContext : DbContext
     public DbSet<YouTubeRegistration> YouTubeRegistrations { get; set; }
     public DbSet<DeckSubtitleTrack> DeckSubtitleTracks { get; set; }
     public DbSet<DeckVideoSource> DeckVideoSources { get; set; }
+    public DbSet<DeckEnglishTrack> DeckEnglishTracks { get; set; }
+    public DbSet<ExampleSentenceTranslation> ExampleSentenceTranslations { get; set; }
+    public DbSet<AppSetting> AppSettings { get; set; }
 
     public DbSet<WordSet> WordSets { get; set; }
     public DbSet<WordSetMember> WordSetMembers { get; set; }
@@ -416,6 +419,39 @@ public class JitenDbContext : DbContext
                   .WithOne(d => d.VideoSource)
                   .HasForeignKey<DeckVideoSource>(v => v.DeckId)
                   .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<DeckEnglishTrack>(entity =>
+        {
+            entity.ToTable("DeckEnglishTracks", "jiten");
+            entity.HasKey(t => t.DeckId);
+            entity.Property(t => t.DeckId).ValueGeneratedNever();
+            entity.Property(t => t.Source).HasMaxLength(500);
+            entity.HasOne<Deck>()
+                  .WithOne()
+                  .HasForeignKey<DeckEnglishTrack>(t => t.DeckId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ExampleSentenceTranslation>(entity =>
+        {
+            entity.ToTable("ExampleSentenceTranslations", "jiten");
+            entity.HasKey(t => t.SentenceId);
+            entity.Property(t => t.SentenceId).ValueGeneratedNever();
+            entity.Property(t => t.Provider).HasMaxLength(50);
+            entity.Property(t => t.Model).HasMaxLength(100);
+            entity.HasIndex(t => t.DeckId);
+            entity.HasOne<ExampleSentence>()
+                  .WithOne()
+                  .HasForeignKey<ExampleSentenceTranslation>(t => t.SentenceId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AppSetting>(entity =>
+        {
+            entity.ToTable("AppSettings", "jiten");
+            entity.HasKey(s => s.Key);
+            entity.Property(s => s.Key).HasMaxLength(100);
         });
 
         modelBuilder.Entity<DeckSentenceProfile>(entity =>

@@ -14,6 +14,8 @@ describe('guessFieldSource', () => {
     expect(guessFieldSource('SentenceAudio')).toBe('sentenceAudio');
     expect(guessFieldSource('Picture')).toBe('picture');
     expect(guessFieldSource('MiscInfo')).toBe('source');
+    expect(guessFieldSource('SentenceEnglish')).toBe('sentenceEnglish');
+    expect(guessFieldSource('Translation')).toBe('sentenceEnglish');
   });
 
   it('leaves unknown fields empty', () => {

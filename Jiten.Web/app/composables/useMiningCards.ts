@@ -73,6 +73,7 @@ async function blobToBase64(blob: Blob): Promise<string> {
 export function useMiningCards() {
   loadSettings();
   const { $api } = useNuxtApp();
+  const { forCard: englishForCard } = useSentenceTranslation();
 
   const configured = computed(() => !!settings.value.deckName && !!settings.value.modelName && !!settings.value.fieldsByModel[settings.value.modelName]);
 
@@ -107,10 +108,12 @@ export function useMiningCards() {
     const wanted = new Set(Object.values(mapping));
     const fieldsFor = (source: MiningFieldSource) => Object.keys(mapping).filter((name) => mapping[name] === source);
 
-    const [details, audio, picture] = await Promise.all([
+    const [details, audio, picture, english] = await Promise.all([
       wanted.has('definitions') || wanted.has('mainDefinition') ? $api<Word>(`vocabulary/${word.wordId}/${word.readingIndex}`) : null,
       wanted.has('sentenceAudio') ? fetchAudio(sentence.sentenceId) : null,
       wanted.has('picture') ? fetchPicture(sentence.sentenceId) : null,
+      // A failed translation leaves the field empty rather than losing the card.
+      wanted.has('sentenceEnglish') ? englishForCard(sentence.sentenceId).catch(() => '') : '',
     ]);
 
     const values: Record<Exclude<MiningFieldSource, '' | 'sentenceAudio' | 'picture'>, string> = {
@@ -122,6 +125,7 @@ export function useMiningCards() {
       sentence: boldTarget(sentence),
       sentencePlain: escapeHtml(sentence.text),
       sentenceFurigana: ankiSentenceFurigana(sentence.text, sentence.furigana ?? []),
+      sentenceEnglish: escapeHtml(english),
       source: escapeHtml(sourceLabel(sentence)),
     };
 

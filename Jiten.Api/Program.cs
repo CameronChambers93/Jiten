@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.DataProtection;
 using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
@@ -484,7 +485,17 @@ builder.Services.AddSingleton<ReadableSentenceListingCache>();
 builder.Services.AddScoped<IReadableSentenceSearch, ReadableSentenceSearch>();
 builder.Services.AddSingleton<SentenceStatsCache>();
 builder.Services.AddScoped<ISentenceStatsService, SentenceStatsService>();
+builder.Services.AddScoped<SentenceCueLookup>();
 builder.Services.AddScoped<ISentenceMediaService, SentenceMediaService>();
+builder.Services.AddScoped<Jiten.Api.Services.Translation.TranslationSettingsStore>();
+builder.Services.AddScoped<Jiten.Api.Services.Translation.SentenceTranslationService>();
+// AI translation providers and English subtitle sources: add one by registering another implementation here.
+builder.Services.AddSingleton<Jiten.Api.Services.Translation.ITranslationProvider, Jiten.Api.Services.Translation.ClaudeTranslationProvider>();
+builder.Services.AddSingleton<Jiten.Api.Services.Translation.ITranslationProvider, Jiten.Api.Services.Translation.GeminiTranslationProvider>();
+builder.Services.AddScoped<Jiten.Api.Services.Translation.Subtitles.ISubtitleSource, Jiten.Api.Services.Translation.Subtitles.EmbeddedSubtitleSource>();
+builder.Services.AddScoped<Jiten.Api.Services.Translation.Subtitles.ISubtitleSource, Jiten.Api.Services.Translation.Subtitles.SubDlSubtitleSource>();
+builder.Services.AddScoped<Jiten.Api.Services.Translation.Subtitles.ISubtitleSource, Jiten.Api.Services.Translation.Subtitles.OpenSubtitlesSource>();
+builder.Services.AddScoped<Jiten.Api.Services.Translation.Subtitles.EnglishSubtitleService>();
 builder.Services.AddScoped<ISentenceUnlockOrder, SentenceUnlockOrder>();
 builder.Services.AddScoped<ISentenceTokenService, SentenceTokenService>();
 builder.Services.Configure<Jiten.Core.Services.JitenPlusLimitsOptions>(
@@ -892,6 +903,11 @@ builder.Services.AddRateLimiter(options =>
 
 builder.Services.AddResponseCaching();
 builder.Services.AddMemoryCache();
+
+// Secrets in the AppSettings table (translation API keys) are encrypted with the data protection key ring, so the ring
+// must outlive the container: point DataProtectionKeysPath at a persistent volume.
+if (builder.Configuration["DataProtectionKeysPath"] is { Length: > 0 } keysPath)
+    builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(keysPath)).SetApplicationName("Jiten");
 
 var allowPrivateNetworkOrigins = builder.Environment.IsDevelopment();
 

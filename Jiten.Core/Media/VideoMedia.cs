@@ -34,6 +34,36 @@ public static class VideoMedia
         RunBytes("ffmpeg", ["-v", "error", "-ss", Seconds(atMs), "-i", videoPath, "-map", "0:v:0", "-frames:v", "1", "-vf", $"scale=-2:{height}",
                             "-q:v", "4", "-f", "image2", "-c:v", "mjpeg", "-"], ct);
 
+    /// <summary>A subtitle stream inside a video file, as ffprobe reports it.</summary>
+    public record SubtitleStream(int Index, string Codec, string? Language, string? Title)
+    {
+        /// <summary>Text formats ffmpeg can write out as ASS or SRT; image subtitles (PGS, VobSub) would need OCR.</summary>
+        public bool IsText => Codec is "ass" or "ssa" or "subrip" or "srt" or "mov_text" or "webvtt" or "text";
+    }
+
+    public static async Task<List<SubtitleStream>> ListSubtitleStreams(string videoPath, CancellationToken ct = default)
+    {
+        var json = await Run("ffprobe", ["-v", "error", "-select_streams", "s", "-show_entries", "stream=index,codec_name:stream_tags=language,title", "-of", "json", videoPath], ct);
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.GetProperty("streams").EnumerateArray()
+                  .Select(s =>
+                  {
+                      var tags = s.TryGetProperty("tags", out var t) ? t : default;
+                      string? Tag(string name) => tags.ValueKind == JsonValueKind.Object && tags.TryGetProperty(name, out var v) ? v.GetString() : null;
+                      return new SubtitleStream(s.GetProperty("index").GetInt32(),
+                                                s.TryGetProperty("codec_name", out var c) ? c.GetString() ?? "" : "", Tag("language"), Tag("title"));
+                  })
+                  .ToList();
+    }
+
+    /// <summary>A text subtitle stream written out as ASS (when it is ASS/SSA, keeping styles) or SRT.</summary>
+    public static async Task<(string Extension, string Content)> ExtractSubtitle(string videoPath, SubtitleStream stream, CancellationToken ct = default)
+    {
+        var format = stream.Codec is "ass" or "ssa" ? "ass" : "srt";
+        var content = await Run("ffmpeg", ["-v", "error", "-i", videoPath, "-map", $"0:{stream.Index}", "-f", format, "-"], ct);
+        return ($".{format}", content);
+    }
+
     private static string Seconds(int ms) => (Math.Max(ms, 0) / 1000.0).ToString("0.000", CultureInfo.InvariantCulture);
 
     private static async Task<string> Run(string file, IEnumerable<string> args, CancellationToken ct) =>

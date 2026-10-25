@@ -26,6 +26,24 @@ namespace Jiten.Core.Migrations
             NpgsqlModelBuilderExtensions.HasPostgresExtension(modelBuilder, "fuzzystrmatch");
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("Jiten.Core.Data.AppSetting", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Key");
+
+                    b.ToTable("AppSettings", "jiten");
+                });
+
             modelBuilder.Entity("Jiten.Core.Data.BlacklistedComparisonDeck", b =>
                 {
                     b.Property<int>("Id")
@@ -405,6 +423,31 @@ namespace Jiten.Core.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("DeckEmbeddingSpaces", "jiten");
+                });
+
+            modelBuilder.Entity("Jiten.Core.Data.DeckEnglishTrack", b =>
+                {
+                    b.Property<int>("DeckId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("CuesJson")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("OffsetMs")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("SavedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.HasKey("DeckId");
+
+                    b.ToTable("DeckEnglishTracks", "jiten");
                 });
 
             modelBuilder.Entity("Jiten.Core.Data.DeckGenre", b =>
@@ -864,6 +907,38 @@ namespace Jiten.Core.Migrations
                         .HasDatabaseName("IX_ExampleSentence_DeckId_Difficulty");
 
                     b.ToTable("ExampleSentences", "jiten");
+                });
+
+            modelBuilder.Entity("Jiten.Core.Data.ExampleSentenceTranslation", b =>
+                {
+                    b.Property<long>("SentenceId")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("DeckId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Model")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("SentenceId");
+
+                    b.HasIndex("DeckId");
+
+                    b.ToTable("ExampleSentenceTranslations", "jiten");
                 });
 
             modelBuilder.Entity("Jiten.Core.Data.ExternalGenreMapping", b =>
@@ -2877,6 +2952,15 @@ namespace Jiten.Core.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("Jiten.Core.Data.DeckEnglishTrack", b =>
+                {
+                    b.HasOne("Jiten.Core.Data.Deck", null)
+                        .WithOne()
+                        .HasForeignKey("Jiten.Core.Data.DeckEnglishTrack", "DeckId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Jiten.Core.Data.DeckGenre", b =>
                 {
                     b.HasOne("Jiten.Core.Data.Deck", "Deck")
@@ -3061,6 +3145,15 @@ namespace Jiten.Core.Migrations
                         .IsRequired();
 
                     b.Navigation("Deck");
+                });
+
+            modelBuilder.Entity("Jiten.Core.Data.ExampleSentenceTranslation", b =>
+                {
+                    b.HasOne("Jiten.Core.Data.ExampleSentence", null)
+                        .WithOne()
+                        .HasForeignKey("Jiten.Core.Data.ExampleSentenceTranslation", "SentenceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Jiten.Core.Data.ExternalTagMapping", b =>

@@ -213,6 +213,41 @@
     }
   }
 
+  // English: shown per the admin's page mode, from the episode's English subtitles or (for admins) an AI translation.
+  const { options: translationOptions, translations, loadOptions: loadTranslationOptions, translate, translateMany } = useSentenceTranslation();
+  const translating = ref<Record<number, boolean>>({});
+  const pageMode = computed(() => translationOptions.value?.pageMode ?? 'off');
+
+  async function showEnglish(sentenceId: number) {
+    translating.value = { ...translating.value, [sentenceId]: true };
+    try {
+      const translation = await translate(sentenceId, !!translationOptions.value?.aiAvailable);
+      if (!translation) toast.add({ severity: 'info', summary: 'No English for this sentence yet.', life: 3000, group: 'bottom' });
+    } catch (e) {
+      const message = (e as { data?: { message?: string } })?.data?.message;
+      toast.add({ severity: 'error', summary: message ?? "Couldn't translate the sentence", life: 5000, group: 'bottom' });
+    } finally {
+      translating.value = { ...translating.value, [sentenceId]: false };
+    }
+  }
+
+  // Auto mode: subtitle and cached English for every listed sentence; new AI translations only when the admin allows it.
+  async function autoTranslate(sentenceIds: number[]) {
+    const o = await loadTranslationOptions();
+    if (o?.pageMode !== 'auto' || sentenceIds.length === 0) return;
+    await translateMany(sentenceIds).catch(() => {});
+    if (!o.pageAutoAi || !o.aiAvailable) return;
+    for (const id of sentenceIds) if (translations.value[id] === null) await showEnglish(id);
+  }
+
+  function englishTitle(sentenceId: number): string {
+    const t = translations.value[sentenceId];
+    if (!t) return '';
+    return t.origin === 'subtitles' ? `From ${t.source ?? 'English subtitles'}` : `AI translation (${t.model ?? t.provider})`;
+  }
+
+  watch(mineSentences, (items) => autoTranslate(items.map((i) => i.sentence.sentenceId)));
+
   onBeforeUnmount(() => {
     player?.pause();
     for (const url of audioUrls.values()) URL.revokeObjectURL(url);
@@ -220,6 +255,7 @@
 
   if (import.meta.client) {
     watch(hasData, (ready) => ready && loadMineSentences(true), { immediate: true });
+    loadTranslationOptions();
     watch(knownVersion, () => hasData.value && loadMineSentences(true));
   }
 </script>
@@ -296,7 +332,9 @@
           <div class="px-4 pt-4 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
             <div>
               <h2 class="text-xl font-bold">Words that make the most sentences understandable</h2>
-              <p class="text-sm text-gray-600 dark:text-gray-300">If you learn the words in this order, they will make the most sentences understandable (i+0).</p>
+              <p class="text-sm text-gray-600 dark:text-gray-300">
+                If you learn the words in this order, they will make the most sentences understandable (i+0).
+              </p>
             </div>
             <Button
               label="Study in this order"
@@ -408,14 +446,30 @@
                   </span>
                 </div>
                 <div v-for="sentence in group.sentences" :key="sentence.sentenceId" class="flex items-start gap-2">
-                  <ExampleSentenceEntry
-                    class="min-w-0 flex-1"
-                    :example-sentence="sentence"
-                    :word-id="group.word.wordId"
-                    :reading-index="group.word.readingIndex"
-                    show-source
-                  />
+                  <div class="min-w-0 flex-1">
+                    <ExampleSentenceEntry :example-sentence="sentence" :word-id="group.word.wordId" :reading-index="group.word.readingIndex" show-source />
+                    <p
+                      v-if="pageMode !== 'off' && translations[sentence.sentenceId]"
+                      class="text-sm text-gray-600 dark:text-gray-300 mt-1"
+                      :title="englishTitle(sentence.sentenceId)"
+                    >
+                      {{ translations[sentence.sentenceId]!.text }}
+                      <i v-if="translations[sentence.sentenceId]!.origin === 'ai'" class="pi pi-sparkles text-xs text-gray-400" aria-label="AI translation" />
+                    </p>
+                  </div>
                   <div class="flex shrink-0 gap-1">
+                    <Button
+                      v-if="pageMode === 'button' && !translations[sentence.sentenceId]"
+                      v-tooltip.left="'Show the English'"
+                      icon="pi pi-language"
+                      size="small"
+                      severity="secondary"
+                      text
+                      rounded
+                      aria-label="Show the English"
+                      :loading="translating[sentence.sentenceId]"
+                      @click="showEnglish(sentence.sentenceId)"
+                    />
                     <Button
                       v-tooltip.left="'Play the episode audio'"
                       icon="pi pi-play"

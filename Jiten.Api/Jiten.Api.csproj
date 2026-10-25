@@ -9,6 +9,7 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <PackageReference Include="Anthropic" Version="13.3.0" />
         <PackageReference Include="Concentus" Version="2.2.2" />
         <PackageReference Include="Concentus.OggFile" Version="1.0.7" />
         <PackageReference Include="Google.Apis.Auth" Version="1.70.0" />

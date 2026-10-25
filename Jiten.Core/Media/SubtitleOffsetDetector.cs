@@ -41,12 +41,39 @@ public static class SubtitleOffsetDetector
         var sorted = (double[])energy.Clone();
         Array.Sort(sorted);
         var threshold = sorted[(int)(frames * SpeechPercentile)];
-        var speechShare = energy.Count(e => e > threshold) / (double)frames;
+        return BestShift(energy.Select(e => e > threshold).ToArray(), cues, maxShiftMs);
+    }
 
-        // Prefix sums of the centred speech signal: the score of a shift is the sum over covered frames, O(cues) per shift.
+    /// <summary>
+    /// Finds the constant shift that best lines cues up with another track's cues (e.g. an English fansub against the
+    /// Japanese subtitles), in the same way as against speech: the reference cues stand in for the speech frames.
+    /// </summary>
+    public static Result DetectAgainstCues(IEnumerable<(int StartMs, int EndMs)> reference, IEnumerable<(int StartMs, int EndMs)> cues,
+                                           int maxShiftMs = 120_000)
+    {
+        var referenceFrames = MergeIntervals(reference.Select(c => (c.StartMs / FrameMs, c.EndMs / FrameMs)));
+        if (referenceFrames.Count == 0) return new Result(0, 0, 0);
+
+        // Room on both sides so cues shifted before the first or past the last reference cue still score.
+        var frames = referenceFrames[^1].End + maxShiftMs / FrameMs;
+        var covered = new bool[frames];
+        foreach (var (start, end) in referenceFrames)
+            Array.Fill(covered, true, start, end - start);
+
+        return BestShift(covered, cues, maxShiftMs);
+    }
+
+    /// <summary>The shift (in frames, returned in ms) that puts the most cue time on active frames, net of chance.</summary>
+    private static Result BestShift(bool[] active, IEnumerable<(int StartMs, int EndMs)> cues, int maxShiftMs)
+    {
+        var frames = active.Length;
+        if (frames == 0) return new Result(0, 0, 0);
+        var activeShare = active.Count(a => a) / (double)frames;
+
+        // Prefix sums of the centred signal: the score of a shift is the sum over covered frames, O(cues) per shift.
         var prefix = new double[frames + 1];
         for (int f = 0; f < frames; f++)
-            prefix[f + 1] = prefix[f] + (energy[f] > threshold ? 1 : 0) - speechShare;
+            prefix[f + 1] = prefix[f] + (active[f] ? 1 : 0) - activeShare;
 
         var intervals = MergeIntervals(cues.Select(c => (c.StartMs / FrameMs, c.EndMs / FrameMs)));
 

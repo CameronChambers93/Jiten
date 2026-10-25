@@ -77,6 +77,16 @@
       </Card>
 
       <Card class="shadow-md">
+        <template #title>Translation</template>
+        <template #content>
+          <p class="mb-4">English for sentences: subtitle sources, AI provider, prompt</p>
+          <div class="flex justify-center">
+            <Button label="Settings" class="p-button-primary" @click="navigateTo('/dashboard/translation')" />
+          </div>
+        </template>
+      </Card>
+
+      <Card class="shadow-md">
         <template #title>Maintenance Banner</template>
         <template #content>
           <p class="mb-4">Display a site-wide maintenance notice</p>

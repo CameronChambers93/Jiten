@@ -20,6 +20,7 @@
   import { getMediaTypeText, getChildrenCountText } from '~/utils/mediaTypeMapper';
   import WebNovelSyncPanel from '~/components/dashboard/WebNovelSyncPanel.vue';
   import YouTubeSyncPanel from '~/components/dashboard/YouTubeSyncPanel.vue';
+  import EnglishSubtitlesPanel from '~/components/dashboard/EnglishSubtitlesPanel.vue';
   import { detectLinkTypeFromUrl, getLinkLabel, getLinkTypeText } from '~/utils/linkTypeMapper';
   import { getAllGenres } from '~/utils/genreMapper';
   import { DEFAULT_TAG_PERCENTAGE } from '~/utils/tags';
@@ -1086,6 +1087,7 @@
         <!-- Only renders for decks tracked as webnovels -->
         <WebNovelSyncPanel :deck-id="Number(mediaId)" />
         <YouTubeSyncPanel :deck-id="Number(mediaId)" />
+        <EnglishSubtitlesPanel :deck-id="Number(mediaId)" />
 
         <!-- File details card -->
         <Card class="mb-6">
