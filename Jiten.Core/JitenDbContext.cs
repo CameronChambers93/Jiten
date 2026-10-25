@@ -67,6 +67,7 @@ public class JitenDbContext : DbContext
     public DbSet<YouTubeVideo> YouTubeVideos { get; set; }
     public DbSet<YouTubeRegistration> YouTubeRegistrations { get; set; }
     public DbSet<DeckSubtitleTrack> DeckSubtitleTracks { get; set; }
+    public DbSet<DeckVideoSource> DeckVideoSources { get; set; }
 
     public DbSet<WordSet> WordSets { get; set; }
     public DbSet<WordSetMember> WordSetMembers { get; set; }
@@ -403,6 +404,17 @@ public class JitenDbContext : DbContext
             entity.HasOne(t => t.Deck)
                   .WithOne(d => d.SubtitleTrack)
                   .HasForeignKey<DeckSubtitleTrack>(t => t.DeckId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<DeckVideoSource>(entity =>
+        {
+            entity.ToTable("DeckVideoSources", "jiten");
+            entity.HasKey(v => v.DeckId);
+            entity.Property(v => v.DeckId).ValueGeneratedNever();
+            entity.HasOne(v => v.Deck)
+                  .WithOne(d => d.VideoSource)
+                  .HasForeignKey<DeckVideoSource>(v => v.DeckId)
                   .OnDelete(DeleteBehavior.Cascade);
         });
 

@@ -146,6 +146,8 @@ public class Deck
 
     public DeckSubtitleTrack? SubtitleTrack { get; set; }
 
+    public DeckVideoSource? VideoSource { get; set; }
+
     /// <summary>
     /// Mora per minute, computed from SpeechMoraCount and SpeechDuration
     /// </summary>

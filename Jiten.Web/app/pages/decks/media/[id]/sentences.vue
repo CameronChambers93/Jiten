@@ -161,6 +161,63 @@
     }
   }
 
+  // Mining: preview the sentence audio cut from the linked episode, and add the sentence to Anki through AnkiConnect.
+  const { configured: cardsConfigured, fetchAudio, addCard } = useMiningCards();
+  const toast = useToast();
+  const cardSettingsVisible = ref(false);
+  const cardState = ref<Record<number, 'adding' | 'added'>>({});
+  const audioLoading = ref<number | null>(null);
+  const audioUrls = new Map<number, string>();
+  let player: HTMLAudioElement | null = null;
+
+  function mediaError(e: unknown, fallback: string): string {
+    const err = e as { statusCode?: number; response?: { status?: number }; message?: string } | null;
+    if (err?.statusCode === 404 || err?.response?.status === 404) return "This sentence's episode has no linked video.";
+    if (e instanceof TypeError) return "Couldn't reach AnkiConnect at 127.0.0.1:8765. Is Anki open?";
+    return err?.message ? `${fallback}: ${err.message}` : fallback;
+  }
+
+  async function playSentence(sentenceId: number) {
+    player?.pause();
+    let url = audioUrls.get(sentenceId);
+    if (!url) {
+      audioLoading.value = sentenceId;
+      try {
+        url = URL.createObjectURL(await fetchAudio(sentenceId));
+        audioUrls.set(sentenceId, url);
+      } catch (e) {
+        toast.add({ severity: 'warn', summary: mediaError(e, "Couldn't load the audio"), life: 4000, group: 'bottom' });
+        return;
+      } finally {
+        audioLoading.value = null;
+      }
+    }
+    player = new Audio(url);
+    player.play();
+  }
+
+  async function mineSentence(word: DeckIPlusOneSentence['word'], sentence: DeckIPlusOneSentence['sentence']) {
+    if (!cardsConfigured.value) {
+      cardSettingsVisible.value = true;
+      return;
+    }
+    cardState.value = { ...cardState.value, [sentence.sentenceId]: 'adding' };
+    try {
+      await addCard({ word, sentence, wordSentences: 0 });
+      cardState.value = { ...cardState.value, [sentence.sentenceId]: 'added' };
+      toast.add({ severity: 'success', summary: `Added ${word.reading} to Anki`, life: 2000, group: 'bottom' });
+    } catch (e) {
+      const { [sentence.sentenceId]: _, ...rest } = cardState.value;
+      cardState.value = rest;
+      toast.add({ severity: 'error', summary: mediaError(e, "Couldn't add the card"), life: 5000, group: 'bottom' });
+    }
+  }
+
+  onBeforeUnmount(() => {
+    player?.pause();
+    for (const url of audioUrls.values()) URL.revokeObjectURL(url);
+  });
+
   if (import.meta.client) {
     watch(hasData, (ready) => ready && loadMineSentences(true), { immediate: true });
     watch(knownVersion, () => hasData.value && loadMineSentences(true));
@@ -313,9 +370,20 @@
 
       <Card>
         <template #header>
-          <div class="px-4 pt-4">
-            <h2 class="text-xl font-bold">Sentences you can mine</h2>
-            <p class="text-sm text-gray-600 dark:text-gray-300">Some i+1 example sentences from this title, with the target word being the unknown.</p>
+          <div class="px-4 pt-4 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+            <div>
+              <h2 class="text-xl font-bold">Sentences you can mine</h2>
+              <p class="text-sm text-gray-600 dark:text-gray-300">Some i+1 example sentences from this title, with the target word being the unknown.</p>
+            </div>
+            <Button
+              label="Card settings"
+              icon="pi pi-cog"
+              size="small"
+              severity="secondary"
+              outlined
+              class="self-start shrink-0"
+              @click="cardSettingsVisible = true"
+            />
           </div>
         </template>
         <template #content>
@@ -339,14 +407,40 @@
                     {{ group.wordSentences.toLocaleString() }} {{ group.wordSentences === 1 ? 'sentence' : 'sentences' }}
                   </span>
                 </div>
-                <ExampleSentenceEntry
-                  v-for="sentence in group.sentences"
-                  :key="sentence.sentenceId"
-                  :example-sentence="sentence"
-                  :word-id="group.word.wordId"
-                  :reading-index="group.word.readingIndex"
-                  show-source
-                />
+                <div v-for="sentence in group.sentences" :key="sentence.sentenceId" class="flex items-start gap-2">
+                  <ExampleSentenceEntry
+                    class="min-w-0 flex-1"
+                    :example-sentence="sentence"
+                    :word-id="group.word.wordId"
+                    :reading-index="group.word.readingIndex"
+                    show-source
+                  />
+                  <div class="flex shrink-0 gap-1">
+                    <Button
+                      v-tooltip.left="'Play the episode audio'"
+                      icon="pi pi-play"
+                      size="small"
+                      severity="secondary"
+                      text
+                      rounded
+                      aria-label="Play sentence audio"
+                      :loading="audioLoading === sentence.sentenceId"
+                      @click="playSentence(sentence.sentenceId)"
+                    />
+                    <Button
+                      v-tooltip.left="cardState[sentence.sentenceId] === 'added' ? 'Added to Anki' : 'Add to Anki'"
+                      :icon="cardState[sentence.sentenceId] === 'added' ? 'pi pi-check' : 'pi pi-plus'"
+                      size="small"
+                      :severity="cardState[sentence.sentenceId] === 'added' ? 'success' : 'secondary'"
+                      text
+                      rounded
+                      :aria-label="cardState[sentence.sentenceId] === 'added' ? 'Added to Anki' : 'Add to Anki'"
+                      :loading="cardState[sentence.sentenceId] === 'adding'"
+                      :disabled="!!cardState[sentence.sentenceId]"
+                      @click="mineSentence(group.word, sentence)"
+                    />
+                  </div>
+                </div>
               </li>
             </ul>
             <div v-if="mineSentences.length < mineTotal" class="flex justify-center pt-3">
@@ -356,6 +450,8 @@
         </template>
       </Card>
     </template>
+
+    <MiningCardSettingsDialog v-model:visible="cardSettingsVisible" />
 
     <LazySrsAddDeckDialog
       v-if="studyDialog && mainDeck"

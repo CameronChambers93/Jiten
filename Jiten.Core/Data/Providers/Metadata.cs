@@ -22,4 +22,13 @@ public class Metadata
     public long? SpeechDuration { get; set; }
     public long? SpeechMoraCount { get; set; }
     public List<DeckDictionaryEntry> DictionaryEntries { get; set; } = new();
+
+    /// <summary>The episode's video under the media root, for cutting card media; read by --link-video.</summary>
+    public string? VideoPath { get; set; }
+
+    /// <summary>ffmpeg stream index of the Japanese audio; the first jpn-tagged (else first) audio stream when null.</summary>
+    public int? AudioStream { get; set; }
+
+    /// <summary>Shift applied to the subtitle times to match the video; detected from the audio when null.</summary>
+    public int? SubtitleOffsetMs { get; set; }
 }

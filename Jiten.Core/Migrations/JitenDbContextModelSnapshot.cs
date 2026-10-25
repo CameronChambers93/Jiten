@@ -596,6 +596,26 @@ namespace Jiten.Core.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Jiten.Core.Data.DeckVideoSource", b =>
+                {
+                    b.Property<int>("DeckId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("AudioStreamIndex")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("SubtitleOffsetMs")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("VideoPath")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("DeckId");
+
+                    b.ToTable("DeckVideoSources", "jiten");
+                });
+
             modelBuilder.Entity("Jiten.Core.Data.DeckWord", b =>
                 {
                     b.Property<long>("DeckWordId")
@@ -2961,6 +2981,17 @@ namespace Jiten.Core.Migrations
                     b.Navigation("Deck");
                 });
 
+            modelBuilder.Entity("Jiten.Core.Data.DeckVideoSource", b =>
+                {
+                    b.HasOne("Jiten.Core.Data.Deck", "Deck")
+                        .WithOne("VideoSource")
+                        .HasForeignKey("Jiten.Core.Data.DeckVideoSource", "DeckId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Deck");
+                });
+
             modelBuilder.Entity("Jiten.Core.Data.DeckWord", b =>
                 {
                     b.HasOne("Jiten.Core.Data.Deck", "Deck")
@@ -3442,6 +3473,8 @@ namespace Jiten.Core.Migrations
                     b.Navigation("SubtitleTrack");
 
                     b.Navigation("Titles");
+
+                    b.Navigation("VideoSource");
                 });
 
             modelBuilder.Entity("Jiten.Core.Data.DifficultyRankGroup", b =>

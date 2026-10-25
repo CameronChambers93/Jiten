@@ -199,6 +199,11 @@ public class Program
             if (await deckCommands.Insert(options)) return;
         }
 
+        if (options.LinkVideo != null)
+        {
+            await new VideoCommands(context).LinkVideo(options);
+        }
+
         if (options.BackfillSpeechStats != null)
         {
             await deckCommands.BackfillSpeechStats(options);

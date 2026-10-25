@@ -55,6 +55,10 @@ public class CliOptions
     [Option(longName: "insert", Required = false, HelpText = "Insert the parsed deck.json into the database from a directory.")]
     public string? Insert { get; set; }
 
+    [Option(longName: "link-video", Required = false,
+            HelpText = "For each deck folder in a directory, link its inserted episodes to the videos named by VideoPath in metadata.json, for card audio and screenshots. Honours --dry-run.")]
+    public string? LinkVideo { get; set; }
+
     [Option(longName: "update", Required = false,
             HelpText = "Update the parsed deck.json into the database from a directory if it's more recent'.")]
     public bool UpdateDecks { get; set; }
