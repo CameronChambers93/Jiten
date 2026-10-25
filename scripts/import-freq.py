@@ -103,14 +103,25 @@ def main():
         text, ftype = forms[(word, idx)]
         if ftype == KANA:
             ranked_kana.setdefault(text, set()).add(rank)
+    pending = []
     for term, rank in standalone:
         if rank in ranked_kana.get(term, ()):
             continue  # the export's kana entry for a word already ranked via its kanji form
         cands = order(w for w in kana_words.get(term, []) if w not in has_kanji) or order(kana_words.get(term, []))
         if not cands:
             unmatched += 1
-            continue
-        assign((cands[0], kana_by_word[cands[0]][term]), rank)
+        elif len(cands) == 1:
+            assign((cands[0], kana_by_word[cands[0]][term]), rank)
+        else:
+            pending.append((term, rank, cands))
+    # Ambiguous kana entries go to the word the export ranked best through its other forms
+    # (んだ → the のだ/んだ entry rather than a rare homograph), then by JMdict priority.
+    word_best = {}
+    for (word, _), rank in form_rank.items():
+        word_best[word] = min(rank, word_best.get(word, rank))
+    for term, rank, cands in pending:
+        word = min(cands, key=lambda w: word_best.get(w, float("inf")))
+        assign((word, kana_by_word[word][term]), rank)
     print(f"{len(form_rank)} ranked forms; {unmatched} entries unmatched, {ambiguous} ambiguous kanji pairs")
 
     # Zipf estimate for observed frequency: p(r) = 1 / (r * H_n)
