@@ -177,8 +177,14 @@
     return err?.message ? `${fallback}: ${err.message}` : fallback;
   }
 
-  async function playSentence(sentenceId: number) {
+  // Without a linked episode the sentence is read by text-to-speech instead.
+  const { speakSentence, stop: stopTts } = useTts(ref(''), 'sentence');
+  const ttsOnly = new Set<number>();
+
+  async function playSentence(sentenceId: number, text: string) {
     player?.pause();
+    stopTts();
+    if (ttsOnly.has(sentenceId)) return speakSentence(sentenceId, text);
     let url = audioUrls.get(sentenceId);
     if (!url) {
       audioLoading.value = sentenceId;
@@ -186,6 +192,12 @@
         url = URL.createObjectURL(await fetchAudio(sentenceId));
         audioUrls.set(sentenceId, url);
       } catch (e) {
+        const err = e as { statusCode?: number; response?: { status?: number } } | null;
+        if (err?.statusCode === 404 || err?.response?.status === 404) {
+          ttsOnly.add(sentenceId);
+          speakSentence(sentenceId, text);
+          return;
+        }
         toast.add({ severity: 'warn', summary: mediaError(e, "Couldn't load the audio"), life: 4000, group: 'bottom' });
         return;
       } finally {
@@ -450,7 +462,7 @@
                 </div>
                 <div v-for="sentence in group.sentences" :key="sentence.sentenceId" class="flex items-start gap-2">
                   <div class="min-w-0 flex-1">
-                    <ExampleSentenceEntry :example-sentence="sentence" :word-id="group.word.wordId" :reading-index="group.word.readingIndex" show-source />
+                    <ExampleSentenceEntry :example-sentence="sentence" :word-id="group.word.wordId" :reading-index="group.word.readingIndex" show-source :show-tts="false" />
                     <p
                       v-if="pageMode !== 'off' && translations[sentence.sentenceId]"
                       class="text-sm text-gray-600 dark:text-gray-300 mt-1"
@@ -474,7 +486,7 @@
                       @click="showEnglish(sentence.sentenceId)"
                     />
                     <Button
-                      v-tooltip.left="'Play the episode audio'"
+                      v-tooltip.left="'Listen'"
                       icon="pi pi-play"
                       size="small"
                       severity="secondary"
@@ -482,7 +494,7 @@
                       rounded
                       aria-label="Play sentence audio"
                       :loading="audioLoading === sentence.sentenceId"
-                      @click="playSentence(sentence.sentenceId)"
+                      @click="playSentence(sentence.sentenceId, sentence.text)"
                     />
                     <Button
                       v-tooltip.left="cardState[sentence.sentenceId] === 'added' ? 'Added to Anki' : 'Add to Anki'"

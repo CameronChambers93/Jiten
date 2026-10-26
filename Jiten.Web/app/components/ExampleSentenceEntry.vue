@@ -23,8 +23,10 @@
       hiddenWordId?: number;
       /** The sentence's own word is known, so the i+N badge counts from i+0. */
       targetKnown?: boolean;
+      /** Off where the page has its own listen button. */
+      showTts?: boolean;
     }>(),
-    { showActions: true }
+    { showActions: true, showTts: true }
   );
 
   const emit = defineEmits<{
@@ -156,7 +158,7 @@
           <span v-if="exampleSentence.isIPlusOne || exampleSentence.unknownCount != null" class="h-5 inline-flex items-center">
             <IPlusOneBadge :unknown="exampleSentence.unknownCount ?? 0" :target-known="targetKnown" />
           </span>
-          <TtsButton v-if="actionsVisible" :text="exampleSentence.text" :sentence-id="exampleSentence.sentenceId" type="sentence" size="sm" />
+          <TtsButton v-if="actionsVisible && showTts" :text="exampleSentence.text" :sentence-id="exampleSentence.sentenceId" type="sentence" size="sm" />
           <button
             v-if="canEdit && actionsVisible"
             class="inline-flex items-center justify-center transition-colors"
