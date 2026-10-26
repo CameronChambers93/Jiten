@@ -1075,6 +1075,56 @@ namespace Jiten.Core.Migrations
                     b.ToTable("FranchiseSuggestionDismissals", "jiten");
                 });
 
+            modelBuilder.Entity("Jiten.Core.Data.FrequencyDictionary", b =>
+                {
+                    b.Property<int>("FrequencyDictionaryId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("FrequencyDictionaryId"));
+
+                    b.Property<int>("EntryCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("ImportedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("RankedForms")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Revision")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.HasKey("FrequencyDictionaryId");
+
+                    b.ToTable("FrequencyDictionaries", "jiten");
+                });
+
+            modelBuilder.Entity("Jiten.Core.Data.FrequencyDictionaryRank", b =>
+                {
+                    b.Property<int>("FrequencyDictionaryId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("WordId")
+                        .HasColumnType("integer");
+
+                    b.Property<short>("ReadingIndex")
+                        .HasColumnType("smallint");
+
+                    b.Property<int>("Rank")
+                        .HasColumnType("integer");
+
+                    b.HasKey("FrequencyDictionaryId", "WordId", "ReadingIndex");
+
+                    b.ToTable("FrequencyDictionaryRanks", "jiten");
+                });
+
             modelBuilder.Entity("Jiten.Core.Data.JMDict.JmDictCrossReference", b =>
                 {
                     b.Property<int>("Id")
@@ -3195,6 +3245,15 @@ namespace Jiten.Core.Migrations
                         .IsRequired();
 
                     b.Navigation("Deck");
+                });
+
+            modelBuilder.Entity("Jiten.Core.Data.FrequencyDictionaryRank", b =>
+                {
+                    b.HasOne("Jiten.Core.Data.FrequencyDictionary", null)
+                        .WithMany()
+                        .HasForeignKey("FrequencyDictionaryId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Jiten.Core.Data.JMDict.JmDictDefinition", b =>

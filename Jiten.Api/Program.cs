@@ -496,6 +496,8 @@ builder.Services.AddScoped<Jiten.Api.Services.Translation.Subtitles.ISubtitleSou
 builder.Services.AddScoped<Jiten.Api.Services.Translation.Subtitles.ISubtitleSource, Jiten.Api.Services.Translation.Subtitles.SubDlSubtitleSource>();
 builder.Services.AddScoped<Jiten.Api.Services.Translation.Subtitles.ISubtitleSource, Jiten.Api.Services.Translation.Subtitles.OpenSubtitlesSource>();
 builder.Services.AddScoped<Jiten.Api.Services.Translation.Subtitles.EnglishSubtitleService>();
+builder.Services.AddScoped<Jiten.Api.Services.Mining.FrequencyDictionaryService>();
+builder.Services.AddScoped<Jiten.Api.Services.Mining.MiningSentenceService>();
 builder.Services.AddScoped<ISentenceUnlockOrder, SentenceUnlockOrder>();
 builder.Services.AddScoped<ISentenceTokenService, SentenceTokenService>();
 builder.Services.Configure<Jiten.Core.Services.JitenPlusLimitsOptions>(

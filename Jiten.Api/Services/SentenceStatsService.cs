@@ -31,10 +31,23 @@ public interface ISentenceStatsService
 
     /// <summary>Exact i+0 and i+1 shares, in percent, of each deck's own text; decks without a profile are left out.</summary>
     Task<Dictionary<int, (float Readable, float IPlusOne)>> GetOwnTextReadabilityAsync(IReadOnlyCollection<int> deckIds);
+
+    /// <summary>A title's example sentences with exactly one unknown content word, for the user, in sentence id order. Null when the deck doesn't exist.</summary>
+    Task<IPlusOneListing?> GetIPlusOneHitsAsync(int deckId);
+
+    /// <summary>Display summaries keyed by sentence word key.</summary>
+    Task<Dictionary<int, WordSummaryDto>> LoadWordSummariesAsync(IEnumerable<int> wordKeys);
 }
+
+/// <summary>An example sentence whose one unknown content word is <paramref name="WordKey"/>, at <paramref name="Position"/> for <paramref name="Length"/> characters.</summary>
+public sealed record IPlusOneHit(long SentenceId, int DeckId, int WordKey, byte Position, byte Length, float Difficulty, int TextLength);
+
+/// <param name="Checked">Example sentences judged; a long title holds more than the cap.</param>
+public sealed record IPlusOneListing(List<IPlusOneHit> Hits, int Checked);
 
 public class SentenceStatsService(
     JitenDbContext context,
+    UserDbContext userContext,
     ICurrentUserService currentUser,
     IExampleSentenceQueryService exampleSentences,
     SentenceStatsCache cache) : ISentenceStatsService
@@ -68,7 +81,7 @@ public class SentenceStatsService(
 
         // A rebuilt profile or a new known-word state (the client's coverage version) must never be answered from the cache.
         var builtAt = builds.Count > 0 ? builds.Max(b => b.BuiltAt).Ticks : 0;
-        var key = $"stats:{currentUser.UserId}:{deckId}:{summaryOnly}:{builds.Count}:{builtAt}:{knownVersion}";
+        var key = $"stats:{currentUser.UserId}:{deckId}:{summaryOnly}:{builds.Count}:{builtAt}:{knownVersion}:{await KnownStamp()}";
         if (cache.Cache.TryGetValue(key, out DeckSentenceStatsDto? cached)) return cached;
 
         var profiledIds = builds.Select(b => b.DeckId).ToList();
@@ -105,7 +118,7 @@ public class SentenceStatsService(
                                   .ToListAsync();
         if (builds.Count == 0) return null;
 
-        var key = $"unlock:{currentUser.UserId}:{deckId}:{builds.Count}:{builds.Max(b => b.BuiltAt).Ticks}";
+        var key = $"unlock:{currentUser.UserId}:{deckId}:{builds.Count}:{builds.Max(b => b.BuiltAt).Ticks}:{await KnownStamp()}";
         if (cache.Cache.TryGetValue(key, out IReadOnlyDictionary<int, int>? cached)) return cached;
 
         var profiledIds = builds.Select(b => b.DeckId).ToList();
@@ -147,13 +160,13 @@ public class SentenceStatsService(
 
     public async Task<DeckIPlusOneSentencesResponse?> GetIPlusOneSentencesAsync(int deckId, int offset, string? knownVersion)
     {
-        var key = $"iplusone:{currentUser.UserId}:{deckId}:{knownVersion}";
+        var key = $"iplusone:{currentUser.UserId}:{deckId}:{knownVersion}:{await KnownStamp()}";
         if (!cache.Cache.TryGetValue(key, out (List<IPlusOneEntry> Entries, int Checked) listing))
         {
-            var parts = await LoadParts(deckId);
-            if (parts == null) return null;
+            var hits = await GetIPlusOneHitsAsync(deckId);
+            if (hits == null) return null;
 
-            listing = await ListIPlusOne(parts.Select(p => p.DeckId).Append(deckId).Distinct().ToList());
+            listing = (OrderByUnlocks(hits.Hits), hits.Checked);
             cache.Cache.Set(key, listing, new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = CacheTtl, Size = listing.Entries.Count + 1 });
         }
 
@@ -191,6 +204,21 @@ public class SentenceStatsService(
         return children.Count > 0
             ? children.Select((c, i) => new Part(c.DeckId, i + 1, c.OriginalTitle)).ToList()
             : [new Part(deck.DeckId, 1, deck.OriginalTitle)];
+    }
+
+    /// <summary>
+    /// When the user's known words last changed. Every card, word-set and import change marks coverage dirty at that
+    /// moment, so a new stamp means a cached result may be stale; the client's version alone misses changes made on
+    /// other pages (marking a word mastered) or devices (an Anki sync).
+    /// </summary>
+    /// <remarks>The coverage job clears the dirty stamp when it finishes, so its refresh time is part of the stamp too.</remarks>
+    private async Task<string> KnownStamp()
+    {
+        var userId = currentUser.UserId;
+        if (userId == null) return "";
+        var meta = await userContext.UserMetadatas.AsNoTracking().Where(m => m.UserId == userId)
+                                    .Select(m => new { m.CoverageDirtyAt, m.CoverageRefreshedAt }).FirstOrDefaultAsync();
+        return $"{meta?.CoverageDirtyAt?.Ticks}.{meta?.CoverageRefreshedAt?.Ticks}";
     }
 
     private async Task<Func<int, bool>> KnownLookup(IEnumerable<int> wordKeys)
@@ -234,44 +262,62 @@ public class SentenceStatsService(
         result.Milestones = stats.Milestones;
     }
 
+    public async Task<IPlusOneListing?> GetIPlusOneHitsAsync(int deckId)
+    {
+        var key = $"iplusone-hits:{currentUser.UserId}:{deckId}:{await KnownStamp()}";
+        if (cache.Cache.TryGetValue(key, out IPlusOneListing? cached)) return cached;
+
+        var parts = await LoadParts(deckId);
+        if (parts == null) return null;
+
+        var listing = await ListIPlusOne(parts.Select(p => p.DeckId).Append(deckId).Distinct().ToList());
+        cache.Cache.Set(key, listing, new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = CacheTtl, Size = listing.Hits.Count + 1 });
+        return listing;
+    }
+
+    /// <summary>Each word's easiest few sentences first, words standing alone in the most sentences ahead, then the rest.</summary>
+    private static List<IPlusOneEntry> OrderByUnlocks(List<IPlusOneHit> hits) =>
+        hits.GroupBy(h => h.WordKey)
+            .SelectMany(g => g.OrderBy(h => h.Difficulty).Select((h, rank) => (Hit: h, Rank: rank, Count: g.Count())))
+            .OrderBy(h => h.Rank < SentencesPerWordFirst ? 0 : 1)
+            .ThenByDescending(h => h.Count)
+            .ThenBy(h => h.Hit.WordKey)
+            .ThenBy(h => h.Rank)
+            .Select(h => new IPlusOneEntry(h.Hit.SentenceId, h.Hit.WordKey, h.Hit.Position, h.Hit.Length, h.Count))
+            .ToList();
+
     /// <summary>
     /// The decks' example sentences with exactly one unknown content word
     /// </summary>
-    private async Task<(List<IPlusOneEntry> Entries, int Checked)> ListIPlusOne(List<int> deckIds)
+    private async Task<IPlusOneListing> ListIPlusOne(List<int> deckIds)
     {
         var rows = await context.ExampleSentences.AsNoTracking()
                                 .Where(s => deckIds.Contains(s.DeckId))
                                 .OrderBy(s => s.SentenceId)
                                 .Take(IPlusOneCandidateCap)
-                                .Select(s => new { s.SentenceId, s.Difficulty, s.Tokens })
+                                .Select(s => new { s.SentenceId, s.DeckId, s.Difficulty, s.Tokens, TextLength = s.Text.Length })
                                 .ToListAsync();
 
         var decoded = rows.Where(r => !ExampleSentenceTokens.IsPartial(r.Tokens))
-                          .Select(r => (r.SentenceId, r.Difficulty, Tokens: ExampleSentenceTokens.Decode(r.Tokens)))
+                          .Select(r => (Row: r, Tokens: ExampleSentenceTokens.Decode(r.Tokens)))
                           .ToList();
         var contentKeys = decoded.SelectMany(d => d.Tokens)
                                  .Where(t => !t.IsFunctionWord && !SentenceComprehension.IsNameEntry(t.WordId))
                                  .Select(t => t.WordKey);
         var isKnown = await KnownLookup(contentKeys);
 
-        var hits = new List<(IPlusOneEntry Entry, float Difficulty)>();
-        foreach (var (sentenceId, difficulty, tokens) in decoded)
+        var hits = new List<IPlusOneHit>();
+        foreach (var (row, tokens) in decoded)
         {
             var unknown = SentenceComprehension.UnknownTokens(tokens, 0, (id, ri) => isKnown(ExampleSentenceTokens.WordKey(id, ri))).ToList();
             if (unknown.Count == 0 || unknown.Any(t => t.WordKey != unknown[0].WordKey)) continue;
-            hits.Add((new IPlusOneEntry(sentenceId, unknown[0].WordKey, unknown[0].Position, unknown[0].Length), difficulty));
+            hits.Add(new IPlusOneHit(row.SentenceId, row.DeckId, unknown[0].WordKey, unknown[0].Position, unknown[0].Length, row.Difficulty, row.TextLength));
         }
 
-        var ordered = hits.GroupBy(h => h.Entry.WordKey)
-                          .SelectMany(g => g.OrderBy(h => h.Difficulty).Select((h, rank) => (h.Entry, Rank: rank, Count: g.Count())))
-                          .OrderBy(h => h.Rank < SentencesPerWordFirst ? 0 : 1)
-                          .ThenByDescending(h => h.Count)
-                          .ThenBy(h => h.Entry.WordKey)
-                          .ThenBy(h => h.Rank)
-                          .Select(h => h.Entry with { WordSentences = h.Count })
-                          .ToList();
-        return (ordered, decoded.Count);
+        return new IPlusOneListing(hits, decoded.Count);
     }
+
+    public Task<Dictionary<int, WordSummaryDto>> LoadWordSummariesAsync(IEnumerable<int> wordKeys) => LoadWordSummaries(wordKeys);
 
     private async Task<Dictionary<int, WordSummaryDto>> LoadWordSummaries(IEnumerable<int> wordKeys)
     {

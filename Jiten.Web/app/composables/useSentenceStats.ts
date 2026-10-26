@@ -27,15 +27,18 @@ export function useSentenceStats(deckId: MaybeRefOrGetter<number | string>, summ
     const id = toValue(deckId);
     if (!granted.value || !id) return;
 
+    // A cached result shows at once, but is always re-checked: known words also change on other pages and devices
+    // (marking a word mastered, an Anki sync) without bumping the coverage version, and the API answers from its own
+    // cache when nothing changed.
     const key = cacheKey.value;
-    if (!force && cache.value[key]) {
-      stats.value = cache.value[key];
+    const cached = !force ? cache.value[key] : undefined;
+    if (cached) {
+      stats.value = cached;
       failed.value = false;
       rateLimited.value = false;
-      return;
     }
 
-    loading.value = true;
+    loading.value = !cached;
     failed.value = false;
     rateLimited.value = false;
     try {
@@ -46,6 +49,7 @@ export function useSentenceStats(deckId: MaybeRefOrGetter<number | string>, summ
       stats.value = result;
       if (result.hasData) cache.value = { ...cache.value, [key]: result };
     } catch (err) {
+      if (cached) return;
       stats.value = null;
       failed.value = true;
       rateLimited.value = isRateLimited(err);

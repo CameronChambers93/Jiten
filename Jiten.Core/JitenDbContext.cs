@@ -71,6 +71,8 @@ public class JitenDbContext : DbContext
     public DbSet<DeckEnglishTrack> DeckEnglishTracks { get; set; }
     public DbSet<ExampleSentenceTranslation> ExampleSentenceTranslations { get; set; }
     public DbSet<AppSetting> AppSettings { get; set; }
+    public DbSet<FrequencyDictionary> FrequencyDictionaries { get; set; }
+    public DbSet<FrequencyDictionaryRank> FrequencyDictionaryRanks { get; set; }
 
     public DbSet<WordSet> WordSets { get; set; }
     public DbSet<WordSetMember> WordSetMembers { get; set; }
@@ -444,6 +446,24 @@ public class JitenDbContext : DbContext
             entity.HasOne<ExampleSentence>()
                   .WithOne()
                   .HasForeignKey<ExampleSentenceTranslation>(t => t.SentenceId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<FrequencyDictionary>(entity =>
+        {
+            entity.ToTable("FrequencyDictionaries", "jiten");
+            entity.HasKey(d => d.FrequencyDictionaryId);
+            entity.Property(d => d.Title).HasMaxLength(200);
+            entity.Property(d => d.Revision).HasMaxLength(200);
+        });
+
+        modelBuilder.Entity<FrequencyDictionaryRank>(entity =>
+        {
+            entity.ToTable("FrequencyDictionaryRanks", "jiten");
+            entity.HasKey(r => new { r.FrequencyDictionaryId, r.WordId, r.ReadingIndex });
+            entity.HasOne<FrequencyDictionary>()
+                  .WithMany()
+                  .HasForeignKey(r => r.FrequencyDictionaryId)
                   .OnDelete(DeleteBehavior.Cascade);
         });
 

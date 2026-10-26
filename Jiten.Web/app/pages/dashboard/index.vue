@@ -87,6 +87,16 @@
       </Card>
 
       <Card class="shadow-md">
+        <template #title>Frequency Dictionaries</template>
+        <template #content>
+          <p class="mb-4">Yomitan frequency dictionaries for sorting the Mine page</p>
+          <div class="flex justify-center">
+            <Button label="Manage" class="p-button-primary" @click="navigateTo('/dashboard/frequency-dictionaries')" />
+          </div>
+        </template>
+      </Card>
+
+      <Card class="shadow-md">
         <template #title>Maintenance Banner</template>
         <template #content>
           <p class="mb-4">Display a site-wide maintenance notice</p>

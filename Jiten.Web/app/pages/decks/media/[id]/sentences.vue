@@ -411,7 +411,10 @@
           <div class="px-4 pt-4 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
             <div>
               <h2 class="text-xl font-bold">Sentences you can mine</h2>
-              <p class="text-sm text-gray-600 dark:text-gray-300">Some i+1 example sentences from this title, with the target word being the unknown.</p>
+              <p class="text-sm text-gray-600 dark:text-gray-300">
+                Some i+1 example sentences from this title, with the target word being the unknown.
+                <NuxtLink :to="`/mine?titles=${deckResponse?.data?.parentDeck?.deckId ?? deckId}`" class="whitespace-nowrap">Sort and filter them on Mine</NuxtLink>
+              </p>
             </div>
             <Button
               label="Card settings"
