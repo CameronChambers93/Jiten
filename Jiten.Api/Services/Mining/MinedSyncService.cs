@@ -67,6 +67,17 @@ public class MinedSyncService(UserDbContext userContext)
         if (folded.Count != request.FoldedAnkiNoteIds.Distinct().Count()) return false;
 
         userContext.MinedNotes.RemoveRange(folded);
+
+        // A note mined twice from the same line brings the same sentence twice; keep one copy, preferring the kept note's.
+        var sentences = await userContext.MinedSentences.Where(s => s.MinedWordId == request.MinedWordId).ToListAsync(ct);
+        foreach (var copies in sentences.GroupBy(s => MinedSentenceService.PlainText(s.Text)).Where(g => g.Count() > 1))
+        {
+            var kept = copies.OrderByDescending(s => s.SourceAnkiNoteId == request.KeepAnkiNoteId).ThenByDescending(s => s.IsMain)
+                             .ThenBy(s => s.SortOrder).First();
+            kept.IsMain = copies.Any(s => s.IsMain);
+            userContext.MinedSentences.RemoveRange(copies.Where(s => s != kept));
+        }
+
         var word = await userContext.MinedWords.FirstAsync(w => w.MinedWordId == request.MinedWordId, ct);
         word.UpdatedAt = DateTime.UtcNow;
         await userContext.SaveChangesAsync(ct);

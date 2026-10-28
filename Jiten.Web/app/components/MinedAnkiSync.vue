@@ -130,7 +130,7 @@
     if (!folded.length) return;
     confirm.require({
       header: `Fold ${candidate.expression}`,
-      message: `Delete ${folded.length} Anki note${folded.length === 1 ? '' : 's'} (${folded.join(', ')}) and keep note ${keepId}? The sentences stay with the word and are written to the kept note on the next Sync. Review history on the deleted notes is lost.`,
+      message: `Delete ${folded.length} Anki note${folded.length === 1 ? '' : 's'} (${folded.join(', ')}) and keep note ${keepId}? The sentences stay with the word (exact copies are kept once) and are written to the kept note on the next Sync. Review history on the deleted notes is lost.`,
       acceptProps: { label: 'Fold', severity: 'danger' },
       rejectProps: { label: 'Cancel', severity: 'secondary', outlined: true },
       accept: async () => {
