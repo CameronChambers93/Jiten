@@ -64,6 +64,24 @@ export default defineNuxtConfig({
         });
       });
     },
+    // The dev client reloads the page once its lost HMR connection comes back, which a phone triggers every time
+    // the browser returns from the background. HMR does nothing on the Windows bind mount, so stay on the page.
+    (_options, nuxt) => {
+      if (!nuxt.options.dev) return;
+      nuxt.hook('vite:extendConfig', (config, { isClient }) => {
+        if (!isClient) return;
+        config.plugins ||= [];
+        config.plugins.push({
+          name: 'jiten:no-reload-on-reconnect',
+          transform(code: string, id: string) {
+            if (!id.endsWith('vite/dist/client/client.mjs')) return;
+            const patched = code.replace(/await waitForSuccessfulPing\(url\.href\);\s*location\.reload\(\);/, '');
+            if (patched === code) console.warn('[jiten:no-reload-on-reconnect] Vite client changed; the page will reload on reconnect');
+            return { code: patched, map: null };
+          },
+        });
+      });
+    },
   ],
   content: {
     // Use Node 22.5+ built-in node:sqlite — no native better-sqlite3 build needed in dev,
