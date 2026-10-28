@@ -407,6 +407,8 @@
           <p class="text-xs text-gray-500 mt-2">For one title only, or to translate a whole title in advance, use the title's admin page.</p>
         </template>
       </Card>
+
+      <AnkiEnglishBackfill />
     </div>
   </div>
 </template>

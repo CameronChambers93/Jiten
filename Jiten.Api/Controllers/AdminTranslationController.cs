@@ -26,6 +26,10 @@ public record UpdateTranslationSettingsRequest(string CardMode, string PageMode,
 
 public record TranslationTestRequest(string? Sentence, string? Title);
 
+/// <param name="Source">Where the sentence came from, for the prompt ("an NHK News Web Easy article").</param>
+/// <param name="Context">Lines before the sentence, oldest first.</param>
+public record TextTranslationRequest(string Sentence, string Source, List<string>? Context);
+
 public record SubtitleSearchRequest(string SourceId, string Query, int? Season);
 
 public record SubtitlePreviewRequest(List<PreviewRequestItem> Items);
@@ -122,6 +126,42 @@ public class AdminTranslationController(
         {
             var result = await active.Value.Provider.TranslateAsync(active.Value.Config, prompt, ct);
             return Ok(new { result.Text, result.Model, result.InputTokens, result.OutputTokens, ElapsedMs = watch.ElapsedMilliseconds });
+        }
+        catch (TranslationProviderException e)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new { message = e.Message });
+        }
+    }
+
+    /// <summary>What translating this many sentences from outside Jiten would cost with the active provider.</summary>
+    [HttpGet("text/estimate")]
+    public async Task<IActionResult> EstimateText([FromQuery] int count, CancellationToken ct)
+    {
+        var active = await translations.ActiveProviderAsync(ct);
+        var model = active?.Config.Get("model");
+        var price = active != null && model != null ? active.Value.Provider.PriceFor(model) : null;
+        decimal? cost = price == null ? null : Math.Max(count, 0) * (EstimatedInputTokens * price.Input + EstimatedOutputTokens * price.Output) / 1_000_000m;
+        return Ok(new { provider = active?.Provider.Name, model, estimatedCostUsd = cost });
+    }
+
+    /// <summary>
+    /// Translates a sentence that isn't one of Jiten's example sentences (an Anki note's, from Yomitan or GSM) with the
+    /// active provider. Nothing is cached: the caller writes the result to the note.
+    /// </summary>
+    [HttpPost("text")]
+    public async Task<IActionResult> TranslateText([FromBody] TextTranslationRequest request, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.Sentence) || request.Sentence.Length > 2000) return BadRequest(new { message = "Sentence is empty or too long" });
+        var active = await translations.ActiveProviderAsync(ct);
+        if (active == null) return BadRequest(new { message = "Choose a provider and save its API key first." });
+
+        var context = (request.Context ?? []).Where(l => !string.IsNullOrWhiteSpace(l)).TakeLast(20).ToList();
+        var source = string.IsNullOrWhiteSpace(request.Source) ? "an unknown source" : request.Source.Trim();
+        var prompt = TranslationPrompt.RenderText(source, context, request.Sentence);
+        try
+        {
+            var result = await active.Value.Provider.TranslateAsync(active.Value.Config, prompt, ct);
+            return Ok(new { result.Text, result.Model, Provider = active.Value.Provider.Id });
         }
         catch (TranslationProviderException e)
         {
