@@ -802,6 +802,10 @@ namespace Jiten.Core.Migrations.UserDb
                     b.Property<DateTime?>("FlaggedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("Furigana")
+                        .HasMaxLength(8000)
+                        .HasColumnType("character varying(8000)");
+
                     b.Property<bool>("IsMain")
                         .HasColumnType("boolean");
 

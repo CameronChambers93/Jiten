@@ -14,6 +14,7 @@ public record ImportNoteDto(
     string Expression,
     string Reading,
     string Sentence,
+    string? Furigana,
     string? English,
     string? PreviousLine,
     string? Url,
@@ -142,6 +143,9 @@ public class MinedSentenceService(
         return results;
     }
 
+    public Task<List<long>> NoteIdsAsync(string userId, CancellationToken ct) =>
+        userContext.MinedNotes.AsNoTracking().Where(n => n.UserId == userId).Select(n => n.AnkiNoteId).ToListAsync(ct);
+
     public async Task<MinedWordsPage> ListAsync(string userId, string? search, int page, CancellationToken ct)
     {
         var query = userContext.MinedWords.AsNoTracking().Where(w => w.UserId == userId);
@@ -208,6 +212,7 @@ public class MinedSentenceService(
         {
             MinedWordId = word.MinedWordId, UserId = userId,
             Text = Truncate(note.Sentence.Trim(), 4000),
+            Furigana = PlainText(note.Furigana ?? "").Length > 0 ? Truncate(note.Furigana!.Trim(), 8000) : null,
             English = english == null ? null : Truncate(english, 4000), EnglishOrigin = english == null ? null : "anki",
             Origin = origin.Origin, ExampleSentenceId = origin.ExampleSentenceId,
             SourceTitle = origin.SourceTitle == null ? null : Truncate(origin.SourceTitle, 300),

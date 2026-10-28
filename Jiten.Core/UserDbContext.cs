@@ -759,6 +759,7 @@ public class UserDbContext : IdentityDbContext<User>
             if (isNpgsql)
                 entity.Property(s => s.UserId).HasConversion(guidToString).HasColumnType("uuid").IsRequired();
             entity.Property(s => s.Text).HasMaxLength(4000).IsRequired();
+            entity.Property(s => s.Furigana).HasMaxLength(8000);
             entity.Property(s => s.English).HasMaxLength(4000);
             entity.Property(s => s.EnglishOrigin).HasMaxLength(20);
             entity.Property(s => s.Origin).HasMaxLength(20).IsRequired();

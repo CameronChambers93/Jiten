@@ -18,6 +18,7 @@ export interface ImportNote {
   expression: string;
   reading: string;
   sentence: string;
+  furigana: string | null;
   english: string | null;
   previousLine: string | null;
   url: string | null;
@@ -33,12 +34,15 @@ export const LAPIS_FIELDS = {
   expression: 'Expression',
   reading: 'ExpressionReading',
   sentence: 'Sentence',
+  sentenceFurigana: 'SentenceFurigana',
   english: 'SentenceEnglish',
   previousLine: 'PreviousLine',
   url: 'URL',
   miscInfo: 'MiscInfo',
   sentenceAudio: 'SentenceAudio',
   picture: 'Picture',
+  /** The full sentence list Sync writes for the card's script. */
+  sentences: 'Sentences',
 } as const;
 
 const JITEN_MEDIA = /^jiten_\d+\./;
@@ -70,6 +74,7 @@ export function toImportNote(note: AnkiNoteInfo, deckName: string, media: Record
     expression: field(note, LAPIS_FIELDS.expression),
     reading: field(note, LAPIS_FIELDS.reading),
     sentence: field(note, LAPIS_FIELDS.sentence),
+    furigana: optional(LAPIS_FIELDS.sentenceFurigana),
     english: optional(LAPIS_FIELDS.english),
     previousLine: optional(LAPIS_FIELDS.previousLine),
     url: optional(LAPIS_FIELDS.url),
@@ -79,4 +84,17 @@ export function toImportNote(note: AnkiNoteInfo, deckName: string, media: Record
     pictureFilename: picture,
     pictureBase64: (picture && media[picture]) || null,
   };
+}
+
+/** The tag a card's flag button adds: `sentence-fix::<minedSentenceId>`. */
+export const FLAG_TAG_PREFIX = 'sentence-fix::';
+
+/** The sentence flags on notes, read from their tags. */
+export function noteFlags(notes: Pick<AnkiNoteInfo, 'noteId' | 'tags'>[]): { ankiNoteId: number; minedSentenceId: number; tag: string }[] {
+  return notes.flatMap((n) =>
+    n.tags
+      .filter((t) => t.toLowerCase().startsWith(FLAG_TAG_PREFIX))
+      .map((tag) => ({ ankiNoteId: n.noteId, minedSentenceId: Number(tag.slice(FLAG_TAG_PREFIX.length)), tag }))
+      .filter((f) => Number.isSafeInteger(f.minedSentenceId) && f.minedSentenceId > 0)
+  );
 }

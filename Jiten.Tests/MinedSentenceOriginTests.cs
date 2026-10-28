@@ -7,7 +7,7 @@ namespace Jiten.Tests;
 public class MinedSentenceOriginTests
 {
     private static ImportNoteDto Note(List<string>? tags = null, string? url = null, string? misc = null, string? audio = null, string? picture = null) =>
-        new(1793133129675, "Lapis+", "Mining", tags ?? ["yomitan"], "読む", "よむ", "本を<b>読む</b>", null, null, url, misc, audio, null, picture, null);
+        new(1793133129675, "Lapis+", "Mining", tags ?? ["yomitan"], "読む", "よむ", "本を<b>読む</b>", null, null, null, url, misc, audio, null, picture, null);
 
     [Fact]
     public void JitenMediaNamesItsExampleSentence()

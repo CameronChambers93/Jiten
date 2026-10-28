@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { noteMedia, toImportNote, type AnkiNoteInfo } from '../app/utils/minedImport';
+import { noteFlags, noteMedia, toImportNote, type AnkiNoteInfo } from '../app/utils/minedImport';
 
 function note(fields: Record<string, string>, tags: string[] = ['yomitan']): AnkiNoteInfo {
   return { noteId: 7, modelName: 'Lapis+', tags, cards: [70], fields: Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, { value: v }])) };
@@ -39,5 +39,13 @@ describe('toImportNote', () => {
       pictureFilename: null,
       pictureBase64: null,
     });
+  });
+});
+
+describe('noteFlags', () => {
+  it('reads sentence ids from flag tags', () => {
+    expect(noteFlags([{ noteId: 5, tags: ['yomitan', 'sentence-fix::42', 'sentence-fix::x'] }])).toEqual([
+      { ankiNoteId: 5, minedSentenceId: 42, tag: 'sentence-fix::42' },
+    ]);
   });
 });

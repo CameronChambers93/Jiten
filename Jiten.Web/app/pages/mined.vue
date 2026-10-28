@@ -94,7 +94,13 @@
     found.value = null;
     results.value = [];
     try {
-      found.value = await ankiConnect<number[]>('findNotes', { query: query.value });
+      const [ids, { ankiNoteIds }] = await Promise.all([
+        ankiConnect<number[]>('findNotes', { query: query.value }),
+        $api<{ ankiNoteIds: number[] }>('mined/notes'),
+      ]);
+      // Notes imported before aren't read again (their media would be fetched for nothing).
+      const known = new Set(ankiNoteIds);
+      found.value = ids.filter((id) => !known.has(id));
     } catch (e) {
       toast.add({ severity: 'error', summary: "Couldn't read Anki", detail: extractApiError(e, 'Is Anki open with AnkiConnect?'), life: 6000 });
     } finally {
@@ -131,12 +137,19 @@
         results.value.push(...response.results);
         progress.value = Math.min(i + BATCH, found.value.length);
       }
+      found.value = [];
       await loadWords();
     } catch (e) {
       toast.add({ severity: 'error', summary: 'Import stopped', detail: extractApiError(e, 'The import failed'), life: 8000 });
     } finally {
       importing.value = false;
     }
+  }
+
+  /** Sync's first step: import whatever the search finds that isn't in the store yet. */
+  async function importNew() {
+    await find();
+    await runImport();
   }
 
   // Words
@@ -236,7 +249,7 @@
           <InputText v-model="query" class="flex-1 font-mono text-xs" aria-label="Anki search" />
           <Button label="Find notes" icon="pi pi-search" size="small" :loading="finding" :disabled="importing" @click="find" />
           <Button
-            :label="found ? `Import ${found.length} notes` : 'Import'"
+            :label="found ? `Import ${found.length} new notes` : 'Import'"
             icon="pi pi-download"
             size="small"
             :loading="importing"
@@ -256,6 +269,8 @@
         </Message>
       </template>
     </Card>
+
+    <MinedAnkiSync :import-new="importNew" @changed="loadWords" />
 
     <div class="flex items-center gap-3 mb-3">
       <InputText v-model="search" placeholder="Search words" class="w-full sm:w-72" lang="ja" />

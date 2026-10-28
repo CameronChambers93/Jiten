@@ -63,6 +63,9 @@ public class MinedSentence
     /// <summary>The sentence as card HTML, the word in bold.</summary>
     public required string Text { get; set; }
 
+    /// <summary>The sentence with readings, as Lapis+'s SentenceFurigana holds it (bracket or ruby furigana).</summary>
+    public string? Furigana { get; set; }
+
     public string? English { get; set; }
 
     /// <summary>Where the English came from: "subtitles", "ai", "anki" (already on the note) or "user".</summary>
