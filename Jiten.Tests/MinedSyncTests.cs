@@ -9,7 +9,7 @@ public class MinedSyncTests
     [Fact]
     public void RenderSentencesListsEverySentenceWithMediaReferences()
     {
-        var html = MinedSyncService.RenderSentences([
+        var html = MinedSyncService.RenderSentences(1793133129675, [
             new MinedSentence
             {
                 MinedSentenceId = 2, Text = "二つ目", SortOrder = 1, Origin = MinedSentenceOrigin.Web, SourceTitle = "news.web.nhk"
@@ -22,7 +22,7 @@ public class MinedSyncTests
             },
         ]);
 
-        html.Should().StartWith("<div class=\"jiten-sentences\"><div class=\"jiten-sentence\" data-id=\"1\" data-origin=\"game\" data-main=\"1\"");
+        html.Should().StartWith("<div class=\"jiten-sentences\" data-note=\"1793133129675\"><div class=\"jiten-sentence\" data-id=\"1\" data-origin=\"game\" data-main=\"1\"");
         html.Should().Contain("data-source=\"A &quot;Game&quot;\"");
         html.Should().Contain("<div class=\"jiten-sentence-text\"><b>しっかり</b>するんだ</div>");
         html.Should().Contain("<div class=\"jiten-sentence-english\">Snap out of it</div>");

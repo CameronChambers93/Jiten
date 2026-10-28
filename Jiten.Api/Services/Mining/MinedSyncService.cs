@@ -103,17 +103,22 @@ public class MinedSyncService(UserDbContext userContext)
                                      .Where(w => w.UserId == userId && w.Notes.Any() && w.Sentences.Any())
                                      .Include(w => w.Notes).Include(w => w.Sentences)
                                      .ToListAsync(ct);
-        return words.Select(w => new NoteSentencesDto(w.Notes.Min(n => n.AnkiNoteId), RenderSentences(w.Sentences))).ToList();
+        return words.Select(w =>
+        {
+            var note = w.Notes.Min(n => n.AnkiNoteId);
+            return new NoteSentencesDto(note, RenderSentences(note, w.Sentences));
+        }).ToList();
     }
 
     /// <summary>
     /// The Sentences field: one block per sentence for Lapis+'s script, which shows a random one on each review. Media are
     /// real <c>&lt;audio src&gt;</c> / <c>&lt;img src&gt;</c> references (not file names in data), so Anki's Check Media
-    /// counts the files as used; the template keeps the blocks hidden.
+    /// counts the files as used; the template keeps the blocks hidden. The note's id is on the list, since a template
+    /// can't otherwise know it and the card's flag button tags the note through AnkiConnect.
     /// </summary>
-    public static string RenderSentences(IEnumerable<MinedSentence> sentences)
+    public static string RenderSentences(long ankiNoteId, IEnumerable<MinedSentence> sentences)
     {
-        var html = new StringBuilder("<div class=\"jiten-sentences\">");
+        var html = new StringBuilder($"<div class=\"jiten-sentences\" data-note=\"{ankiNoteId}\">");
         foreach (var s in sentences.OrderBy(s => s.SortOrder))
         {
             html.Append($"<div class=\"jiten-sentence\" data-id=\"{s.MinedSentenceId}\" data-origin=\"{Attr(s.Origin)}\"");
