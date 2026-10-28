@@ -147,5 +147,5 @@ export function useMiningCards() {
     return ankiConnect<number>('addNote', { note });
   }
 
-  return { settings: readonly(settings), configured, saveSettings, mappingFor, fetchAudio, addCard };
+  return { settings: readonly(settings), configured, saveSettings, mappingFor, fetchAudio, fetchPicture, addCard };
 }

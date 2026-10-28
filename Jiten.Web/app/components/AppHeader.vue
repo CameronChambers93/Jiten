@@ -158,6 +158,7 @@
         <nav class="hidden min-[900px]:flex items-center space-x-4">
           <nuxt-link to="/decks/media" :class="route.path.startsWith('/decks/media') ? 'font-semibold !text-purple-200' : '!text-white'">Media</nuxt-link>
           <nuxt-link v-if="auth.isAuthenticated" to="/mine" :class="route.path === '/mine' ? 'font-semibold !text-purple-200' : '!text-white'">Mine</nuxt-link>
+          <nuxt-link v-if="auth.isAuthenticated" to="/mined" :class="route.path === '/mined' ? 'font-semibold !text-purple-200' : '!text-white'">Mined</nuxt-link>
           <nuxt-link
             v-if="auth.isAuthenticated"
             to="/srs/decks"
@@ -279,6 +280,14 @@
               :class="route.path === '/mine' ? 'font-semibold !text-purple-200' : '!text-white'"
               @click="mobileMenuOpen = false"
               >Mine</nuxt-link
+            >
+            <nuxt-link
+              v-if="auth.isAuthenticated"
+              to="/mined"
+              class="py-2 px-3"
+              :class="route.path === '/mined' ? 'font-semibold !text-purple-200' : '!text-white'"
+              @click="mobileMenuOpen = false"
+              >Mined</nuxt-link
             >
             <nuxt-link
               v-if="auth.isAuthenticated"

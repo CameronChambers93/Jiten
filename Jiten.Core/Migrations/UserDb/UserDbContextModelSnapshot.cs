@@ -721,6 +721,189 @@ namespace Jiten.Core.Migrations.UserDb
                     b.ToTable("UserReviewDailies", "user");
                 });
 
+            modelBuilder.Entity("Jiten.Core.Data.User.MinedNote", b =>
+                {
+                    b.Property<long>("MinedNoteId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("MinedNoteId"));
+
+                    b.Property<long>("AnkiNoteId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("DeckName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTime>("ImportedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<long>("MinedWordId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("ModelName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("MinedNoteId");
+
+                    b.HasIndex("MinedWordId");
+
+                    b.HasIndex("UserId", "AnkiNoteId")
+                        .IsUnique();
+
+                    b.ToTable("MinedNotes", "user");
+                });
+
+            modelBuilder.Entity("Jiten.Core.Data.User.MinedSentence", b =>
+                {
+                    b.Property<long>("MinedSentenceId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("MinedSentenceId"));
+
+                    b.Property<string>("AnkiAudioFilename")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<string>("AnkiPictureFilename")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<string>("AudioContentType")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("AudioPath")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("English")
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)");
+
+                    b.Property<string>("EnglishOrigin")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<long?>("ExampleSentenceId")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime?>("FlaggedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsMain")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime?>("MinedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<long>("MinedWordId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Origin")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("PictureContentType")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("PicturePath")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<string>("PreviousLine")
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer");
+
+                    b.Property<long?>("SourceAnkiNoteId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("SourceTitle")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<string>("SourceUrl")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("MinedSentenceId");
+
+                    b.HasIndex("MinedWordId", "SortOrder");
+
+                    b.HasIndex("UserId", "SourceAnkiNoteId");
+
+                    b.ToTable("MinedSentences", "user");
+                });
+
+            modelBuilder.Entity("Jiten.Core.Data.User.MinedWord", b =>
+                {
+                    b.Property<long>("MinedWordId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("MinedWordId"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Expression")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("Reading")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<byte?>("ReadingIndex")
+                        .HasColumnType("smallint");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int?>("WordId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("MinedWordId");
+
+                    b.HasIndex("UserId", "Expression", "Reading");
+
+                    b.HasIndex("UserId", "WordId", "ReadingIndex");
+
+                    b.ToTable("MinedWords", "user");
+                });
+
             modelBuilder.Entity("Jiten.Core.Data.User.UserCardMedia", b =>
                 {
                     b.Property<long>("Id")
@@ -1641,6 +1824,33 @@ namespace Jiten.Core.Migrations.UserDb
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("Jiten.Core.Data.User.MinedNote", b =>
+                {
+                    b.HasOne("Jiten.Core.Data.User.MinedWord", null)
+                        .WithMany("Notes")
+                        .HasForeignKey("MinedWordId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Jiten.Core.Data.User.MinedSentence", b =>
+                {
+                    b.HasOne("Jiten.Core.Data.User.MinedWord", null)
+                        .WithMany("Sentences")
+                        .HasForeignKey("MinedWordId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Jiten.Core.Data.User.MinedWord", b =>
+                {
+                    b.HasOne("Jiten.Core.Data.Authentication.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Jiten.Core.Data.User.UserCardMedia", b =>
                 {
                     b.HasOne("Jiten.Core.Data.Authentication.User", null)
@@ -1864,6 +2074,13 @@ namespace Jiten.Core.Migrations.UserDb
             modelBuilder.Entity("Jiten.Core.Data.FSRS.FsrsCard", b =>
                 {
                     b.Navigation("ReviewLogs");
+                });
+
+            modelBuilder.Entity("Jiten.Core.Data.User.MinedWord", b =>
+                {
+                    b.Navigation("Notes");
+
+                    b.Navigation("Sentences");
                 });
 
             modelBuilder.Entity("Jiten.Core.Data.User.UserStudyDeck", b =>

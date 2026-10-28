@@ -57,6 +57,9 @@ public class UserDbContext : IdentityDbContext<User>
     public DbSet<UserFrequencyList> UserFrequencyLists { get; set; }
     public DbSet<UserRoadmap> UserRoadmaps { get; set; }
     public DbSet<UserCardMedia> UserCardMedia { get; set; }
+    public DbSet<MinedWord> MinedWords { get; set; }
+    public DbSet<MinedNote> MinedNotes { get; set; }
+    public DbSet<MinedSentence> MinedSentences { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -721,6 +724,56 @@ public class UserDbContext : IdentityDbContext<User>
             entity.HasIndex(m => new { m.UserId, m.WordId, m.ReadingIndex, m.Kind })
                   .IsUnique()
                   .HasDatabaseName("IX_UserCardMedia_UserId_WordId_ReadingIndex_Kind");
+        });
+
+        modelBuilder.Entity<MinedWord>(entity =>
+        {
+            entity.HasKey(w => w.MinedWordId);
+            if (isNpgsql)
+                entity.Property(w => w.UserId).HasConversion(guidToString).HasColumnType("uuid").IsRequired();
+            entity.Property(w => w.Expression).HasMaxLength(100).IsRequired();
+            entity.Property(w => w.Reading).HasMaxLength(100).IsRequired();
+
+            entity.HasOne<User>().WithMany().HasForeignKey(w => w.UserId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(w => w.Notes).WithOne().HasForeignKey(n => n.MinedWordId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(w => w.Sentences).WithOne().HasForeignKey(s => s.MinedWordId).OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasIndex(w => new { w.UserId, w.WordId, w.ReadingIndex });
+            entity.HasIndex(w => new { w.UserId, w.Expression, w.Reading });
+        });
+
+        modelBuilder.Entity<MinedNote>(entity =>
+        {
+            entity.HasKey(n => n.MinedNoteId);
+            if (isNpgsql)
+                entity.Property(n => n.UserId).HasConversion(guidToString).HasColumnType("uuid").IsRequired();
+            entity.Property(n => n.ModelName).HasMaxLength(200).IsRequired();
+            entity.Property(n => n.DeckName).HasMaxLength(200).IsRequired();
+
+            entity.HasIndex(n => new { n.UserId, n.AnkiNoteId }).IsUnique();
+        });
+
+        modelBuilder.Entity<MinedSentence>(entity =>
+        {
+            entity.HasKey(s => s.MinedSentenceId);
+            if (isNpgsql)
+                entity.Property(s => s.UserId).HasConversion(guidToString).HasColumnType("uuid").IsRequired();
+            entity.Property(s => s.Text).HasMaxLength(4000).IsRequired();
+            entity.Property(s => s.English).HasMaxLength(4000);
+            entity.Property(s => s.EnglishOrigin).HasMaxLength(20);
+            entity.Property(s => s.Origin).HasMaxLength(20).IsRequired();
+            entity.Property(s => s.SourceTitle).HasMaxLength(300);
+            entity.Property(s => s.SourceUrl).HasMaxLength(2000);
+            entity.Property(s => s.PreviousLine).HasMaxLength(4000);
+            entity.Property(s => s.AudioPath).HasMaxLength(512);
+            entity.Property(s => s.AudioContentType).HasMaxLength(100);
+            entity.Property(s => s.PicturePath).HasMaxLength(512);
+            entity.Property(s => s.PictureContentType).HasMaxLength(100);
+            entity.Property(s => s.AnkiAudioFilename).HasMaxLength(300);
+            entity.Property(s => s.AnkiPictureFilename).HasMaxLength(300);
+
+            entity.HasIndex(s => new { s.MinedWordId, s.SortOrder });
+            entity.HasIndex(s => new { s.UserId, s.SourceAnkiNoteId });
         });
 
 
