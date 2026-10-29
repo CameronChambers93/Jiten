@@ -37,6 +37,8 @@ public class SentenceSplitTests
     [InlineData("「え、私みたいに。？」", "「え、私みたいに？」")]
     [InlineData("同じことを何度も何度も。。", "同じことを何度も何度も。")]
     [InlineData("そう。ですか？", "そう。ですか？")]
+    [InlineData("お前ならできる！。", "お前ならできる！")]
+    [InlineData("「こいつと、ふたりっきり？。」", "「こいつと、ふたりっきり？」")]
     public void ExampleTextDropsPeriodFromLineFinalEllipsis(string text, string expected)
     {
         ExampleSentenceExtractor.NormalizeTrailingPunctuation(text).Should().Be(expected);

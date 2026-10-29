@@ -1,6 +1,5 @@
 import type { DeckIPlusOneSentence, ExampleSentence, Word } from '~/types';
 import type { MiningFieldSource } from '~/utils/miningCardFields';
-import { escapeHtml } from '~/utils/sanitiseHtml';
 import { LAPIS_FIELDS } from '~/utils/minedImport';
 import { ankiPitchCategories, ankiPitchPositions } from '~/utils/pitchAccent';
 import {
@@ -8,6 +7,7 @@ import {
   ankiWordFurigana,
   boldTarget,
   definitionsHtml,
+  escapeFieldText,
   firstSense,
   guessFieldSource,
   kanaReading,
@@ -203,7 +203,7 @@ export function useMiningCards() {
         exampleSentenceId: sentence.sentenceId,
         sentence: boldTarget(sentence),
         furigana: sentence.furigana?.length ? ankiSentenceFurigana(sentence.text, sentence.furigana) : null,
-        english: translation?.text ? escapeHtml(translation.text) : null,
+        english: translation?.text ? escapeFieldText(translation.text) : null,
         englishOrigin: translation?.origin ?? null,
         sourceTitle: sourceLabel(sentence) || null,
         audioFilename: media.audio?.filename ?? null,
@@ -231,18 +231,18 @@ export function useMiningCards() {
     ]);
 
     const values: Record<Exclude<MiningFieldSource, '' | 'sentenceAudio' | 'picture'>, string> = {
-      word: escapeHtml(word.reading),
-      wordReading: escapeHtml(kanaReading(word.readingFurigana || word.reading)),
-      wordFurigana: escapeHtml(ankiWordFurigana(word.readingFurigana || word.reading)),
+      word: escapeFieldText(word.reading),
+      wordReading: escapeFieldText(kanaReading(word.readingFurigana || word.reading)),
+      wordFurigana: escapeFieldText(ankiWordFurigana(word.readingFurigana || word.reading)),
       pitchPosition: ankiPitchPositions(details?.pitchAccents),
       pitchCategories: ankiPitchCategories(word.readingFurigana || word.reading, details?.pitchAccents, details?.partsOfSpeech ?? []),
       definitions: details ? definitionsHtml(details.definitions, word.readingIndex) : '',
-      mainDefinition: escapeHtml((details && firstSense(details.definitions, word.readingIndex)) || word.mainDefinition || ''),
+      mainDefinition: escapeFieldText((details && firstSense(details.definitions, word.readingIndex)) || word.mainDefinition || ''),
       sentence: boldTarget(sentence),
-      sentencePlain: escapeHtml(sentence.text),
+      sentencePlain: escapeFieldText(sentence.text),
       sentenceFurigana: ankiSentenceFurigana(sentence.text, sentence.furigana ?? []),
-      sentenceEnglish: escapeHtml(english),
-      source: escapeHtml(sourceLabel(sentence)),
+      sentenceEnglish: escapeFieldText(english),
+      source: escapeFieldText(sourceLabel(sentence)),
     };
 
     const fields: Record<string, string> = {};

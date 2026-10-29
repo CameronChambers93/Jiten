@@ -306,12 +306,16 @@ public static partial class ExampleSentenceExtractor
             end--;
 
         text = end == text.Length ? text : text[..end];
-        // The parser writes a line-final … as 。, which lands in front of an ！？ that followed it (……？ → 。？).
-        return PeriodBeforeFinalMark().Replace(text, "");
+        // The parser writes a line-final … as 。, which lands in front of an ！？ that followed it (……？ → 。？), and a
+        // subtitle line ending in ！？ can still be given a closing 。 (お前ならできる！。).
+        return PeriodBeforeFinalMark().Replace(PeriodAfterFinalMark().Replace(text, ""), "");
     }
 
     [GeneratedRegex(@"。(?=[！？!?]+[」』）]*$)")]
     private static partial Regex PeriodBeforeFinalMark();
+
+    [GeneratedRegex(@"(?<=[！？!?])。+(?=[」』）]*$)")]
+    private static partial Regex PeriodAfterFinalMark();
 
     private const uint SentenceContentWord =
         PosMask.ContentWord | PosMask.NameBit | PosMask.Numeral | (1u << (int)PartOfSpeech.Pronoun);

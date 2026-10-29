@@ -1,5 +1,14 @@
 import type { Definition, ExampleSentence, SentenceFurigana } from '~/types';
-import { escapeHtml } from '~/utils/sanitiseHtml';
+
+const FIELD_TEXT_ENTITIES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;' };
+
+/**
+ * Text for an Anki field, which holds HTML: only & < > are escaped. Quotes are fine outside attributes, and escaping
+ * them leaves You&#39;re in the field, which Anki's search and other tools then see.
+ */
+export function escapeFieldText(text: string): string {
+  return text.replace(/[&<>]/g, (c) => FIELD_TEXT_ENTITIES[c]!);
+}
 
 /** What a field of the user's Anki note type is filled with when a sentence is mined. */
 export type MiningFieldSource =
@@ -77,17 +86,17 @@ export function ankiSentenceFurigana(text: string, furigana: Pick<SentenceFuriga
   for (const span of [...furigana].sort((a, b) => a.position - b.position)) {
     if (span.position < at) continue;
     const surface = text.slice(span.position, span.position + span.length);
-    result += escapeHtml(text.slice(at, span.position));
-    result += surface === span.reading || !span.reading ? escapeHtml(surface) : ` ${escapeHtml(surface)}[${escapeHtml(span.reading)}]`;
+    result += escapeFieldText(text.slice(at, span.position));
+    result += surface === span.reading || !span.reading ? escapeFieldText(surface) : ` ${escapeFieldText(surface)}[${escapeFieldText(span.reading)}]`;
     at = span.position + span.length;
   }
-  return (result + escapeHtml(text.slice(at))).trim();
+  return (result + escapeFieldText(text.slice(at))).trim();
 }
 
 export function boldTarget(sentence: Pick<ExampleSentence, 'text' | 'wordPosition' | 'wordLength'>): string {
   const { text, wordPosition: start, wordLength: length } = sentence;
-  if (length <= 0) return escapeHtml(text);
-  return `${escapeHtml(text.slice(0, start))}<b>${escapeHtml(text.slice(start, start + length))}</b>${escapeHtml(text.slice(start + length))}`;
+  if (length <= 0) return escapeFieldText(text);
+  return `${escapeFieldText(text.slice(0, start))}<b>${escapeFieldText(text.slice(start, start + length))}</b>${escapeFieldText(text.slice(start + length))}`;
 }
 
 function sensesFor(definitions: Definition[], readingIndex: number): Definition[] {
@@ -104,8 +113,8 @@ export function definitionsHtml(definitions: Definition[], readingIndex: number)
   const senses = sensesFor(definitions, readingIndex);
   if (senses.length === 0) return '';
   const items = senses.map((d) => {
-    const pos = d.partsOfSpeech.length ? `<i>(${escapeHtml(d.partsOfSpeech.join(', '))})</i> ` : '';
-    return `<li>${pos}${escapeHtml(d.meanings.join('; '))}</li>`;
+    const pos = d.partsOfSpeech.length ? `<i>(${escapeFieldText(d.partsOfSpeech.join(', '))})</i> ` : '';
+    return `<li>${pos}${escapeFieldText(d.meanings.join('; '))}</li>`;
   });
   return `<ol>${items.join('')}</ol>`;
 }

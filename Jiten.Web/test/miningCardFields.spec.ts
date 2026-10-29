@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Definition } from '../app/types';
-import { ankiSentenceFurigana, ankiWordFurigana, boldTarget, definitionsHtml, firstSense, guessFieldSource, kanaReading } from '../app/utils/miningCardFields';
+import { ankiSentenceFurigana, ankiWordFurigana, boldTarget, definitionsHtml, escapeFieldText, firstSense, guessFieldSource, kanaReading } from '../app/utils/miningCardFields';
 
 describe('guessFieldSource', () => {
   it('maps Lapis and GSM field names', () => {
@@ -71,5 +71,11 @@ describe('definitionsHtml', () => {
 
   it('takes the first applicable sense as the main definition', () => {
     expect(firstSense([sense(['other'], [3]), sense(['you', 'thou'])], 0)).toBe('you; thou');
+  });
+});
+
+describe('escapeFieldText', () => {
+  it('escapes markup but leaves quotes as they are', () => {
+    expect(escapeFieldText(`You're "sure" it's <here> & now?`)).toBe(`You're "sure" it's &lt;here&gt; &amp; now?`);
   });
 });

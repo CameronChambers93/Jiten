@@ -6,6 +6,7 @@
   import { useToast } from 'primevue/usetoast';
   import { ankiConnect } from '~/composables/useMiningCards';
   import { noteContext, noteSource, skipReason, type BackfillNote } from '~/utils/ankiEnglishBackfill';
+  import { escapeFieldText } from '~/utils/miningCardFields';
   import { sanitiseHtml } from '~/utils/sanitiseHtml';
 
   interface Row {
@@ -101,7 +102,7 @@
     let written = 0;
     for (const row of ready.value) {
       try {
-        await ankiConnect('updateNoteFields', { note: { id: row.noteId, fields: { [englishField.value]: row.english.trim() } } });
+        await ankiConnect('updateNoteFields', { note: { id: row.noteId, fields: { [englishField.value]: escapeFieldText(row.english.trim()) } } });
         row.status = 'written';
         written++;
       } catch (e) {
