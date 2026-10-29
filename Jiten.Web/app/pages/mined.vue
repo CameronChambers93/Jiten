@@ -7,7 +7,7 @@
   import Tag from 'primevue/tag';
   import { useToast } from 'primevue/usetoast';
   import { ankiConnect } from '~/composables/useMiningCards';
-  import { noteMedia, toImportNote, type AnkiNoteInfo, type ImportNote } from '~/utils/minedImport';
+  import type { MinedImportResult } from '~/composables/useMinedImport';
   import { sanitiseHtml } from '~/utils/sanitiseHtml';
 
   useHead({ title: 'Mined words - Jiten' });
@@ -57,23 +57,13 @@
     sentences: MinedSentence[];
   }
 
-  interface ImportResult {
-    ankiNoteId: number;
-    status: 'imported' | 'already' | 'failed';
-    minedWordId: number | null;
-    matched: boolean;
-    origin: string | null;
-    error: string | null;
-  }
-
-  /** Notes per import request; media rides along as base64, so batches stay small. */
-  const BATCH = 5;
   const PAGE_SIZE = 50;
   const ORIGIN_LABELS: Record<MinedSentence['origin'], string> = { jiten: 'Jiten', game: 'Game', web: 'Web', other: 'Other' };
 
   const { $api } = useNuxtApp();
   const toast = useToast();
   const { fetchAudio, fetchPicture } = useMiningCards();
+  const { importNotes } = useMinedImport();
 
   // Import
   const query = ref('"note:Lapis+"');
@@ -81,7 +71,7 @@
   const finding = ref(false);
   const importing = ref(false);
   const progress = ref(0);
-  const results = ref<ImportResult[]>([]);
+  const results = ref<MinedImportResult[]>([]);
   const summary = computed(() => ({
     imported: results.value.filter((r) => r.status === 'imported').length,
     already: results.value.filter((r) => r.status === 'already').length,
@@ -108,35 +98,16 @@
     }
   }
 
-  async function buildBatch(ids: number[]): Promise<ImportNote[]> {
-    const notes = await ankiConnect<AnkiNoteInfo[]>('notesInfo', { notes: ids });
-    const cards = await ankiConnect<{ cardId: number; deckName: string }[]>('cardsInfo', { cards: notes.map((n) => n.cards[0]).filter(Boolean) });
-    const deckOf = new Map(cards.map((c) => [c.cardId, c.deckName]));
-
-    return Promise.all(
-      notes.map(async (note) => {
-        const media: Record<string, string> = {};
-        for (const filename of noteMedia(note).fetch) {
-          const data = await ankiConnect<string | false>('retrieveMediaFile', { filename });
-          if (data) media[filename] = data;
-        }
-        return toImportNote(note, deckOf.get(note.cards[0]!) ?? '', media);
-      })
-    );
-  }
-
   async function runImport() {
     if (!found.value?.length) return;
     importing.value = true;
     progress.value = 0;
     results.value = [];
     try {
-      for (let i = 0; i < found.value.length; i += BATCH) {
-        const notes = await buildBatch(found.value.slice(i, i + BATCH));
-        const response = await $api<{ results: ImportResult[] }>('mined/import', { method: 'POST', body: { notes } });
-        results.value.push(...response.results);
-        progress.value = Math.min(i + BATCH, found.value.length);
-      }
+      await importNotes(found.value, (batch, done) => {
+        results.value.push(...batch);
+        progress.value = done;
+      });
       found.value = [];
       await loadWords();
     } catch (e) {

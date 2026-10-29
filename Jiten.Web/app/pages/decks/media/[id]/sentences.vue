@@ -462,7 +462,7 @@
                 </div>
                 <div v-for="sentence in group.sentences" :key="sentence.sentenceId" class="flex items-start gap-2">
                   <div class="min-w-0 flex-1">
-                    <ExampleSentenceEntry :example-sentence="sentence" :word-id="group.word.wordId" :reading-index="group.word.readingIndex" show-source :show-tts="false" />
+                    <ExampleSentenceEntry :example-sentence="sentence" :word-id="group.word.wordId" :reading-index="group.word.readingIndex" show-source :show-tts="false" :show-mine="false" />
                     <p
                       v-if="pageMode !== 'off' && translations[sentence.sentenceId]"
                       class="text-sm text-gray-600 dark:text-gray-300 mt-1"

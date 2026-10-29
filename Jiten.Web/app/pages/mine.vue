@@ -578,7 +578,7 @@
                   class="flex items-start gap-2"
                 >
                   <div class="min-w-0 flex-1">
-                    <ExampleSentenceEntry :example-sentence="sentence" :word-id="item.word.wordId" :reading-index="item.word.readingIndex" show-source :show-tts="false" />
+                    <ExampleSentenceEntry :example-sentence="sentence" :word-id="item.word.wordId" :reading-index="item.word.readingIndex" show-source :show-tts="false" :show-mine="false" />
                     <p
                       v-if="pageMode !== 'off' && translations[sentence.sentenceId]"
                       class="text-sm text-gray-600 dark:text-gray-300 mt-1"

@@ -15,6 +15,7 @@ namespace Jiten.Api.Controllers;
 public class MinedWordsController(MinedSentenceService mined, MinedSyncService sync, ICurrentUserService userService) : ControllerBase
 {
     private const int MaxFlags = 1000;
+    private const int MaxWordSummaries = 100;
 
     [HttpGet("sync/folds")]
     [SwaggerOperation(Summary = "Words on more than one Anki note, with the note to keep and the ones to fold into it")]
@@ -59,6 +60,38 @@ public class MinedWordsController(MinedSentenceService mined, MinedSyncService s
         if (request.Notes.Count is 0 or > MinedSentenceService.MaxNotesPerImport)
             return BadRequest(new { message = $"Send 1 to {MinedSentenceService.MaxNotesPerImport} notes per request." });
         return Ok(new { results = await mined.ImportAsync(userId, request.Notes, ct) });
+    }
+
+    [HttpPost("sentences")]
+    [SwaggerOperation(Summary = "Adds an example sentence to the word of an Anki note already in the store; returns the Sentences field to write to its kept note")]
+    public async Task<IActionResult> AddSentence([FromBody] AddSentenceRequest request, CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        try
+        {
+            var result = await mined.AddToNoteAsync(userId, request, ct);
+            return result == null ? NotFound(new { message = "That Anki note isn't in the sentence store yet." }) : Ok(result);
+        }
+        catch (ArgumentException e)
+        {
+            return BadRequest(new { message = e.Message });
+        }
+    }
+
+    [HttpGet("word-summaries")]
+    [SwaggerOperation(Summary = "Written form, furigana and first meaning of words picked out of a sentence (wordId:readingIndex each)")]
+    public async Task<IActionResult> WordSummaries([FromQuery] List<string> words, CancellationToken ct)
+    {
+        var parsed = new List<(int, byte)>();
+        foreach (var w in words.Take(MaxWordSummaries))
+        {
+            var parts = w.Split(':');
+            if (parts.Length != 2 || !int.TryParse(parts[0], out var wordId) || !byte.TryParse(parts[1], out var readingIndex))
+                return BadRequest(new { message = $"\"{w}\" isn't wordId:readingIndex." });
+            parsed.Add((wordId, readingIndex));
+        }
+
+        return Ok(new { words = parsed.Count == 0 ? [] : await mined.WordSummariesAsync(parsed, ct) });
     }
 
     [HttpGet("notes")]

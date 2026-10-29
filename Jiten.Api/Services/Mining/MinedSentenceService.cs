@@ -1,4 +1,6 @@
 using System.Text.RegularExpressions;
+using Jiten.Api.Dtos;
+using Jiten.Api.Helpers;
 using Jiten.Core;
 using Jiten.Core.Data.User;
 using Microsoft.EntityFrameworkCore;
@@ -43,6 +45,18 @@ public record MinedSentenceDto(long MinedSentenceId, string Text, string? Englis
 
 public record MinedWordDto(long MinedWordId, int? WordId, byte? ReadingIndex, string Expression, string Reading, List<MinedNoteDto> Notes,
                            List<MinedSentenceDto> Sentences);
+
+/// <summary>One of Jiten's example sentences to add to a word's existing Anki note, its media already stored in Anki.</summary>
+/// <param name="AnkiNoteId">A note of the word, as found in Anki; the sentence goes to the word, so any of its notes will do.</param>
+/// <param name="Sentence">The sentence as card HTML, the word in bold.</param>
+/// <param name="EnglishOrigin">"subtitles" or "ai".</param>
+public record AddSentenceRequest(long AnkiNoteId, long ExampleSentenceId, string Sentence, string? Furigana, string? English, string? EnglishOrigin,
+                                 string? SourceTitle, string? AudioFilename, string? PictureFilename);
+
+/// <param name="AnkiNoteId">The word's kept note (the oldest), which <paramref name="SentencesHtml"/> is for.</param>
+/// <param name="Added">False when the word already had the sentence; nothing changed.</param>
+/// <param name="Sentences">The word's sentences, counting this one.</param>
+public record AddSentenceResult(long AnkiNoteId, long MinedSentenceId, bool Added, int Sentences, string SentencesHtml);
 
 /// <summary>Where an imported note's sentence came from, read from its tags, media file names and URL.</summary>
 public record DetectedOrigin(string Origin, long? ExampleSentenceId, string? SourceTitle, string? SourceUrl)
@@ -141,6 +155,72 @@ public class MinedSentenceService(
         }
 
         return results;
+    }
+
+    /// <summary>
+    /// Adds one of Jiten's example sentences to the word an Anki note belongs to, unless the word has it already. Null when
+    /// the note isn't in the store; the browser imports it first.
+    /// </summary>
+    public async Task<AddSentenceResult?> AddToNoteAsync(string userId, AddSentenceRequest request, CancellationToken ct)
+    {
+        var note = await userContext.MinedNotes.AsNoTracking()
+                                    .FirstOrDefaultAsync(n => n.UserId == userId && n.AnkiNoteId == request.AnkiNoteId, ct);
+        if (note == null) return null;
+
+        var text = PlainText(request.Sentence);
+        if (text.Length == 0) throw new ArgumentException("The sentence is empty.");
+
+        var word = await userContext.MinedWords.AsSplitQuery().Include(w => w.Notes).Include(w => w.Sentences)
+                                    .FirstAsync(w => w.MinedWordId == note.MinedWordId, ct);
+        var sentence = word.Sentences.FirstOrDefault(s => s.ExampleSentenceId == request.ExampleSentenceId || PlainText(s.Text) == text);
+        var added = sentence == null;
+        if (sentence == null)
+        {
+            var english = PlainText(request.English ?? "").Length > 0 ? Truncate(request.English!.Trim(), 4000) : null;
+            sentence = new MinedSentence
+            {
+                MinedWordId = word.MinedWordId, UserId = userId,
+                Text = Truncate(request.Sentence.Trim(), 4000),
+                Furigana = PlainText(request.Furigana ?? "").Length > 0 ? Truncate(request.Furigana!.Trim(), 8000) : null,
+                English = english,
+                EnglishOrigin = english != null && request.EnglishOrigin is "subtitles" or "ai" ? request.EnglishOrigin : null,
+                Origin = MinedSentenceOrigin.Jiten, ExampleSentenceId = request.ExampleSentenceId,
+                SourceTitle = string.IsNullOrWhiteSpace(request.SourceTitle) ? null : Truncate(request.SourceTitle.Trim(), 300),
+                MinedAt = DateTime.UtcNow,
+                AnkiAudioFilename = string.IsNullOrWhiteSpace(request.AudioFilename) ? null : Truncate(request.AudioFilename, 500),
+                AnkiPictureFilename = string.IsNullOrWhiteSpace(request.PictureFilename) ? null : Truncate(request.PictureFilename, 500),
+                IsMain = word.Sentences.Count == 0,
+                SortOrder = word.Sentences.Count == 0 ? 0 : word.Sentences.Max(s => s.SortOrder) + 1,
+            };
+            word.Sentences.Add(sentence);
+            word.UpdatedAt = DateTime.UtcNow;
+            await userContext.SaveChangesAsync(ct);
+        }
+
+        var kept = word.Notes.Min(n => n.AnkiNoteId);
+        return new AddSentenceResult(kept, sentence.MinedSentenceId, added, word.Sentences.Count,
+                                     MinedSyncService.RenderSentences(kept, word.Sentences));
+    }
+
+    /// <summary>The card's word fields for words picked out of a sentence: written form, furigana and first meaning.</summary>
+    public async Task<List<WordSummaryDto>> WordSummariesAsync(IReadOnlyList<(int WordId, byte ReadingIndex)> words, CancellationToken ct)
+    {
+        var wordIds = words.Select(w => w.WordId).Distinct().ToList();
+        await using var context = await contextFactory.CreateDbContextAsync(ct);
+        var forms = await WordFormHelper.LoadWordForms(context, wordIds);
+        var definitions = await context.JMDictWords.AsNoTracking()
+                                       .Include(w => w.Definitions.OrderBy(d => d.SenseIndex))
+                                       .Where(w => wordIds.Contains(w.WordId))
+                                       .ToDictionaryAsync(w => w.WordId, ct);
+
+        return words.Select(w => (w, Form: forms.GetValueOrDefault((w.WordId, (short)w.ReadingIndex))))
+                    .Where(x => x.Form != null)
+                    .Select(x => new WordSummaryDto
+                    {
+                        WordId = x.w.WordId, ReadingIndex = x.w.ReadingIndex, Reading = x.Form!.Text, ReadingFurigana = x.Form.RubyText,
+                        MainDefinition = definitions.GetValueOrDefault(x.w.WordId)?.Definitions.FirstOrDefault()?.EnglishMeanings.FirstOrDefault(),
+                    })
+                    .ToList();
     }
 
     public Task<List<long>> NoteIdsAsync(string userId, CancellationToken ct) =>

@@ -25,8 +25,10 @@
       targetKnown?: boolean;
       /** Off where the page has its own listen button. */
       showTts?: boolean;
+      /** Add to Anki; off where the page has its own. */
+      showMine?: boolean;
     }>(),
-    { showActions: true, showTts: true }
+    { showActions: true, showTts: true, showMine: true }
   );
 
   const emit = defineEmits<{
@@ -159,6 +161,12 @@
             <IPlusOneBadge :unknown="exampleSentence.unknownCount ?? 0" :target-known="targetKnown" />
           </span>
           <TtsButton v-if="actionsVisible && showTts" :text="exampleSentence.text" :sentence-id="exampleSentence.sentenceId" type="sentence" size="sm" />
+          <MineSentenceButton
+            v-if="actionsVisible && showMine && authStore.isAuthenticated"
+            :sentence="exampleSentence"
+            :word-id="wordId"
+            :reading-index="readingIndex"
+          />
           <button
             v-if="canEdit && actionsVisible"
             class="inline-flex items-center justify-center transition-colors"

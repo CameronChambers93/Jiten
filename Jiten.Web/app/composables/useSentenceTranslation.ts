@@ -57,12 +57,16 @@ export function useSentenceTranslation() {
   }
 
   /** The English to put on a card, following the card mode; empty when there's none. */
-  async function forCard(sentenceId: number): Promise<string> {
+  /** The English a card gets, as the translation settings' card mode decides; null when it gets none. */
+  async function forCardTranslation(sentenceId: number): Promise<SentenceTranslation | null> {
     const o = await loadOptions();
-    if (!o || o.cardMode === 'off') return '';
-    const translation = await translate(sentenceId, o.cardMode === 'subtitlesThenAi' && o.aiAvailable);
-    return translation?.text ?? '';
+    if (!o || o.cardMode === 'off') return null;
+    return (await translate(sentenceId, o.cardMode === 'subtitlesThenAi' && o.aiAvailable)) ?? null;
   }
 
-  return { options: readonly(options), translations: readonly(translations), loadOptions, translate, translateMany, forCard };
+  async function forCard(sentenceId: number): Promise<string> {
+    return (await forCardTranslation(sentenceId))?.text ?? '';
+  }
+
+  return { options: readonly(options), translations: readonly(translations), loadOptions, translate, translateMany, forCard, forCardTranslation };
 }
