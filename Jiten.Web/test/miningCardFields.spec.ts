@@ -16,10 +16,11 @@ describe('guessFieldSource', () => {
     expect(guessFieldSource('MiscInfo')).toBe('source');
     expect(guessFieldSource('SentenceEnglish')).toBe('sentenceEnglish');
     expect(guessFieldSource('Translation')).toBe('sentenceEnglish');
+    expect(guessFieldSource('PitchPosition')).toBe('pitchPosition');
+    expect(guessFieldSource('PitchCategories')).toBe('pitchCategories');
   });
 
   it('leaves unknown fields empty', () => {
-    expect(guessFieldSource('PitchPosition')).toBe('');
     expect(guessFieldSource('ExpressionAudio')).toBe('');
   });
 });

@@ -28,6 +28,26 @@ export function wordPitchCategory(reading: string, accents: number[] | null | un
   return categories.size === 1 && only ? only : null;
 }
 
+/** Verbs and i-adjectives, which Yomitan calls kifuku when they drop (suru nouns, `vs`, are nouns). */
+const KIFUKU_POS = /^(adj-i|v1|v2|v4|v5|vk|vz|vs-[is]|vr)/;
+
+/**
+ * Yomitan's {pitch-accent-categories} for an Anki card: one per accent, unique, comma-separated; a verb or i-adjective
+ * that drops is kifuku. Lapis colours the card from it.
+ */
+export function ankiPitchCategories(reading: string, accents: number[] | null | undefined, partsOfSpeech: string[]): string {
+  if (!accents?.length) return '';
+  const morae = moraCount(readingKana(reading));
+  const kifuku = partsOfSpeech.some((p) => KIFUKU_POS.test(p));
+  const categories = accents.map((accent) => (kifuku && accent > 0 ? 'kifuku' : pitchCategory(accent, morae))).filter(Boolean);
+  return [...new Set(categories)].join(',');
+}
+
+/** Yomitan's {pitch-accent-positions} as Lapis reads it: [2], or [1][0] for several. */
+export function ankiPitchPositions(accents: number[] | null | undefined): string {
+  return (accents ?? []).map((accent) => `[${accent}]`).join('');
+}
+
 export function pitchColourClasses(reading: string, accents: number[] | null | undefined): string {
   const category = wordPitchCategory(reading, accents);
   if (!category) return '';

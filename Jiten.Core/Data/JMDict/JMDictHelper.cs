@@ -3607,7 +3607,9 @@ public static class JmDictHelper
             return false;
         }
 
-        var pitchAccentDict = new Dictionary<string, List<int>>();
+        // Keyed by term and reading (hiragana), since one written form can be several words: 橋 is きょう [1] and はし [2].
+        var pitchAccentDict = new Dictionary<(string Term, string Reading), List<int>>();
+        var readingsByTerm = new Dictionary<string, HashSet<string>>();
 
         foreach (var file in pitchAccentFiles)
         {
@@ -3618,26 +3620,50 @@ public static class JmDictHelper
             {
                 string? word = item[0].GetString();
 
-                if (word == null)
+                if (word == null || item[1].GetString() != "pitch")
                     continue;
 
-                string? type = item[1].GetString();
-
                 JsonElement pitchInfo = item[2];
-                string? reading = pitchInfo.GetProperty("reading").GetString();
+                var reading = JapaneseTextHelper.KatakanaToHiragana(
+                    pitchInfo.TryGetProperty("reading", out var r) ? r.GetString() ?? word : word);
 
-                List<int> positions = new();
+                if (!pitchAccentDict.TryGetValue((word, reading), out var positions))
+                    pitchAccentDict[(word, reading)] = positions = new();
                 foreach (JsonElement pitch in pitchInfo.GetProperty("pitches").EnumerateArray())
                 {
-                    positions.Add(pitch.GetProperty("position").GetInt32());
+                    var position = pitch.GetProperty("position").GetInt32();
+                    if (!positions.Contains(position))
+                        positions.Add(position);
                 }
 
-                pitchAccentDict.TryAdd(word, positions);
+                if (!readingsByTerm.TryGetValue(word, out var readings))
+                    readingsByTerm[word] = readings = new();
+                readings.Add(reading);
             }
         }
 
         if (verbose)
             Console.WriteLine($"Found {pitchAccentDict.Count()} pitch accent records.");
+
+        // A written form with its reading first (kanji form + kana form, then a kana form on its own); the written
+        // form alone only when the dictionary gives it one reading.
+        List<int>? PitchFor(JmDictWord word)
+        {
+            var forms = word.Forms.OrderBy(f => f.ReadingIndex).ToList();
+            var kana = forms.Where(f => f.FormType == JmDictFormType.KanaForm)
+                            .Select(f => JapaneseTextHelper.KatakanaToHiragana(f.Text)).ToList();
+            foreach (var kanji in forms.Where(f => f.FormType == JmDictFormType.KanjiForm))
+                foreach (var reading in kana)
+                    if (pitchAccentDict.TryGetValue((kanji.Text, reading), out var found))
+                        return found;
+            foreach (var form in forms.Where(f => f.FormType == JmDictFormType.KanaForm))
+                if (pitchAccentDict.TryGetValue((form.Text, JapaneseTextHelper.KatakanaToHiragana(form.Text)), out var found))
+                    return found;
+            foreach (var form in forms)
+                if (readingsByTerm.TryGetValue(form.Text, out var readings) && readings.Count == 1)
+                    return pitchAccentDict[(form.Text, readings.First())];
+            return null;
+        }
 
         await using var context = await contextFactory.CreateDbContextAsync();
         var allWords = await context.JMDictWords.Include(w => w.Forms).ToListAsync();
@@ -3650,15 +3676,18 @@ public static class JmDictHelper
 
             var word = allWords[i];
 
-            foreach (var form in word.Forms.OrderBy(f => f.ReadingIndex))
+            // JMnedict names: a common word's accent (端 たん) says nothing about the name's.
+            if (word.PartsOfSpeech.Count > 0 && word.PartsOfSpeech.All(p => p.StartsWith("name")))
             {
-                if (pitchAccentDict.TryGetValue(form.Text, out var pitchAccents))
-                {
-                    word.PitchAccents = pitchAccents;
+                if (word.PitchAccents is { Count: > 0 })
+                    word.PitchAccents = [];
+                continue;
+            }
 
-                    wordsUpdated++;
-                    break;
-                }
+            if (PitchFor(word) is { } pitchAccents)
+            {
+                word.PitchAccents = pitchAccents;
+                wordsUpdated++;
             }
         }
 

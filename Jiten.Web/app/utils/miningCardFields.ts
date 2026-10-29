@@ -7,6 +7,8 @@ export type MiningFieldSource =
   | 'word'
   | 'wordReading'
   | 'wordFurigana'
+  | 'pitchPosition'
+  | 'pitchCategories'
   | 'definitions'
   | 'mainDefinition'
   | 'sentence'
@@ -22,6 +24,8 @@ export const MINING_FIELD_SOURCES: { value: MiningFieldSource; label: string }[]
   { value: 'word', label: 'Word' },
   { value: 'wordReading', label: 'Word reading (kana)' },
   { value: 'wordFurigana', label: 'Word with furigana' },
+  { value: 'pitchPosition', label: 'Pitch accent positions ([2])' },
+  { value: 'pitchCategories', label: 'Pitch accent categories (heiban, …)' },
   { value: 'definitions', label: 'Definitions (all senses)' },
   { value: 'mainDefinition', label: 'Main definition' },
   { value: 'sentence', label: 'Sentence, word in bold' },
@@ -38,6 +42,8 @@ const FIELD_GUESSES: [RegExp, MiningFieldSource][] = [
   [/^(expression|word|term|vocab(ulary)?|target ?word|key)$/i, 'word'],
   [/^(expression|word|vocab)?furigana$/i, 'wordFurigana'],
   [/^(expression|word|vocab)?reading$/i, 'wordReading'],
+  [/^pitch ?(accent ?)?positions?$/i, 'pitchPosition'],
+  [/^pitch ?(accent ?)?categor(y|ies)$/i, 'pitchCategories'],
   [/^(main ?definition|meaning)$/i, 'mainDefinition'],
   [/^(glossary|definitions?|vocab ?def(inition)?)$/i, 'definitions'],
   [/^sentence$/i, 'sentence'],

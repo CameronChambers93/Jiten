@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { moraCount, pitchCategory, pitchColourClasses, readingKana, wordPitchCategory } from '../app/utils/pitchAccent';
+import { ankiPitchCategories, ankiPitchPositions, moraCount, pitchCategory, pitchColourClasses, readingKana, wordPitchCategory } from '../app/utils/pitchAccent';
 
 describe('readingKana', () => {
   it('keeps the readings of ruby markup and the okurigana around them', () => {
@@ -60,5 +60,28 @@ describe('pitchColourClasses', () => {
     expect(pitchColourClasses('林檎[りんご]', [0])).toBe('pitch-coloured pitch-heiban');
     expect(pitchColourClasses('りんご', [0])).toBe('pitch-coloured pitch-kana pitch-heiban');
     expect(pitchColourClasses('りんご', [])).toBe('');
+  });
+});
+
+describe('Anki pitch fields', () => {
+  it('writes positions as Lapis reads them', () => {
+    expect(ankiPitchPositions([2])).toBe('[2]');
+    expect(ankiPitchPositions([1, 0])).toBe('[1][0]');
+    expect(ankiPitchPositions([])).toBe('');
+    expect(ankiPitchPositions(undefined)).toBe('');
+  });
+
+  it("names each accent's category, unique and comma-separated", () => {
+    expect(ankiPitchCategories('運命[うんめい]', [1], ['n', 'adj-no'])).toBe('atamadaka');
+    expect(ankiPitchCategories('頭角[とうかく]', [1, 0], ['n'])).toBe('atamadaka,heiban');
+    expect(ankiPitchCategories('怪我[けが]', [2], ['n', 'vs'])).toBe('odaka');
+    expect(ankiPitchCategories('片方[かたほう]', [2], ['n'])).toBe('nakadaka');
+    expect(ankiPitchCategories('事実[じじつ]', [], ['n'])).toBe('');
+  });
+
+  it('calls a verb or i-adjective that drops kifuku, as Yomitan does', () => {
+    expect(ankiPitchCategories('帰[かえ]る', [1], ['v5r', 'vi'])).toBe('kifuku');
+    expect(ankiPitchCategories('高[たか]い', [2], ['adj-i'])).toBe('kifuku');
+    expect(ankiPitchCategories('感[かん]じる', [0], ['v1', 'vt'])).toBe('heiban');
   });
 });

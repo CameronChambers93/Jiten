@@ -2,6 +2,7 @@ import type { DeckIPlusOneSentence, ExampleSentence, Word } from '~/types';
 import type { MiningFieldSource } from '~/utils/miningCardFields';
 import { escapeHtml } from '~/utils/sanitiseHtml';
 import { LAPIS_FIELDS } from '~/utils/minedImport';
+import { ankiPitchCategories, ankiPitchPositions } from '~/utils/pitchAccent';
 import {
   ankiSentenceFurigana,
   ankiWordFurigana,
@@ -223,7 +224,7 @@ export function useMiningCards() {
     const fieldsFor = (source: MiningFieldSource) => Object.keys(mapping).filter((name) => mapping[name] === source);
 
     const [details, media, english] = await Promise.all([
-      wanted.has('definitions') || wanted.has('mainDefinition') ? $api<Word>(`vocabulary/${word.wordId}/${word.readingIndex}`) : null,
+      (['definitions', 'mainDefinition', 'pitchPosition', 'pitchCategories'] as const).some((f) => wanted.has(f)) ? $api<Word>(`vocabulary/${word.wordId}/${word.readingIndex}`) : null,
       cardMedia(sentence.sentenceId, wanted.has('sentenceAudio'), wanted.has('picture')),
       // A failed translation leaves the field empty rather than losing the card.
       wanted.has('sentenceEnglish') ? englishForCard(sentence.sentenceId).catch(() => '') : '',
@@ -233,6 +234,8 @@ export function useMiningCards() {
       word: escapeHtml(word.reading),
       wordReading: escapeHtml(kanaReading(word.readingFurigana || word.reading)),
       wordFurigana: escapeHtml(ankiWordFurigana(word.readingFurigana || word.reading)),
+      pitchPosition: ankiPitchPositions(details?.pitchAccents),
+      pitchCategories: ankiPitchCategories(word.readingFurigana || word.reading, details?.pitchAccents, details?.partsOfSpeech ?? []),
       definitions: details ? definitionsHtml(details.definitions, word.readingIndex) : '',
       mainDefinition: escapeHtml((details && firstSense(details.definitions, word.readingIndex)) || word.mainDefinition || ''),
       sentence: boldTarget(sentence),
