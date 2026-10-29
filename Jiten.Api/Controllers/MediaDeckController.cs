@@ -1368,12 +1368,23 @@ public class MediaDeckController(
         var texts = await context.ExampleSentences
                                  .AsNoTracking()
                                  .Where(es => sentenceIds.Contains(es.SentenceId))
-                                 .Select(es => new { es.SentenceId, es.Text, es.Tokens })
+                                 .Select(es => new { es.SentenceId, es.DeckId, es.Text, es.Tokens })
                                  .ToDictionaryAsync(es => es.SentenceId);
         var rows = sentenceByTitle
                    .Where(kv => texts.ContainsKey(kv.Value))
-                   .Select(kv => (TitleId: kv.Key, texts[kv.Value].SentenceId, texts[kv.Value].Text, texts[kv.Value].Tokens))
+                   .Select(kv => (TitleId: kv.Key, texts[kv.Value].SentenceId, texts[kv.Value].DeckId, texts[kv.Value].Text, texts[kv.Value].Tokens))
                    .ToList();
+
+        // The sentence's title and episode, so a card mined from it names its source (n1miner).
+        var sourceIds = rows.SelectMany(r => new[] { r.DeckId, r.TitleId }).Distinct().ToList();
+        var sources = await context.Decks.AsNoTracking()
+                                   .Where(d => sourceIds.Contains(d.DeckId))
+                                   .Select(d => new StudyExampleSourceDto
+                                   {
+                                       DeckId = d.DeckId, OriginalTitle = d.OriginalTitle, RomajiTitle = d.RomajiTitle,
+                                       EnglishTitle = d.EnglishTitle, MediaType = (int)d.MediaType
+                                   })
+                                   .ToDictionaryAsync(d => d.DeckId);
 
         var furigana = await sentenceTokens.BuildFuriganaDtosAsync(rows.Select(r => (r.SentenceId, r.Text, (byte[]?)r.Tokens)));
 
@@ -1384,6 +1395,8 @@ public class MediaDeckController(
             result[row.TitleId] = new ExampleSentenceDto
             {
                 SentenceId = row.SentenceId, Text = row.Text, WordPosition = token.Position, WordLength = token.Length,
+                SourceDeck = sources.GetValueOrDefault(row.DeckId),
+                SourceDeckParent = row.DeckId != row.TitleId ? sources.GetValueOrDefault(row.TitleId) : null,
                 Furigana = furigana.GetValueOrDefault(row.SentenceId)?.Furigana,
                 Words = furigana.GetValueOrDefault(row.SentenceId)?.Words
             };
