@@ -171,7 +171,7 @@
   }
 
   // ---- Words already in Anki (read through the user's AnkiConnect) ----
-  const { settings: cardSettings, configured: cardsConfigured, addCard, fetchAudio } = useMiningCards();
+  const { settings: cardSettings, configured: cardsConfigured, fetchAudio } = useMiningCards();
   const ankiWords = ref<string[] | null>(null);
   const ankiLoading = ref(false);
 
@@ -276,6 +276,7 @@
 
   // ---- Mining: same flow as a title's Sentences page ----
   const cardSettingsVisible = ref(false);
+  const { mine, choice: mineChoice, answer: answerMine } = useMineSentence();
   const cardState = ref<Record<number, 'adding' | 'added'>>({});
   const minedWords = ref<Set<string>>(new Set());
   const audioLoading = ref<number | null>(null);
@@ -326,16 +327,14 @@
       return;
     }
     cardState.value = { ...cardState.value, [sentence.sentenceId]: 'adding' };
-    try {
-      await addCard({ word, sentence, wordSentences: 0 });
+    const outcome = await mine(word, sentence);
+    if (outcome) {
       cardState.value = { ...cardState.value, [sentence.sentenceId]: 'added' };
       minedWords.value = new Set(minedWords.value).add(wordKey(word));
       ankiWords.value?.push(word.reading);
-      toast.add({ severity: 'success', summary: `Added ${word.reading} to Anki`, life: 2000, group: 'bottom' });
-    } catch (e) {
+    } else {
       const { [sentence.sentenceId]: _, ...rest } = cardState.value;
       cardState.value = rest;
-      toast.add({ severity: 'error', summary: mediaError(e, "Couldn't add the card"), life: 5000, group: 'bottom' });
     }
   }
 
@@ -645,5 +644,6 @@
     </template>
 
     <MiningCardSettingsDialog v-model:visible="cardSettingsVisible" />
+    <MineChoiceDialog :choice="mineChoice" @answer="answerMine" />
   </div>
 </template>

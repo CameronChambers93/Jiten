@@ -162,9 +162,10 @@
   }
 
   // Mining: preview the sentence audio cut from the linked episode, and add the sentence to Anki through AnkiConnect.
-  const { configured: cardsConfigured, fetchAudio, addCard } = useMiningCards();
+  const { configured: cardsConfigured, fetchAudio } = useMiningCards();
   const toast = useToast();
   const cardSettingsVisible = ref(false);
+  const { mine, choice: mineChoice, answer: answerMine } = useMineSentence();
   const cardState = ref<Record<number, 'adding' | 'added'>>({});
   const audioLoading = ref<number | null>(null);
   const audioUrls = new Map<number, string>();
@@ -214,14 +215,12 @@
       return;
     }
     cardState.value = { ...cardState.value, [sentence.sentenceId]: 'adding' };
-    try {
-      await addCard({ word, sentence, wordSentences: 0 });
+    const outcome = await mine(word, sentence);
+    if (outcome) {
       cardState.value = { ...cardState.value, [sentence.sentenceId]: 'added' };
-      toast.add({ severity: 'success', summary: `Added ${word.reading} to Anki`, life: 2000, group: 'bottom' });
-    } catch (e) {
+    } else {
       const { [sentence.sentenceId]: _, ...rest } = cardState.value;
       cardState.value = rest;
-      toast.add({ severity: 'error', summary: mediaError(e, "Couldn't add the card"), life: 5000, group: 'bottom' });
     }
   }
 
@@ -521,6 +520,7 @@
     </template>
 
     <MiningCardSettingsDialog v-model:visible="cardSettingsVisible" />
+    <MineChoiceDialog :choice="mineChoice" @answer="answerMine" />
 
     <LazySrsAddDeckDialog
       v-if="studyDialog && mainDeck"
