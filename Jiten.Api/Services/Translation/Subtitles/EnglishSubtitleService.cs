@@ -138,7 +138,7 @@ public partial class EnglishSubtitleService(
         var japanese = matcher.Cues;
         var detected = SubtitleOffsetDetector.DetectAgainstCues(japanese.Select(c => (c.StartMs, c.EndMs)), cues.Select(c => (c.StartMs, c.EndMs)));
 
-        var aligner = new TranslationCueAligner(cues, detected.OffsetMs);
+        var aligner = new TranslationCueAligner(cues, detected.OffsetMs, japanese);
         var samples = await SamplesAsync(item.DeckId, aligner, ct);
 
         var token = Guid.NewGuid().ToString("N");

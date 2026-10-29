@@ -165,6 +165,8 @@ public class SentenceTranslationService(
         {
             entry.SlidingExpiration = EnglishTtl;
             var track = await context.DeckEnglishTracks.AsNoTracking().FirstOrDefaultAsync(t => t.DeckId == deckId, ct);
-            return track == null ? null : new EnglishTrackCache(new TranslationCueAligner(track.GetCues(), track.OffsetMs), track.Source);
+            if (track == null) return null;
+            var japanese = (await cueLookup.MatcherAsync(deckId, ct))?.Cues;
+            return new EnglishTrackCache(new TranslationCueAligner(track.GetCues(), track.OffsetMs, japanese), track.Source);
         });
 }

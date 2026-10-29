@@ -96,6 +96,35 @@ public class EnglishSubtitleTests
     }
 
     [Fact]
+    public void Aligner_SplitsACueSpokenOverTwoJapaneseCuesBySentence()
+    {
+        // Osomatsu S2E15: one fansub line over two Japanese cues.
+        var japanese = new List<SubtitleCue>
+        {
+            new(54_554, 55_889, "シェシェシェ…"), new(55_972, 57_849, "ミーは やはり天才ざんす"),
+            new(57_932, 61_269, "これで 相手に警戒されることも\n襲われることもない")
+        };
+        var english = new List<SubtitleCue> { new(55_980, 61_320, "Me is truly a genius. Now they won't be suspicious of us or attack us.") };
+        var aligner = new TranslationCueAligner(english, 0, japanese);
+
+        aligner.TextFor(55_972, 57_849).Should().Be("Me is truly a genius.");
+        aligner.TextFor(57_932, 61_269).Should().Be("Now they won't be suspicious of us or attack us.");
+        // A sentence over both Japanese cues keeps the whole line; without the Japanese cues nothing is split.
+        aligner.TextFor(55_972, 61_269).Should().Be("Me is truly a genius. Now they won't be suspicious of us or attack us.");
+        new TranslationCueAligner(english, 0).TextFor(55_972, 57_849).Should().Be("Me is truly a genius. Now they won't be suspicious of us or attack us.");
+    }
+
+    [Fact]
+    public void Aligner_KeepsACueWholeOverOneJapaneseCueOrWithOneSentence()
+    {
+        var japanese = new List<SubtitleCue> { new(1000, 3000, "いいから 行くぞ"), new(3100, 5000, "どこへ？") };
+
+        new TranslationCueAligner([new(1000, 3000, "Come on. Let's go.")], 0, japanese).TextFor(1000, 3000).Should().Be("Come on. Let's go.");
+        new TranslationCueAligner([new(1000, 5000, "Ask Mr. Tanaka where we're going")], 0, japanese).TextFor(1000, 3000)
+            .Should().Be("Ask Mr. Tanaka where we're going");
+    }
+
+    [Fact]
     public void DetectAgainstCues_FindsTheShiftBetweenReleases()
     {
         var random = new Random(7);
