@@ -106,6 +106,8 @@ export default defineNuxtConfig({
     importTheme: { from: '~/theme/jiten.ts' },
   },
   vite: {
+    // Vite otherwise finds these during a cold page load and force-reloads the page for each find.
+    optimizeDeps: { include: ['@unhead/schema-org/vue', 'wanakana', '@floating-ui/vue', 'jszip'] },
     plugins: [tailwindcss()],
     build: {
       rollupOptions: {
