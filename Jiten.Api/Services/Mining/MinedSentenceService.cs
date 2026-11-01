@@ -173,7 +173,8 @@ public class MinedSentenceService(
 
         var word = await userContext.MinedWords.AsSplitQuery().Include(w => w.Notes).Include(w => w.Sentences)
                                     .FirstAsync(w => w.MinedWordId == note.MinedWordId, ct);
-        var sentence = word.Sentences.FirstOrDefault(s => s.ExampleSentenceId == request.ExampleSentenceId || PlainText(s.Text) == text);
+        await sync.FillAsync(userId, word.Sentences, ct);
+        var sentence = word.Sentences.FirstOrDefault(s => s.ExampleSentenceId == request.ExampleSentenceId || PlainText(s.Shown) == text);
         var added = sentence == null;
         if (sentence == null)
         {
@@ -196,6 +197,9 @@ public class MinedSentenceService(
             word.Sentences.Add(sentence);
             word.UpdatedAt = DateTime.UtcNow;
             await userContext.SaveChangesAsync(ct);
+
+            await using var jiten = await contextFactory.CreateDbContextAsync(ct);
+            await MinedLineStore.SetDeckSourceAsync(jiten, request.ExampleSentenceId, sentence.SourceTitle, ct);
         }
 
         var kept = word.Notes.Min(n => n.AnkiNoteId);
@@ -242,9 +246,14 @@ public class MinedSentenceService(
                                .Select(w => new MinedWordSummaryDto(
                                    w.MinedWordId, w.WordId, w.ReadingIndex, w.Expression, w.Reading,
                                    w.Sentences.Count, w.Notes.Count, w.Sentences.Count(s => s.FlaggedAt != null),
-                                   w.Sentences.Where(s => s.IsMain).Select(s => s.Text).FirstOrDefault(), w.UpdatedAt))
+                                   null, w.UpdatedAt))
                                .ToListAsync(ct);
-        return new MinedWordsPage(words, total);
+
+        var ids = words.Select(w => w.MinedWordId).ToList();
+        var mains = await userContext.MinedSentences.AsNoTracking().Where(s => ids.Contains(s.MinedWordId) && s.IsMain).ToListAsync(ct);
+        await sync.FillAsync(userId, mains, ct);
+        var shown = mains.ToLookup(s => s.MinedWordId, s => s.Shown);
+        return new MinedWordsPage(words.Select(w => w with { MainSentence = shown[w.MinedWordId].FirstOrDefault() }).ToList(), total);
     }
 
     public async Task<MinedWordDto?> GetAsync(string userId, long minedWordId, CancellationToken ct)
@@ -253,12 +262,13 @@ public class MinedSentenceService(
                                     .Include(w => w.Notes).Include(w => w.Sentences)
                                     .FirstOrDefaultAsync(w => w.UserId == userId && w.MinedWordId == minedWordId, ct);
         if (word == null) return null;
+        await sync.FillAsync(userId, word.Sentences, ct);
 
         return new MinedWordDto(
             word.MinedWordId, word.WordId, word.ReadingIndex, word.Expression, word.Reading,
             word.Notes.OrderBy(n => n.AnkiNoteId).Select(n => new MinedNoteDto(n.AnkiNoteId, n.ModelName, n.DeckName, n.ImportedAt)).ToList(),
             word.Sentences.OrderBy(s => s.SortOrder).Select(s => new MinedSentenceDto(
-                s.MinedSentenceId, s.Text, s.English, s.EnglishOrigin, s.Origin, s.ExampleSentenceId, s.SourceTitle, s.SourceUrl, s.PreviousLine,
+                s.MinedSentenceId, s.Shown, s.English, s.EnglishOrigin, s.Origin, s.ExampleSentenceId, s.SourceTitle, s.SourceUrl, s.PreviousLine,
                 s.MinedAt, s.AudioPath == null ? null : cdn.GetSignedUrl(s.AudioPath, MediaUrlTtl),
                 s.PicturePath == null ? null : cdn.GetSignedUrl(s.PicturePath, MediaUrlTtl), s.IsMain, s.SortOrder, s.FlaggedAt)).ToList());
     }
@@ -313,12 +323,15 @@ public class MinedSentenceService(
             (sentence.PicturePath, sentence.PictureContentType) = await StoreAsync(userId, note.PictureBase64, CardMediaKind.Image, ct);
         }
 
-        var line = MinedLine.From(sentence.Text, PlainText);
+        var line = MinedLine.From(sentence.Text!, PlainText);
         (sentence.TargetPosition, sentence.TargetLength) = (line.TargetPosition, line.TargetLength);
-        if (sentence.ExampleSentenceId == null)
+        await using var jiten = await contextFactory.CreateDbContextAsync(ct);
+        if (sentence.ExampleSentenceId is { } deckLine) await MinedLineStore.SetDeckSourceAsync(jiten, deckLine, sentence.SourceTitle, ct);
+        else
         {
-            await using var jiten = await contextFactory.CreateDbContextAsync(ct);
             sentence.ExampleSentenceId = await MinedLineStore.EnsureOccurrenceAsync(jiten, userId, line, sentence, ct);
+            // The private line now holds this text, unless the note's markup can't be rebuilt from it.
+            if (line.ToHtml() == sentence.Text) sentence.Text = null;
         }
 
         userContext.MinedSentences.Add(sentence);

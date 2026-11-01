@@ -759,18 +759,20 @@ public class UserDbContext : IdentityDbContext<User>
             entity.HasKey(s => s.MinedSentenceId);
             if (isNpgsql)
                 entity.Property(s => s.UserId).HasConversion(guidToString).HasColumnType("uuid").IsRequired();
-            entity.Property(s => s.Text).HasMaxLength(4000).IsRequired();
+            entity.Property(s => s.Text).HasMaxLength(4000);
+            entity.Ignore(s => s.Shown);
+            entity.Ignore(s => s.OccurrenceHtml);
+            entity.Ignore(s => s.SourceTitle);
+            entity.Ignore(s => s.SourceUrl);
+            entity.Ignore(s => s.AudioPath);
+            entity.Ignore(s => s.AudioContentType);
+            entity.Ignore(s => s.PicturePath);
+            entity.Ignore(s => s.PictureContentType);
             entity.Property(s => s.Furigana).HasMaxLength(8000);
             entity.Property(s => s.English).HasMaxLength(4000);
             entity.Property(s => s.EnglishOrigin).HasMaxLength(20);
             entity.Property(s => s.Origin).HasMaxLength(20).IsRequired();
-            entity.Property(s => s.SourceTitle).HasMaxLength(300);
-            entity.Property(s => s.SourceUrl).HasMaxLength(2000);
             entity.Property(s => s.PreviousLine).HasMaxLength(4000);
-            entity.Property(s => s.AudioPath).HasMaxLength(512);
-            entity.Property(s => s.AudioContentType).HasMaxLength(100);
-            entity.Property(s => s.PicturePath).HasMaxLength(512);
-            entity.Property(s => s.PictureContentType).HasMaxLength(100);
             entity.Property(s => s.AnkiAudioFilename).HasMaxLength(300);
             entity.Property(s => s.AnkiPictureFilename).HasMaxLength(300);
 

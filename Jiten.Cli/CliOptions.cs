@@ -153,9 +153,6 @@ public class CliOptions
     [Option(longName: "migrate-moved-forms", Required = false, HelpText = "Follow JMdict forms that moved to another entry: remove the old entry's lookups for them and copy frequency ranks to the new entry. Runs automatically inside --sync-jmdict; combine with --dry-run and --output to preview.")]
     public bool MigrateMovedForms { get; set; }
 
-    [Option(longName: "migrate-mined-sentences", Required = false, HelpText = "Give every mined sentence an occurrence and report what they can't reproduce. Combine with --dry-run to preview.")]
-    public bool MigrateMinedSentences { get; set; }
-
     [Option(longName: "skip-kanji-rebuild", Required = false,
             HelpText = "Skip the WordKanji/KanjiReadingWords rebuild that normally closes a JMDict sync.")]
     public bool SkipKanjiRebuild { get; set; }

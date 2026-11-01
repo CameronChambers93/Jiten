@@ -29,7 +29,7 @@ public record NoteSentencesDto(long AnkiNoteId, string SentencesHtml);
 /// Sync between the sentence store and Anki. The browser does the AnkiConnect half (reading tags, deleting folded notes,
 /// writing fields); this decides what to do and records it.
 /// </summary>
-public class MinedSyncService(UserDbContext userContext)
+public class MinedSyncService(UserDbContext userContext, IDbContextFactory<JitenDbContext> contextFactory)
 {
     public const string FlagTagPrefix = "sentence-fix::";
 
@@ -43,6 +43,7 @@ public class MinedSyncService(UserDbContext userContext)
                                      .Include(w => w.Notes).Include(w => w.Sentences)
                                      .OrderBy(w => w.Expression)
                                      .ToListAsync(ct);
+        await FillAsync(userId, words.SelectMany(w => w.Sentences).ToList(), ct);
         var now = DateTime.UtcNow;
 
         return words.Select(w =>
@@ -51,7 +52,7 @@ public class MinedSyncService(UserDbContext userContext)
             return new FoldCandidateDto(w.MinedWordId, w.Expression, w.Reading, notes[0].AnkiNoteId, notes.Select(n =>
             {
                 var created = CreatedAt(n.AnkiNoteId);
-                var sentence = w.Sentences.FirstOrDefault(s => s.SourceAnkiNoteId == n.AnkiNoteId)?.Text;
+                var sentence = w.Sentences.FirstOrDefault(s => s.SourceAnkiNoteId == n.AnkiNoteId)?.Shown;
                 return new FoldNoteDto(n.AnkiNoteId, n.DeckName, created, now - created >= FoldDelay, sentence);
             }).ToList());
         }).ToList();
@@ -73,7 +74,8 @@ public class MinedSyncService(UserDbContext userContext)
 
         // A note mined twice from the same line brings the same sentence twice; keep one copy, preferring the kept note's.
         var sentences = await userContext.MinedSentences.Where(s => s.MinedWordId == request.MinedWordId).ToListAsync(ct);
-        foreach (var copies in sentences.GroupBy(s => MinedSentenceService.PlainText(s.Text)).Where(g => g.Count() > 1))
+        await FillAsync(userId, sentences, ct);
+        foreach (var copies in sentences.GroupBy(s => MinedSentenceService.PlainText(s.Shown)).Where(g => g.Count() > 1))
         {
             var kept = copies.OrderByDescending(s => s.SourceAnkiNoteId == request.KeepAnkiNoteId).ThenByDescending(s => s.IsMain)
                              .ThenBy(s => s.SortOrder).First();
@@ -118,11 +120,18 @@ public class MinedSyncService(UserDbContext userContext)
                                      .Where(w => w.UserId == userId && w.Notes.Any() && w.Sentences.Any())
                                      .Include(w => w.Notes).Include(w => w.Sentences)
                                      .ToListAsync(ct);
+        await FillAsync(userId, words.SelectMany(w => w.Sentences).ToList(), ct);
         return words.Select(w =>
         {
             var note = w.Notes.Min(n => n.AnkiNoteId);
             return new NoteSentencesDto(note, RenderSentences(note, w.Sentences, template));
         }).ToList();
+    }
+
+    public async Task FillAsync(string userId, IReadOnlyCollection<MinedSentence> sentences, CancellationToken ct)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(ct);
+        await MinedLineStore.FillAsync(context, userId, sentences, ct);
     }
 
     public async Task<string> TargetTemplateAsync(string userId, CancellationToken ct) =>
@@ -152,7 +161,7 @@ public class MinedSyncService(UserDbContext userContext)
             if (s.IsMain) html.Append(" data-main=\"1\"");
             if (!string.IsNullOrEmpty(s.SourceTitle)) html.Append($" data-source=\"{Attr(s.SourceTitle)}\"");
             html.Append('>');
-            html.Append($"<div class=\"jiten-sentence-text\">{TargetWordMarkup.Apply(s.Text, targetTemplate)}</div>");
+            html.Append($"<div class=\"jiten-sentence-text\">{TargetWordMarkup.Apply(s.Shown, targetTemplate)}</div>");
             if (!string.IsNullOrEmpty(s.Furigana)) html.Append($"<div class=\"jiten-sentence-furigana\">{TargetWordMarkup.Apply(s.Furigana, targetTemplate)}</div>");
             if (!string.IsNullOrEmpty(s.English)) html.Append($"<div class=\"jiten-sentence-english\">{s.English}</div>");
             if (!string.IsNullOrEmpty(s.AnkiAudioFilename))

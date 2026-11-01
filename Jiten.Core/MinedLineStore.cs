@@ -18,6 +18,33 @@ public static class MinedLineStore
     public static string PlainText(string html) =>
         WebUtility.HtmlDecode(Tags.Replace(html.Replace("<br>", " "), "")).Replace(' ', ' ').Trim();
 
+    /// <summary>Fills in what a user's sentences read from their occurrences. A private line of another user is never read.</summary>
+    public static async Task FillAsync(JitenDbContext context, string userId, IReadOnlyCollection<MinedSentence> sentences, CancellationToken ct)
+    {
+        var ids = sentences.Where(s => s.ExampleSentenceId != null).Select(s => s.ExampleSentenceId!.Value).Distinct().ToList();
+        var occurrences = await context.ExampleSentences.AsNoTracking().IgnoreQueryFilters()
+                                       .Where(s => ids.Contains(s.SentenceId) && (s.OwnerId == null || s.OwnerId == userId))
+                                       .ToDictionaryAsync(s => s.SentenceId, ct);
+
+        foreach (var sentence in sentences)
+        {
+            if (sentence.ExampleSentenceId is not { } id || !occurrences.TryGetValue(id, out var occurrence)) continue;
+            sentence.OccurrenceHtml = new MinedLine(occurrence.Text, occurrence.Speaker, sentence.TargetPosition, sentence.TargetLength).ToHtml();
+            sentence.SourceTitle = occurrence.SourceTitle;
+            sentence.SourceUrl = occurrence.SourceUrl;
+            sentence.AudioPath = occurrence.AudioPath;
+            sentence.AudioContentType = occurrence.AudioContentType;
+            sentence.PicturePath = occurrence.PicturePath;
+            sentence.PictureContentType = occurrence.PictureContentType;
+        }
+    }
+
+    /// <summary>Labels a deck's line with where it was mined from, the first time.</summary>
+    public static Task SetDeckSourceAsync(JitenDbContext context, long sentenceId, string? sourceTitle, CancellationToken ct) =>
+        context.ExampleSentences.IgnoreQueryFilters()
+               .Where(s => s.SentenceId == sentenceId && s.DeckId != null && s.SourceTitle == null)
+               .ExecuteUpdateAsync(u => u.SetProperty(s => s.SourceTitle, sourceTitle), ct);
+
     /// <summary>The user's occurrence of this line from this source, added if it's new. Media it doesn't have yet is filled in.</summary>
     public static async Task<long> EnsureOccurrenceAsync(JitenDbContext context, string userId, MinedLine line, MinedSentence media, CancellationToken ct)
     {

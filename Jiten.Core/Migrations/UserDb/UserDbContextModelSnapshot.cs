@@ -777,14 +777,6 @@ namespace Jiten.Core.Migrations.UserDb
                         .HasMaxLength(300)
                         .HasColumnType("character varying(300)");
 
-                    b.Property<string>("AudioContentType")
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
-
-                    b.Property<string>("AudioPath")
-                        .HasMaxLength(512)
-                        .HasColumnType("character varying(512)");
-
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -820,14 +812,6 @@ namespace Jiten.Core.Migrations.UserDb
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");
 
-                    b.Property<string>("PictureContentType")
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
-
-                    b.Property<string>("PicturePath")
-                        .HasMaxLength(512)
-                        .HasColumnType("character varying(512)");
-
                     b.Property<string>("PreviousLine")
                         .HasMaxLength(4000)
                         .HasColumnType("character varying(4000)");
@@ -838,14 +822,6 @@ namespace Jiten.Core.Migrations.UserDb
                     b.Property<long?>("SourceAnkiNoteId")
                         .HasColumnType("bigint");
 
-                    b.Property<string>("SourceTitle")
-                        .HasMaxLength(300)
-                        .HasColumnType("character varying(300)");
-
-                    b.Property<string>("SourceUrl")
-                        .HasMaxLength(2000)
-                        .HasColumnType("character varying(2000)");
-
                     b.Property<int?>("TargetLength")
                         .HasColumnType("integer");
 
@@ -853,7 +829,6 @@ namespace Jiten.Core.Migrations.UserDb
                         .HasColumnType("integer");
 
                     b.Property<string>("Text")
-                        .IsRequired()
                         .HasMaxLength(4000)
                         .HasColumnType("character varying(4000)");
 

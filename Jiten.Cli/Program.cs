@@ -6,7 +6,6 @@ using Jiten.Core;
 using Jiten.Core.Data;
 using Jiten.Parser.Romanization;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 
 // ReSharper disable MethodSupportsCancellation
 
@@ -159,13 +158,6 @@ public class Program
         if (options.BuildFormRedundancies)
         {
             await importCommands.BuildFormRedundancies();
-        }
-
-        if (options.MigrateMinedSentences)
-        {
-            var userOptions = new DbContextOptionsBuilder<UserDbContext>().UseNpgsql(context.Configuration.GetConnectionString("JitenDatabase")).Options;
-            await using var userContext = new UserDbContext(userOptions);
-            await MinedLineMigrator.Run(context.ContextFactory, userContext, options.DryRun);
         }
 
         if (options.MigrateMovedForms)

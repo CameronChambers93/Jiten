@@ -152,4 +152,27 @@ public class MinedAddSentenceTests(JitenWebApplicationFactory factory)
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         return body.GetProperty("targetWordTemplate").GetString()!;
     }
+
+    [Fact]
+    public async Task FillNeverReadsAnotherUsersPrivateLine()
+    {
+        using var scope = factory.Services.CreateScope();
+        var jiten = scope.ServiceProvider.GetRequiredService<JitenDbContext>();
+        var line = new Jiten.Core.Data.ExampleSentence
+        {
+            Text = "秘密の行", Tokens = [], WordKeys = [], OwnerId = TestUsers.UserB, SourceTitle = "秘密"
+        };
+        jiten.ExampleSentences.Add(line);
+        await jiten.SaveChangesAsync();
+
+        var stolen = new MinedSentence { ExampleSentenceId = line.SentenceId };
+        await MinedLineStore.FillAsync(jiten, TestUsers.UserA, [stolen], default);
+        var own = new MinedSentence { ExampleSentenceId = line.SentenceId, TargetPosition = 0, TargetLength = 2 };
+        await MinedLineStore.FillAsync(jiten, TestUsers.UserB, [own], default);
+
+        stolen.Shown.Should().BeEmpty();
+        stolen.SourceTitle.Should().BeNull();
+        own.Shown.Should().Be("<b>秘密</b>の行");
+        (await jiten.ExampleSentences.AnyAsync(s => s.SentenceId == line.SentenceId)).Should().BeFalse("private lines stay out of every reader");
+    }
 }

@@ -621,10 +621,6 @@ public static class JitenHelper
                 parameters);
 
             await context.Database.ExecuteSqlRawAsync(
-                @"DELETE FROM jiten.""ExampleSentences"" WHERE ""DeckId"" IN (" + placeholders + ")",
-                parameters);
-
-            await context.Database.ExecuteSqlRawAsync(
                 @"DELETE FROM jiten.""Decks"" WHERE ""DeckId"" IN (" + placeholders + ")",
                 parameters);
 

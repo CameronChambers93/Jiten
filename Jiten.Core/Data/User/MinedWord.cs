@@ -60,8 +60,14 @@ public class MinedSentence
     public long MinedWordId { get; set; }
     public string UserId { get; set; } = default!;
 
-    /// <summary>The sentence as card HTML, the word in bold.</summary>
-    public required string Text { get; set; }
+    /// <summary>The user's own text as card HTML, the word in bold; null to use the occurrence's. See <see cref="Shown"/>.</summary>
+    public string? Text { get; set; }
+
+    /// <summary>The sentence as card HTML, once <see cref="MinedLineStore.FillAsync"/> has read its occurrence.</summary>
+    public string Shown => Text ?? OccurrenceHtml ?? "";
+
+    /// <summary>Read from the occurrence, not stored here.</summary>
+    public string? OccurrenceHtml { get; set; }
 
     /// <summary>The sentence with readings, as Lapis+'s SentenceFurigana holds it (bracket or ruby furigana).</summary>
     public string? Furigana { get; set; }
@@ -82,7 +88,7 @@ public class MinedSentence
 
     public int? TargetLength { get; set; }
 
-    /// <summary>The game, show or site it came from, as known (GSM's Game:: tag, the card's source, the page's host).</summary>
+    /// <summary>The game, show or site it came from, as known (GSM's Game:: tag, the card's source, the page's host). Stored on the occurrence, like the media.</summary>
     public string? SourceTitle { get; set; }
 
     public string? SourceUrl { get; set; }
