@@ -77,9 +77,8 @@ public class MinedSyncService(UserDbContext userContext, IDbContextFactory<Jiten
         await FillAsync(userId, sentences, ct);
         foreach (var copies in sentences.GroupBy(s => MinedSentenceService.PlainText(s.Shown)).Where(g => g.Count() > 1))
         {
-            var kept = copies.OrderByDescending(s => s.SourceAnkiNoteId == request.KeepAnkiNoteId).ThenByDescending(s => s.IsMain)
-                             .ThenBy(s => s.SortOrder).First();
-            kept.IsMain = copies.Any(s => s.IsMain);
+            var kept = copies.OrderByDescending(s => s.SourceAnkiNoteId == request.KeepAnkiNoteId).ThenBy(s => s.SortOrder).First();
+            kept.SortOrder = copies.Min(s => s.SortOrder);
             userContext.MinedSentences.RemoveRange(copies.Where(s => s != kept));
         }
 
@@ -155,10 +154,11 @@ public class MinedSyncService(UserDbContext userContext, IDbContextFactory<Jiten
     public static string RenderSentences(long ankiNoteId, IEnumerable<MinedSentence> sentences, string targetTemplate = TargetWordMarkup.Default)
     {
         var html = new StringBuilder($"<div class=\"jiten-sentences\" data-note=\"{ankiNoteId}\">");
-        foreach (var s in sentences.OrderBy(s => s.SortOrder))
+        var ordered = sentences.OrderBy(s => s.SortOrder).ToList();
+        foreach (var s in ordered)
         {
             html.Append($"<div class=\"jiten-sentence\" data-id=\"{s.MinedSentenceId}\" data-origin=\"{Attr(s.Origin)}\"");
-            if (s.IsMain) html.Append(" data-main=\"1\"");
+            if (s == ordered[0]) html.Append(" data-main=\"1\"");
             if (!string.IsNullOrEmpty(s.SourceTitle)) html.Append($" data-source=\"{Attr(s.SourceTitle)}\"");
             html.Append('>');
             html.Append($"<div class=\"jiten-sentence-text\">{TargetWordMarkup.Apply(s.Shown, targetTemplate)}</div>");

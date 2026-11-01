@@ -17,7 +17,7 @@ public class MinedSyncTests
             new MinedSentence
             {
                 MinedSentenceId = 1, Text = "<b>しっかり</b>するんだ", Furigana = "<b>しっかり</b>するんだ", English = "Snap out of it", SortOrder = 0,
-                IsMain = true, Origin = MinedSentenceOrigin.Game, SourceTitle = "A \"Game\"", AnkiAudioFilename = "line 1.ogg",
+                Origin = MinedSentenceOrigin.Game, SourceTitle = "A \"Game\"", AnkiAudioFilename = "line 1.ogg",
                 AnkiPictureFilename = "shot.webp"
             },
         ]);

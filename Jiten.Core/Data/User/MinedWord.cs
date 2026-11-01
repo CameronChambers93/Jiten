@@ -114,9 +114,7 @@ public class MinedSentence
     /// <summary>The Anki note it was imported from.</summary>
     public long? SourceAnkiNoteId { get; set; }
 
-    /// <summary>The sentence shown in the note's main Sentence fields.</summary>
-    public bool IsMain { get; set; }
-
+    /// <summary>The first sentence of a word is its main one, shown in the note's main Sentence fields.</summary>
     public int SortOrder { get; set; }
 
     /// <summary>Set when the user flags the sentence from a card as needing an edit.</summary>

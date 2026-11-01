@@ -191,7 +191,6 @@ public class MinedSentenceService(
                 MinedAt = DateTime.UtcNow,
                 AnkiAudioFilename = string.IsNullOrWhiteSpace(request.AudioFilename) ? null : Truncate(request.AudioFilename, 500),
                 AnkiPictureFilename = string.IsNullOrWhiteSpace(request.PictureFilename) ? null : Truncate(request.PictureFilename, 500),
-                IsMain = word.Sentences.Count == 0,
                 SortOrder = word.Sentences.Count == 0 ? 0 : word.Sentences.Max(s => s.SortOrder) + 1,
             };
             word.Sentences.Add(sentence);
@@ -250,7 +249,7 @@ public class MinedSentenceService(
                                .ToListAsync(ct);
 
         var ids = words.Select(w => w.MinedWordId).ToList();
-        var mains = await userContext.MinedSentences.AsNoTracking().Where(s => ids.Contains(s.MinedWordId) && s.IsMain).ToListAsync(ct);
+        var mains = await userContext.MinedSentences.AsNoTracking().Where(s => ids.Contains(s.MinedWordId) && !userContext.MinedSentences.Any(o => o.MinedWordId == s.MinedWordId && o.SortOrder < s.SortOrder)).ToListAsync(ct);
         await sync.FillAsync(userId, mains, ct);
         var shown = mains.ToLookup(s => s.MinedWordId, s => s.Shown);
         return new MinedWordsPage(words.Select(w => w with { MainSentence = shown[w.MinedWordId].FirstOrDefault() }).ToList(), total);
@@ -263,6 +262,7 @@ public class MinedSentenceService(
                                     .FirstOrDefaultAsync(w => w.UserId == userId && w.MinedWordId == minedWordId, ct);
         if (word == null) return null;
         await sync.FillAsync(userId, word.Sentences, ct);
+        var main = word.Sentences.MinBy(s => s.SortOrder);
 
         return new MinedWordDto(
             word.MinedWordId, word.WordId, word.ReadingIndex, word.Expression, word.Reading,
@@ -270,7 +270,7 @@ public class MinedSentenceService(
             word.Sentences.OrderBy(s => s.SortOrder).Select(s => new MinedSentenceDto(
                 s.MinedSentenceId, s.Shown, s.English, s.EnglishOrigin, s.Origin, s.ExampleSentenceId, s.SourceTitle, s.SourceUrl, s.PreviousLine,
                 s.MinedAt, s.AudioPath == null ? null : cdn.GetSignedUrl(s.AudioPath, MediaUrlTtl),
-                s.PicturePath == null ? null : cdn.GetSignedUrl(s.PicturePath, MediaUrlTtl), s.IsMain, s.SortOrder, s.FlaggedAt)).ToList());
+                s.PicturePath == null ? null : cdn.GetSignedUrl(s.PicturePath, MediaUrlTtl), s == main, s.SortOrder, s.FlaggedAt)).ToList());
     }
 
     private async Task<MinedWord> FindOrCreateWordAsync(string userId, string expression, string reading, int? wordId, byte? readingIndex,
@@ -312,7 +312,6 @@ public class MinedSentenceService(
             MinedAt = DateTimeOffset.FromUnixTimeMilliseconds(note.AnkiNoteId).UtcDateTime,
             AnkiAudioFilename = note.AudioFilename, AnkiPictureFilename = note.PictureFilename,
             SourceAnkiNoteId = note.AnkiNoteId,
-            IsMain = existing == null,
             SortOrder = (existing ?? -1) + 1,
         };
 

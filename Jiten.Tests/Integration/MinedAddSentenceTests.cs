@@ -55,7 +55,7 @@ public class MinedAddSentenceTests(JitenWebApplicationFactory factory)
         {
             MinedWordId = word.MinedWordId, UserId = TestUsers.UserA, Text = sentence, Origin = MinedSentenceOrigin.Jiten,
             ExampleSentenceId = long.Parse(audio["jiten_".Length..audio.IndexOf('.')]), AnkiAudioFilename = audio, SourceAnkiNoteId = ankiNoteId,
-            IsMain = sortOrder == 0, SortOrder = sortOrder
+            SortOrder = sortOrder
         });
         await userDb.SaveChangesAsync();
     }
