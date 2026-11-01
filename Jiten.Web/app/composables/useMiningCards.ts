@@ -202,7 +202,7 @@ export function useMiningCards() {
         ankiNoteId: noteIds[0],
         exampleSentenceId: sentence.sentenceId,
         sentence: boldTarget(sentence),
-        furigana: sentence.furigana?.length ? ankiSentenceFurigana(sentence.text, sentence.furigana) : null,
+        furigana: sentence.furigana?.length ? ankiSentenceFurigana(sentence.text, sentence.furigana, sentence) : null,
         english: translation?.text ? escapeFieldText(translation.text) : null,
         englishOrigin: translation?.origin ?? null,
         sourceTitle: sourceLabel(sentence) || null,
@@ -240,7 +240,7 @@ export function useMiningCards() {
       mainDefinition: escapeFieldText((details && firstSense(details.definitions, word.readingIndex)) || word.mainDefinition || ''),
       sentence: boldTarget(sentence),
       sentencePlain: escapeFieldText(sentence.text),
-      sentenceFurigana: ankiSentenceFurigana(sentence.text, sentence.furigana ?? []),
+      sentenceFurigana: ankiSentenceFurigana(sentence.text, sentence.furigana ?? [], sentence),
       sentenceEnglish: escapeFieldText(english),
       source: escapeFieldText(sourceLabel(sentence)),
     };

@@ -53,6 +53,39 @@ describe('ankiSentenceFurigana', () => {
   it('escapes HTML in the text', () => {
     expect(ankiSentenceFurigana('<b>', [])).toBe('&lt;b&gt;');
   });
+
+  describe('with a target word', () => {
+    const text = 'その部分を見る。';
+    const spans = [
+      { position: 2, length: 2, reading: 'ぶぶん' },
+      { position: 5, length: 1, reading: 'み' },
+    ];
+    const target = (wordPosition: number, wordLength: number) => ({ wordPosition, wordLength });
+
+    it('bolds a word with a reading', () => {
+      expect(ankiSentenceFurigana(text, spans, target(2, 2))).toBe('その<b>部分[ぶぶん]</b>を 見[み]る。');
+    });
+
+    it('bolds a word in plain text', () => {
+      expect(ankiSentenceFurigana(text, spans, target(0, 2))).toBe('<b>その</b> 部分[ぶぶん]を 見[み]る。');
+    });
+
+    it('bolds a word that starts in a span and ends in plain text', () => {
+      expect(ankiSentenceFurigana(text, spans, target(5, 2))).toBe('その 部分[ぶぶん]を<b>見[み]る</b>。');
+    });
+
+    it('bolds a word that crosses plain text and spans', () => {
+      expect(ankiSentenceFurigana(text, spans, target(4, 3))).toBe('その 部分[ぶぶん]<b>を 見[み]る</b>。');
+    });
+
+    it('bolds the whole span when the word covers part of it', () => {
+      expect(ankiSentenceFurigana('部分を', [{ position: 0, length: 2, reading: 'ぶぶん' }], target(1, 1))).toBe('<b>部分[ぶぶん]</b>を');
+    });
+
+    it('stays unbolded with no target length', () => {
+      expect(ankiSentenceFurigana(text, spans, target(2, 0))).toBe('その 部分[ぶぶん]を 見[み]る。');
+    });
+  });
 });
 
 describe('boldTarget', () => {

@@ -79,18 +79,54 @@ export function ankiWordFurigana(readingFurigana: string): string {
   return readingFurigana.replace(RUBY_MARKUP, ' $1[$2]').trim();
 }
 
-/** A sentence in Anki's furigana syntax from its ruby spans; spans whose reading is their own text are left bare. */
-export function ankiSentenceFurigana(text: string, furigana: Pick<SentenceFurigana, 'position' | 'length' | 'reading'>[]): string {
+/**
+ * A sentence in Anki's furigana syntax from its ruby spans; spans whose reading is their own text are left bare.
+ * The target word goes in `<b>`, as in the plain sentence (Lapis+ colours its pitch from that); a ruby span the word
+ * only part-covers is bolded whole, since Anki's syntax can't split it.
+ */
+export function ankiSentenceFurigana(
+  text: string,
+  furigana: Pick<SentenceFurigana, 'position' | 'length' | 'reading'>[],
+  target?: Pick<ExampleSentence, 'wordPosition' | 'wordLength'>,
+): string {
+  const spans = [...furigana].sort((a, b) => a.position - b.position);
+  let start = -1;
+  let end = -1;
+  if (target && target.wordLength > 0) {
+    start = target.wordPosition;
+    end = start + target.wordLength;
+    for (const { position, length } of spans) {
+      const spanEnd = position + length;
+      if (position < start && spanEnd > start) start = position;
+      if (position < end && spanEnd > end) end = spanEnd;
+    }
+  }
+
+  /** Plain text, with the bold tags that fall inside it. */
+  const plain = (from: number, to: number) => {
+    let piece = '';
+    for (let i = from; i < to; ) {
+      const stop = [start, end, to].filter((cut) => cut > i && cut <= to)[0] ?? to;
+      if (i === start) piece += '<b>';
+      piece += escapeFieldText(text.slice(i, stop));
+      i = stop;
+      if (i === end) piece += '</b>';
+    }
+    return piece;
+  };
+
   let result = '';
   let at = 0;
-  for (const span of [...furigana].sort((a, b) => a.position - b.position)) {
+  for (const span of spans) {
     if (span.position < at) continue;
     const surface = text.slice(span.position, span.position + span.length);
-    result += escapeFieldText(text.slice(at, span.position));
+    result += plain(at, span.position);
+    if (span.position === start) result += '<b>';
     result += surface === span.reading || !span.reading ? escapeFieldText(surface) : ` ${escapeFieldText(surface)}[${escapeFieldText(span.reading)}]`;
     at = span.position + span.length;
+    if (at === end) result += '</b>';
   }
-  return (result + escapeFieldText(text.slice(at))).trim();
+  return (result + plain(at, text.length)).replace('<b> ', '<b>').trim();
 }
 
 export function boldTarget(sentence: Pick<ExampleSentence, 'text' | 'wordPosition' | 'wordLength'>): string {
