@@ -117,7 +117,7 @@ public class SentenceTokenService(JitenDbContext context, ICurrentUserService cu
 
         var furigana = await BuildFuriganaAsync(picked.Select(p => (p.Sentence.SentenceId, p.Sentence.Text, (byte[]?)p.Sentence.Tokens)));
 
-        return picked.Select(p => new IPlusOneSentence(p.Sentence.SentenceId, p.Sentence.DeckId, p.Sentence.Text,
+        return picked.Select(p => new IPlusOneSentence(p.Sentence.SentenceId, p.Sentence.DeckId!.Value, p.Sentence.Text,
                                                        p.Sentence.Difficulty, p.Unknown,
                                                        furigana.GetValueOrDefault(p.Sentence.SentenceId, [])))
                      .ToList();

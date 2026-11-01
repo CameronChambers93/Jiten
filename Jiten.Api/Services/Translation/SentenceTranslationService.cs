@@ -113,10 +113,10 @@ public class SentenceTranslationService(
         var settings = await settingsStore.GetAsync(ct);
 
         var sentence = await context.ExampleSentences.AsNoTracking().IgnoreQueryFilters()
-                                    .Where(s => s.SentenceId == sentenceId)
+                                    .Where(s => s.SentenceId == sentenceId && s.DeckId != null)
                                     .Select(s => new
                                     {
-                                        s.DeckId, s.Text,
+                                        DeckId = s.DeckId!.Value, s.Text,
                                         Title = s.Deck!.ParentDeck != null ? s.Deck.ParentDeck.OriginalTitle : s.Deck.OriginalTitle
                                     })
                                     .FirstOrDefaultAsync(ct)

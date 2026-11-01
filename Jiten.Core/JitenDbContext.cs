@@ -926,7 +926,17 @@ public class JitenDbContext : DbContext
                   .HasForeignKey(e => e.CentralSentenceId)
                   .OnDelete(DeleteBehavior.Restrict);
 
-            entity.HasQueryFilter(e => !e.RemovedFromDeck);
+            // Readers only see lines in a deck; a user's private lines are reached by id through their mined sentences.
+            entity.HasQueryFilter(e => !e.RemovedFromDeck && e.DeckId != null);
+
+            entity.Property(e => e.Speaker).HasMaxLength(50);
+            entity.Property(e => e.SourceTitle).HasMaxLength(300);
+            entity.Property(e => e.SourceUrl).HasMaxLength(2000);
+            entity.Property(e => e.AudioPath).HasMaxLength(512);
+            entity.Property(e => e.AudioContentType).HasMaxLength(100);
+            entity.Property(e => e.PicturePath).HasMaxLength(512);
+            entity.Property(e => e.PictureContentType).HasMaxLength(100);
+            entity.HasIndex(e => e.OwnerId);
         });
 
         modelBuilder.Entity<Tag>(entity =>

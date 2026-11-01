@@ -404,7 +404,7 @@ public static class JitenHelper
     }
 
     /// <summary>The Sentences row for each text, in order, adding any that are new.</summary>
-    private static async Task<long[]> EnsureCentralSentences(NpgsqlConnection conn, string[] texts)
+    public static async Task<long[]> EnsureCentralSentences(NpgsqlConnection conn, string[] texts)
     {
         // Sorted, so decks saved in parallel that share lines can't deadlock on the unique index
         await ExecuteAsync(conn, @"

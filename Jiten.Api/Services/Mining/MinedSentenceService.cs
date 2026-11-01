@@ -313,6 +313,14 @@ public class MinedSentenceService(
             (sentence.PicturePath, sentence.PictureContentType) = await StoreAsync(userId, note.PictureBase64, CardMediaKind.Image, ct);
         }
 
+        var line = MinedLine.From(sentence.Text, PlainText);
+        (sentence.TargetPosition, sentence.TargetLength) = (line.TargetPosition, line.TargetLength);
+        if (sentence.ExampleSentenceId == null)
+        {
+            await using var jiten = await contextFactory.CreateDbContextAsync(ct);
+            sentence.ExampleSentenceId = await MinedLineStore.EnsureOccurrenceAsync(jiten, userId, line, sentence, ct);
+        }
+
         userContext.MinedSentences.Add(sentence);
     }
 
@@ -331,11 +339,8 @@ public class MinedSentenceService(
         return (path, sniff.ContentType);
     }
 
-    private static readonly Regex Tags = new("<[^>]*>", RegexOptions.Compiled);
-
     /// <summary>A field's text without tags or entities.</summary>
-    public static string PlainText(string html) =>
-        System.Net.WebUtility.HtmlDecode(Tags.Replace(html.Replace("<br>", " "), "")).Replace(' ', ' ').Trim();
+    public static string PlainText(string html) => MinedLineStore.PlainText(html);
 
     /// <summary>A URL field's link: the anchor's href, or the text when it holds a bare URL.</summary>
     public static string LinkOf(string field)

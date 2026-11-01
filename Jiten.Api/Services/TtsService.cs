@@ -137,7 +137,7 @@ public class TtsService(
         var db = scope.ServiceProvider.GetRequiredService<JitenDbContext>();
 
         var text = await db.ExampleSentences.IgnoreQueryFilters()
-            .Where(s => s.SentenceId == sentenceId)
+            .Where(s => s.SentenceId == sentenceId && s.DeckId != null)
             .Select(s => s.Text)
             .FirstOrDefaultAsync(ct);
 

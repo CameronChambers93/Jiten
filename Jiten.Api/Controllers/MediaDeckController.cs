@@ -1356,19 +1356,19 @@ public class MediaDeckController(
 
         var firstPerDeck = await context.ExampleSentences
                                         .AsNoTracking()
-                                        .Where(es => deckIds.Contains(es.DeckId) && es.WordKeys.Contains(key))
+                                        .Where(es => deckIds.Contains(es.DeckId!.Value) && es.WordKeys.Contains(key))
                                         .GroupBy(es => es.DeckId)
                                         .Select(g => new { DeckId = g.Key, SentenceId = g.Min(es => es.SentenceId) })
                                         .ToListAsync();
 
         var sentenceByTitle = firstPerDeck
-                              .GroupBy(r => titleByDeck[r.DeckId])
+                              .GroupBy(r => titleByDeck[r.DeckId!.Value])
                               .ToDictionary(g => g.Key, g => g.Min(r => r.SentenceId));
         var sentenceIds = sentenceByTitle.Values.ToList();
         var texts = await context.ExampleSentences
                                  .AsNoTracking()
                                  .Where(es => sentenceIds.Contains(es.SentenceId))
-                                 .Select(es => new { es.SentenceId, es.DeckId, es.Text, es.Tokens })
+                                 .Select(es => new { es.SentenceId, DeckId = es.DeckId!.Value, es.Text, es.Tokens })
                                  .ToDictionaryAsync(es => es.SentenceId);
         var rows = sentenceByTitle
                    .Where(kv => texts.ContainsKey(kv.Value))

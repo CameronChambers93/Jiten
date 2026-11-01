@@ -27,12 +27,12 @@ public class SentenceCueLookup(JitenDbContext context, IMemoryCache cache)
                                     .Where(s => s.SentenceId == sentenceId)
                                     .Select(s => new { s.DeckId, s.Text, s.Position, s.Deck!.SentenceCount })
                                     .FirstOrDefaultAsync(ct);
-        if (sentence == null) return null;
+        if (sentence?.DeckId is not { } deckId) return null;
 
-        var matcher = await MatcherAsync(sentence.DeckId, ct);
+        var matcher = await MatcherAsync(deckId, ct);
         var relative = sentence.SentenceCount > 0 ? Math.Clamp(sentence.Position / (double)sentence.SentenceCount, 0, 1) : 0;
         return matcher?.Locate(sentence.Text, relative) is { } match
-            ? new SentenceCues(sentence.DeckId, sentence.Text, matcher.Cues, match.First, match.Last, match.From, match.To)
+            ? new SentenceCues(deckId, sentence.Text, matcher.Cues, match.First, match.Last, match.From, match.To)
             : null;
     }
 

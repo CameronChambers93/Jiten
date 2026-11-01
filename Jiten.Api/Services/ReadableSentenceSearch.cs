@@ -231,7 +231,7 @@ public class ReadableSentenceSearch(
             if (held.Length == 0) return [];
 
             if (!IsNpgsql)
-                return await InMemoryBuckets(context.ExampleSentences.AsNoTracking().Where(s => held.Contains(s.DeckId) && s.WordKeys.Contains(key)));
+                return await InMemoryBuckets(context.ExampleSentences.AsNoTracking().Where(s => held.Contains(s.DeckId!.Value) && s.WordKeys.Contains(key)));
 
             return await context.Database.SqlQueryRaw<BucketRow>($@"
                 SELECT es.""SentenceId"", {FineBucketSql} AS ""Bucket"" FROM jiten.""ExampleSentences"" es

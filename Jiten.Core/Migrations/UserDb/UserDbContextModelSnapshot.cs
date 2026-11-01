@@ -846,6 +846,12 @@ namespace Jiten.Core.Migrations.UserDb
                         .HasMaxLength(2000)
                         .HasColumnType("character varying(2000)");
 
+                    b.Property<int?>("TargetLength")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("TargetPosition")
+                        .HasColumnType("integer");
+
                     b.Property<string>("Text")
                         .IsRequired()
                         .HasMaxLength(4000)

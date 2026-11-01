@@ -875,20 +875,51 @@ namespace Jiten.Core.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("SentenceId"));
 
+                    b.Property<string>("AudioContentType")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("AudioPath")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
                     b.Property<long?>("CentralSentenceId")
                         .HasColumnType("bigint");
 
-                    b.Property<int>("DeckId")
+                    b.Property<int?>("DeckId")
                         .HasColumnType("integer");
 
                     b.Property<float>("Difficulty")
                         .HasColumnType("real");
+
+                    b.Property<string>("OwnerId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("PictureContentType")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("PicturePath")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
 
                     b.Property<int>("Position")
                         .HasColumnType("integer");
 
                     b.Property<bool>("RemovedFromDeck")
                         .HasColumnType("boolean");
+
+                    b.Property<string>("SourceTitle")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<string>("SourceUrl")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<string>("Speaker")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
 
                     b.Property<string>("Text")
                         .IsRequired()
@@ -905,6 +936,8 @@ namespace Jiten.Core.Migrations
                     b.HasKey("SentenceId");
 
                     b.HasIndex("CentralSentenceId");
+
+                    b.HasIndex("OwnerId");
 
                     b.HasIndex("WordKeys")
                         .HasDatabaseName("IX_ExampleSentence_WordKeys");
@@ -3228,8 +3261,7 @@ namespace Jiten.Core.Migrations
                     b.HasOne("Jiten.Core.Data.Deck", "Deck")
                         .WithMany("ExampleSentences")
                         .HasForeignKey("DeckId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Cascade);
 
                     b.Navigation("Deck");
                 });

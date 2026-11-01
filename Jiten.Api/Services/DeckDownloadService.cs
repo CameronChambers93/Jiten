@@ -32,7 +32,7 @@ public class DeckDownloadService(JitenDbContext context) : IDeckDownloadService
         {
             var exampleSentences = await context.ExampleSentences
                                                 .AsNoTracking()
-                                                .Where(es => sentenceDeckIds.Contains(es.DeckId))
+                                                .Where(es => sentenceDeckIds.Contains(es.DeckId!.Value))
                                                 .Select(es => new { es.Text, es.Tokens })
                                                 .ToListAsync();
 

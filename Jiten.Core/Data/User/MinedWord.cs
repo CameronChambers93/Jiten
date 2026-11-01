@@ -74,8 +74,13 @@ public class MinedSentence
     /// <summary>A <see cref="MinedSentenceOrigin"/> value.</summary>
     public string Origin { get; set; } = MinedSentenceOrigin.Other;
 
-    /// <summary>For <see cref="MinedSentenceOrigin.Jiten"/>, the example sentence it came from.</summary>
+    /// <summary>The occurrence this sentence uses: an example sentence, or the user's private line.</summary>
     public long? ExampleSentenceId { get; set; }
+
+    /// <summary>Where the target word is in the occurrence's text; null when the note didn't mark it.</summary>
+    public int? TargetPosition { get; set; }
+
+    public int? TargetLength { get; set; }
 
     /// <summary>The game, show or site it came from, as known (GSM's Game:: tag, the card's source, the page's host).</summary>
     public string? SourceTitle { get; set; }

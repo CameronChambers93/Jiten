@@ -43,7 +43,7 @@ public class ExampleSentenceQueryService(JitenDbContext context, ISentenceTokenS
         if (priorityDeckIds is { Length: > 0 })
         {
             picked = await PickRandomSentences(
-                SentencesWithForm(wordId, readingIndex).Where(s => priorityDeckIds.Contains(s.DeckId)),
+                SentencesWithForm(wordId, readingIndex).Where(s => priorityDeckIds.Contains(s.DeckId!.Value)),
                 excludedDeckIds, mediaTypes, take, fromStudyDeck: true);
         }
 
@@ -125,7 +125,7 @@ public class ExampleSentenceQueryService(JitenDbContext context, ISentenceTokenS
             if (priorityDeckIds is { Length: > 0 })
             {
                 batch = await PickRandomSentences(
-                    priorityPool.Where(s => s.Difficulty >= bandMin && s.Difficulty < bandMax && priorityDeckIds.Contains(s.DeckId)),
+                    priorityPool.Where(s => s.Difficulty >= bandMin && s.Difficulty < bandMax && priorityDeckIds.Contains(s.DeckId!.Value)),
                     excludeIds, mediaTypes, remaining, fromStudyDeck: true);
             }
 
@@ -213,7 +213,7 @@ public class ExampleSentenceQueryService(JitenDbContext context, ISentenceTokenS
 
         var studyIds = priorityDeckIds.Length > 0
             ? await SentencesWithForm(wordId, readingIndex)
-                    .Where(s => priorityDeckIds.Contains(s.DeckId))
+                    .Where(s => priorityDeckIds.Contains(s.DeckId!.Value))
                     .OrderBy(_ => EF.Functions.Random())
                     .Take(ReadableSampleSize)
                     .Select(s => s.SentenceId)
@@ -317,7 +317,7 @@ public class ExampleSentenceQueryService(JitenDbContext context, ISentenceTokenS
         var rows = await context.ExampleSentences.AsNoTracking()
                                 .Where(s => sentenceIds.Contains(s.SentenceId))
                                 .Join(context.Decks.AsNoTracking(), s => s.DeckId, d => d.DeckId,
-                                      (s, d) => new PickedSentence(s.SentenceId, s.Text, s.Difficulty, s.DeckId, d.ParentDeckId, false, s.Tokens))
+                                      (s, d) => new PickedSentence(s.SentenceId, s.Text, s.Difficulty, s.DeckId!.Value, d.ParentDeckId, false, s.Tokens))
                                 .ToDictionaryAsync(p => p.SentenceId);
 
         return await BuildExampleSentenceDtos(sentenceIds.Where(rows.ContainsKey).Select(id => rows[id]).ToList(), wordId, readingIndex);

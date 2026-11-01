@@ -4398,7 +4398,7 @@ public partial class StudyController(
             var keys = forms.Select(f => ExampleSentenceTokens.WordKey(f.WordId, f.ReadingIndex)).ToArray();
             rows = await context.ExampleSentences
                 .AsNoTracking()
-                .Where(es => studyDeckIds.Contains(es.DeckId) && es.WordKeys.Any(k => keys.Contains(k)))
+                .Where(es => studyDeckIds.Contains(es.DeckId!.Value) && es.WordKeys.Any(k => keys.Contains(k)))
                 .Select(es => new KeyedSentenceRow { SentenceId = es.SentenceId, WordKeys = es.WordKeys })
                 .ToListAsync();
         }
@@ -4448,7 +4448,7 @@ public partial class StudyController(
             WordLength = match.Length
         };
 
-        if (decks.TryGetValue(sentence.DeckId, out var deck))
+        if (decks.TryGetValue(sentence.DeckId!.Value, out var deck))
         {
             dto.SourceDeck = new StudyExampleSourceDto
             {

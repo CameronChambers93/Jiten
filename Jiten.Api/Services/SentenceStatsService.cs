@@ -292,10 +292,10 @@ public class SentenceStatsService(
     private async Task<IPlusOneListing> ListIPlusOne(List<int> deckIds)
     {
         var rows = await context.ExampleSentences.AsNoTracking()
-                                .Where(s => deckIds.Contains(s.DeckId))
+                                .Where(s => deckIds.Contains(s.DeckId!.Value))
                                 .OrderBy(s => s.SentenceId)
                                 .Take(IPlusOneCandidateCap)
-                                .Select(s => new { s.SentenceId, s.DeckId, s.Difficulty, s.Tokens, TextLength = s.Text.Length })
+                                .Select(s => new { s.SentenceId, DeckId = s.DeckId!.Value, s.Difficulty, s.Tokens, TextLength = s.Text.Length })
                                 .ToListAsync();
 
         var decoded = rows.Where(r => !ExampleSentenceTokens.IsPartial(r.Tokens))
