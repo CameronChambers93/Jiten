@@ -130,4 +130,26 @@ public class MinedAddSentenceTests(JitenWebApplicationFactory factory)
         var response = await _client.SendAsync(new HttpRequestMessage(HttpMethod.Get, "/api/mined/word-summaries?words=12:x").WithUser(TestUsers.UserA));
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
+
+    [Fact]
+    public async Task TargetWordTemplateDefaultsToBoldAndSaves()
+    {
+        (await Template()).Should().Be("<b>{word}</b>");
+
+        var saved = await _client.SendAsync(new HttpRequestMessage(HttpMethod.Put, "/api/mined/settings").WithUser(TestUsers.UserA)
+                                            .WithJsonContent(new { targetWordTemplate = "<u>{word}</u>" }));
+        saved.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        (await Template()).Should().Be("<u>{word}</u>");
+
+        var refused = await _client.SendAsync(new HttpRequestMessage(HttpMethod.Put, "/api/mined/settings").WithUser(TestUsers.UserA)
+                                              .WithJsonContent(new { targetWordTemplate = "<u></u>" }));
+        refused.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    private async Task<string> Template()
+    {
+        var response = await _client.SendAsync(new HttpRequestMessage(HttpMethod.Get, "/api/mined/settings").WithUser(TestUsers.UserA));
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        return body.GetProperty("targetWordTemplate").GetString()!;
+    }
 }

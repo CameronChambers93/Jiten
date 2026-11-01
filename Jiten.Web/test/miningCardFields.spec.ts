@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Definition } from '../app/types';
-import { ankiSentenceFurigana, ankiWordFurigana, boldTarget, definitionsHtml, escapeFieldText, firstSense, guessFieldSource, kanaReading } from '../app/utils/miningCardFields';
+import { ankiSentenceFurigana, applyTargetTemplate, ankiWordFurigana, boldTarget, definitionsHtml, escapeFieldText, firstSense, guessFieldSource, kanaReading } from '../app/utils/miningCardFields';
 
 describe('guessFieldSource', () => {
   it('maps Lapis and GSM field names', () => {
@@ -110,5 +110,19 @@ describe('definitionsHtml', () => {
 describe('escapeFieldText', () => {
   it('escapes markup but leaves quotes as they are', () => {
     expect(escapeFieldText(`You're "sure" it's <here> & now?`)).toBe(`You're "sure" it's &lt;here&gt; &amp; now?`);
+  });
+});
+
+describe('applyTargetTemplate', () => {
+  it('wraps the word in the template', () => {
+    expect(applyTargetTemplate('その<b>部分[ぶぶん]</b>を', '<span class="cloze_body">{word}</span>')).toBe('その<span class="cloze_body">部分[ぶぶん]</span>を');
+  });
+
+  it('leaves the word bare with a bare template', () => {
+    expect(applyTargetTemplate('<b>猫</b>だ', '{word}')).toBe('猫だ');
+  });
+
+  it('keeps $ in the template literal', () => {
+    expect(applyTargetTemplate('<b>猫</b>', '$&{word}')).toBe('$&猫');
   });
 });

@@ -1570,6 +1570,10 @@ namespace Jiten.Core.Migrations.UserDb
                         .HasColumnType("jsonb")
                         .HasDefaultValue("{}");
 
+                    b.Property<string>("TargetWordTemplate")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
                     b.HasKey("UserId");
 
                     b.ToTable("UserSettings", "user");

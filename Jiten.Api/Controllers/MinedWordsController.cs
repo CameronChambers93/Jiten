@@ -1,5 +1,6 @@
 using Jiten.Api.Services;
 using Jiten.Api.Services.Mining;
+using Jiten.Core.Data.User;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -16,6 +17,25 @@ public class MinedWordsController(MinedSentenceService mined, MinedSyncService s
 {
     private const int MaxFlags = 1000;
     private const int MaxWordSummaries = 100;
+
+    [HttpGet("settings")]
+    [SwaggerOperation(Summary = "The user's sentence store settings")]
+    public async Task<IActionResult> Settings(CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        return Ok(new { targetWordTemplate = await sync.TargetTemplateAsync(userId, ct) });
+    }
+
+    [HttpPut("settings")]
+    [SwaggerOperation(Summary = "Sets how cards mark the target word: a template holding {word} once")]
+    public async Task<IActionResult> SaveSettings([FromBody] MinedSettingsRequest request, CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        if (!TargetWordMarkup.IsValid(request.TargetWordTemplate))
+            return BadRequest(new { message = $"The template must hold {TargetWordMarkup.Placeholder} once, in at most {TargetWordMarkup.MaxTemplateLength} characters." });
+        await sync.SaveTargetTemplateAsync(userId, request.TargetWordTemplate, ct);
+        return NoContent();
+    }
 
     [HttpGet("sync/folds")]
     [SwaggerOperation(Summary = "Words on more than one Anki note, with the note to keep and the ones to fold into it")]

@@ -12,6 +12,7 @@ import {
   guessFieldSource,
   kanaReading,
   sourceLabel,
+  applyTargetTemplate,
 } from '~/utils/miningCardFields';
 
 /** Which Anki deck and note type mined sentences go to, and what fills each field. Kept per browser. */
@@ -223,11 +224,12 @@ export function useMiningCards() {
     const wanted = new Set(Object.values(mapping));
     const fieldsFor = (source: MiningFieldSource) => Object.keys(mapping).filter((name) => mapping[name] === source);
 
-    const [details, media, english] = await Promise.all([
+    const [details, media, english, { targetWordTemplate }] = await Promise.all([
       (['definitions', 'mainDefinition', 'pitchPosition', 'pitchCategories'] as const).some((f) => wanted.has(f)) ? $api<Word>(`vocabulary/${word.wordId}/${word.readingIndex}`) : null,
       cardMedia(sentence.sentenceId, wanted.has('sentenceAudio'), wanted.has('picture')),
       // A failed translation leaves the field empty rather than losing the card.
       wanted.has('sentenceEnglish') ? englishForCard(sentence.sentenceId).catch(() => '') : '',
+      $api<{ targetWordTemplate: string }>('mined/settings'),
     ]);
 
     const values: Record<Exclude<MiningFieldSource, '' | 'sentenceAudio' | 'picture'>, string> = {
@@ -238,9 +240,9 @@ export function useMiningCards() {
       pitchCategories: ankiPitchCategories(word.readingFurigana || word.reading, details?.pitchAccents, details?.partsOfSpeech ?? []),
       definitions: details ? definitionsHtml(details.definitions, word.readingIndex) : '',
       mainDefinition: escapeFieldText((details && firstSense(details.definitions, word.readingIndex)) || word.mainDefinition || ''),
-      sentence: boldTarget(sentence),
+      sentence: applyTargetTemplate(boldTarget(sentence), targetWordTemplate),
       sentencePlain: escapeFieldText(sentence.text),
-      sentenceFurigana: ankiSentenceFurigana(sentence.text, sentence.furigana ?? [], sentence),
+      sentenceFurigana: applyTargetTemplate(ankiSentenceFurigana(sentence.text, sentence.furigana ?? [], sentence), targetWordTemplate),
       sentenceEnglish: escapeFieldText(english),
       source: escapeFieldText(sourceLabel(sentence)),
     };

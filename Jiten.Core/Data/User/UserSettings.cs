@@ -16,4 +16,7 @@ public class UserSettings
 
     /// <summary>JSON array of granted notice keys, written by the migration that snapshots who a change affected at deploy time.</summary>
     public string GrantedNoticesJson { get; set; } = "[]";
+
+    /// <summary>How cards mark the target word, see <see cref="User.TargetWordMarkup"/>; null for the default.</summary>
+    public string? TargetWordTemplate { get; set; }
 }

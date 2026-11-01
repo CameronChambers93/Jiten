@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using Jiten.Core;
+using Jiten.Core.Data;
 using Jiten.Core.Data.User;
 using Microsoft.EntityFrameworkCore;
 
@@ -18,6 +19,8 @@ public record FoldRequest(long MinedWordId, long KeepAnkiNoteId, List<long> Fold
 public record SentenceFlagDto(long AnkiNoteId, long MinedSentenceId);
 
 public record FlagsRequest(List<SentenceFlagDto> Flags);
+
+public record MinedSettingsRequest(string TargetWordTemplate);
 
 /// <summary>What Sync writes to a word's note: the full sentence list for the card's script to pick from.</summary>
 public record NoteSentencesDto(long AnkiNoteId, string SentencesHtml);
@@ -110,6 +113,7 @@ public class MinedSyncService(UserDbContext userContext)
     /// <summary>The Sentences field for each word's kept note (the oldest), for the words that have sentences.</summary>
     public async Task<List<NoteSentencesDto>> NoteSentencesAsync(string userId, CancellationToken ct)
     {
+        var template = await TargetTemplateAsync(userId, ct);
         var words = await userContext.MinedWords.AsNoTracking().AsSplitQuery()
                                      .Where(w => w.UserId == userId && w.Notes.Any() && w.Sentences.Any())
                                      .Include(w => w.Notes).Include(w => w.Sentences)
@@ -117,8 +121,20 @@ public class MinedSyncService(UserDbContext userContext)
         return words.Select(w =>
         {
             var note = w.Notes.Min(n => n.AnkiNoteId);
-            return new NoteSentencesDto(note, RenderSentences(note, w.Sentences));
+            return new NoteSentencesDto(note, RenderSentences(note, w.Sentences, template));
         }).ToList();
+    }
+
+    public async Task<string> TargetTemplateAsync(string userId, CancellationToken ct) =>
+        await userContext.UserSettings.AsNoTracking().Where(s => s.UserId == userId).Select(s => s.TargetWordTemplate).FirstOrDefaultAsync(ct)
+        ?? TargetWordMarkup.Default;
+
+    public async Task SaveTargetTemplateAsync(string userId, string template, CancellationToken ct)
+    {
+        var settings = await userContext.UserSettings.FirstOrDefaultAsync(s => s.UserId == userId, ct);
+        if (settings == null) userContext.UserSettings.Add(settings = new UserSettings { UserId = userId });
+        settings.TargetWordTemplate = template;
+        await userContext.SaveChangesAsync(ct);
     }
 
     /// <summary>
@@ -127,7 +143,7 @@ public class MinedSyncService(UserDbContext userContext)
     /// counts the files as used; the template keeps the blocks hidden. The note's id is on the list, since a template
     /// can't otherwise know it and the card's flag button tags the note through AnkiConnect.
     /// </summary>
-    public static string RenderSentences(long ankiNoteId, IEnumerable<MinedSentence> sentences)
+    public static string RenderSentences(long ankiNoteId, IEnumerable<MinedSentence> sentences, string targetTemplate = TargetWordMarkup.Default)
     {
         var html = new StringBuilder($"<div class=\"jiten-sentences\" data-note=\"{ankiNoteId}\">");
         foreach (var s in sentences.OrderBy(s => s.SortOrder))
@@ -136,8 +152,8 @@ public class MinedSyncService(UserDbContext userContext)
             if (s.IsMain) html.Append(" data-main=\"1\"");
             if (!string.IsNullOrEmpty(s.SourceTitle)) html.Append($" data-source=\"{Attr(s.SourceTitle)}\"");
             html.Append('>');
-            html.Append($"<div class=\"jiten-sentence-text\">{s.Text}</div>");
-            if (!string.IsNullOrEmpty(s.Furigana)) html.Append($"<div class=\"jiten-sentence-furigana\">{s.Furigana}</div>");
+            html.Append($"<div class=\"jiten-sentence-text\">{TargetWordMarkup.Apply(s.Text, targetTemplate)}</div>");
+            if (!string.IsNullOrEmpty(s.Furigana)) html.Append($"<div class=\"jiten-sentence-furigana\">{TargetWordMarkup.Apply(s.Furigana, targetTemplate)}</div>");
             if (!string.IsNullOrEmpty(s.English)) html.Append($"<div class=\"jiten-sentence-english\">{s.English}</div>");
             if (!string.IsNullOrEmpty(s.AnkiAudioFilename))
                 html.Append($"<audio class=\"jiten-sentence-audio\" src=\"{Attr(s.AnkiAudioFilename)}\" preload=\"none\"></audio>");

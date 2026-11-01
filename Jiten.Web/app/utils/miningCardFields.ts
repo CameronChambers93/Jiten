@@ -129,6 +129,11 @@ export function ankiSentenceFurigana(
   return (result + plain(at, text.length)).replace('<b> ', '<b>').trim();
 }
 
+/** Swaps the `<b>` around the target word for the user's template, which holds `{word}` once. */
+export function applyTargetTemplate(html: string, template: string): string {
+  return html.replace(/<b>(.*?)<\/b>/gs, (_, word: string) => template.replaceAll('{word}', () => word));
+}
+
 export function boldTarget(sentence: Pick<ExampleSentence, 'text' | 'wordPosition' | 'wordLength'>): string {
   const { text, wordPosition: start, wordLength: length } = sentence;
   if (length <= 0) return escapeFieldText(text);

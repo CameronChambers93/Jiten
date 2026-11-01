@@ -31,4 +31,42 @@ public class MinedSyncTests
         html.IndexOf("data-id=\"2\"", StringComparison.Ordinal).Should().BeGreaterThan(html.IndexOf("data-id=\"1\"", StringComparison.Ordinal));
         html.Should().EndWith("</div></div>");
     }
+
+    [Fact]
+    public void RenderSentencesMarksTheWordWithTheTemplate()
+    {
+        var html = MinedSyncService.RenderSentences(1, [
+            new MinedSentence { Text = "<b>猫</b>だ", Furigana = "<b> 猫[ねこ]</b>だ", Origin = MinedSentenceOrigin.Game }
+        ], "<span class=\"cloze_body\">{word}</span>");
+
+        html.Should().Contain("<div class=\"jiten-sentence-text\"><span class=\"cloze_body\">猫</span>だ</div>");
+        html.Should().Contain("<div class=\"jiten-sentence-furigana\"><span class=\"cloze_body\"> 猫[ねこ]</span>だ</div>");
+    }
+
+    [Theory]
+    [InlineData("{word}", "猫だ")]
+    [InlineData("<u>{word}</u>", "<u>猫</u>だ")]
+    [InlineData("<b>{word}</b>", "<b>猫</b>だ")]
+    [InlineData("$1{word}", "$1猫だ")]
+    public void ApplyUsesTheTemplate(string template, string expected)
+    {
+        TargetWordMarkup.Apply("<b>猫</b>だ", template).Should().Be(expected);
+    }
+
+    [Fact]
+    public void ToStoredTurnsClozeSpansIntoBold()
+    {
+        TargetWordMarkup.ToStored("<span class=\"cloze_body\">猫</span>と<span class=\"term\">犬</span>")
+                        .Should().Be("<b>猫</b>と<span class=\"term\">犬</span>");
+    }
+
+    [Theory]
+    [InlineData("<b>{word}</b>", true)]
+    [InlineData("{word}", true)]
+    [InlineData("<b></b>", false)]
+    [InlineData("{word}{word}", false)]
+    public void TemplateHoldsTheWordOnce(string template, bool valid)
+    {
+        TargetWordMarkup.IsValid(template).Should().Be(valid);
+    }
 }

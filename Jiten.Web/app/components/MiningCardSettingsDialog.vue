@@ -6,6 +6,7 @@
   const visible = defineModel<boolean>('visible', { required: true });
   const emit = defineEmits<{ saved: [] }>();
 
+  const { $api } = useNuxtApp();
   const { settings, saveSettings, mappingFor } = useMiningCards();
 
   const deckName = ref('');
@@ -14,6 +15,8 @@
   const padStartMs = ref(250);
   const padEndMs = ref(250);
   const ankiKey = ref('');
+  const targetWordTemplate = ref('');
+  const templateError = ref<string | null>(null);
   const fields = ref<Record<string, MiningFieldSource>>({});
 
   const decks = ref<string[]>([]);
@@ -60,15 +63,25 @@
       padEndMs.value = s.padEndMs;
       ankiKey.value = s.ankiKey;
       fields.value = { ...(s.fieldsByModel[s.modelName] ?? {}) };
+      templateError.value = null;
+      $api<{ targetWordTemplate: string }>('mined/settings').then((r) => (targetWordTemplate.value = r.targetWordTemplate));
       connect();
     },
     { immediate: true }
   );
 
   const fieldNames = computed(() => Object.keys(fields.value));
-  const canSave = computed(() => !!deckName.value && !!modelName.value && fieldNames.value.length > 0);
+  const canSave = computed(() => !!deckName.value && !!modelName.value && fieldNames.value.length > 0 && templateValid.value);
 
-  function save() {
+  const templateValid = computed(() => targetWordTemplate.value.split('{word}').length === 2);
+
+  async function save() {
+    try {
+      await $api('mined/settings', { method: 'PUT', body: { targetWordTemplate: targetWordTemplate.value } });
+    } catch (e) {
+      templateError.value = String((e as Error).message ?? e);
+      return;
+    }
     const s = settings.value;
     saveSettings({
       ...s,
@@ -144,6 +157,16 @@
           <label for="mining-pad-end" class="text-sm text-gray-500 dark:text-gray-400">Audio tail (ms)</label>
           <InputNumber v-model="padEndMs" input-id="mining-pad-end" :min="0" :max="5000" :step="50" show-buttons />
         </div>
+      </div>
+
+      <div class="flex flex-col gap-1">
+        <label for="mining-target" class="text-sm text-gray-500 dark:text-gray-400">Target word markup</label>
+        <InputText id="mining-target" v-model="targetWordTemplate" :invalid="!templateValid" spellcheck="false" />
+        <small class="text-gray-500 dark:text-gray-400">
+          HTML around the word, with <code>{word}</code> once. Lapis+ colours the word's pitch only inside <code>&lt;b&gt;</code>. Sync rewrites the Sentences
+          field with this; main fields keep what they were written with.
+        </small>
+        <small v-if="templateError" class="text-red-500">{{ templateError }}</small>
       </div>
 
       <div class="flex flex-col gap-1">

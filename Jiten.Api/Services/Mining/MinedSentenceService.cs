@@ -92,6 +92,7 @@ public record DetectedOrigin(string Origin, long? ExampleSentenceId, string? Sou
 /// </summary>
 public class MinedSentenceService(
     UserDbContext userContext,
+    MinedSyncService sync,
     IDbContextFactory<JitenDbContext> contextFactory,
     ICdnService cdn,
     ILogger<MinedSentenceService> logger)
@@ -199,7 +200,7 @@ public class MinedSentenceService(
 
         var kept = word.Notes.Min(n => n.AnkiNoteId);
         return new AddSentenceResult(kept, sentence.MinedSentenceId, added, word.Sentences.Count,
-                                     MinedSyncService.RenderSentences(kept, word.Sentences));
+                                     MinedSyncService.RenderSentences(kept, word.Sentences, await sync.TargetTemplateAsync(userId, ct)));
     }
 
     /// <summary>The card's word fields for words picked out of a sentence: written form, furigana and first meaning.</summary>
@@ -291,8 +292,8 @@ public class MinedSentenceService(
         var sentence = new MinedSentence
         {
             MinedWordId = word.MinedWordId, UserId = userId,
-            Text = Truncate(note.Sentence.Trim(), 4000),
-            Furigana = PlainText(note.Furigana ?? "").Length > 0 ? Truncate(note.Furigana!.Trim(), 8000) : null,
+            Text = Truncate(TargetWordMarkup.ToStored(note.Sentence.Trim()), 4000),
+            Furigana = PlainText(note.Furigana ?? "").Length > 0 ? Truncate(TargetWordMarkup.ToStored(note.Furigana!.Trim()), 8000) : null,
             English = english == null ? null : Truncate(english, 4000), EnglishOrigin = english == null ? null : "anki",
             Origin = origin.Origin, ExampleSentenceId = origin.ExampleSentenceId,
             SourceTitle = origin.SourceTitle == null ? null : Truncate(origin.SourceTitle, 300),
