@@ -875,6 +875,9 @@ namespace Jiten.Core.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("SentenceId"));
 
+                    b.Property<long?>("CentralSentenceId")
+                        .HasColumnType("bigint");
+
                     b.Property<int>("DeckId")
                         .HasColumnType("integer");
 
@@ -883,6 +886,9 @@ namespace Jiten.Core.Migrations
 
                     b.Property<int>("Position")
                         .HasColumnType("integer");
+
+                    b.Property<bool>("RemovedFromDeck")
+                        .HasColumnType("boolean");
 
                     b.Property<string>("Text")
                         .IsRequired()
@@ -897,6 +903,8 @@ namespace Jiten.Core.Migrations
                         .HasColumnType("integer[]");
 
                     b.HasKey("SentenceId");
+
+                    b.HasIndex("CentralSentenceId");
 
                     b.HasIndex("WordKeys")
                         .HasDatabaseName("IX_ExampleSentence_WordKeys");
@@ -2379,6 +2387,30 @@ namespace Jiten.Core.Migrations
                     b.ToTable("RequestActivityLogs", "jiten");
                 });
 
+            modelBuilder.Entity("Jiten.Core.Data.Sentence", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<byte[]>("TextHash")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TextHash")
+                        .IsUnique();
+
+                    b.ToTable("Sentences", "jiten");
+                });
+
             modelBuilder.Entity("Jiten.Core.Data.Series", b =>
                 {
                     b.Property<int>("SeriesId")
@@ -3188,6 +3220,11 @@ namespace Jiten.Core.Migrations
 
             modelBuilder.Entity("Jiten.Core.Data.ExampleSentence", b =>
                 {
+                    b.HasOne("Jiten.Core.Data.Sentence", null)
+                        .WithMany()
+                        .HasForeignKey("CentralSentenceId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("Jiten.Core.Data.Deck", "Deck")
                         .WithMany("ExampleSentences")
                         .HasForeignKey("DeckId")

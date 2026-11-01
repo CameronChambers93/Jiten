@@ -46,6 +46,7 @@ public class JitenDbContext : DbContext
     public DbSet<JmDictWordFormRedundancy> WordFormRedundancies { get; set; }
 
     public DbSet<ExampleSentence> ExampleSentences { get; set; }
+    public DbSet<Sentence> Sentences { get; set; }
 
     public DbSet<Tag> Tags { get; set; }
     public DbSet<DeckGenre> DeckGenres { get; set; }
@@ -888,6 +889,14 @@ public class JitenDbContext : DbContext
             entity.HasKey(e => new { e.WordId, e.SourceReadingIndex, e.TargetReadingIndex });
         });
 
+        modelBuilder.Entity<Sentence>(entity =>
+        {
+            entity.ToTable("Sentences", "jiten");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).ValueGeneratedOnAdd();
+            entity.HasIndex(e => e.TextHash).IsUnique();
+        });
+
         modelBuilder.Entity<ExampleSentence>(entity =>
         {
             entity.ToTable("ExampleSentences", "jiten");
@@ -911,6 +920,13 @@ public class JitenDbContext : DbContext
                   .WithMany(d => d.ExampleSentences)
                   .HasForeignKey(e => e.DeckId)
                   .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne<Sentence>()
+                  .WithMany()
+                  .HasForeignKey(e => e.CentralSentenceId)
+                  .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasQueryFilter(e => !e.RemovedFromDeck);
         });
 
         modelBuilder.Entity<Tag>(entity =>

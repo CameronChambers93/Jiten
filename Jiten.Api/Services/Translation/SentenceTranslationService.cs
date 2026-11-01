@@ -112,7 +112,7 @@ public class SentenceTranslationService(
         var active = await ActiveProviderAsync(ct) ?? throw new TranslationProviderException("No AI translation provider is set up.");
         var settings = await settingsStore.GetAsync(ct);
 
-        var sentence = await context.ExampleSentences.AsNoTracking()
+        var sentence = await context.ExampleSentences.AsNoTracking().IgnoreQueryFilters()
                                     .Where(s => s.SentenceId == sentenceId)
                                     .Select(s => new
                                     {

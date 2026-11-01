@@ -189,7 +189,7 @@ public static class JitenHelper
                 // Bulk insert example sentences
                 Task exampleSentencesTask = Task.CompletedTask;
                 if (exampleSentencesToInsert.Any())
-                    exampleSentencesTask = BulkInsertExampleSentences(contextFactory, exampleSentencesToInsert, deck.DeckId);
+                    exampleSentencesTask = SaveExampleSentences(contextFactory, exampleSentencesToInsert, deck.DeckId);
 
                 // Insert child decks: we will add rows to the DB (get their IDs) then perform their heavy COPYs in parallel.
                 var childBulkTasks = InsertChildDecks(contextFactory, childrenToInsert, deck.DeckId);
@@ -314,77 +314,166 @@ public static class JitenHelper
         Console.WriteLine($"[{DateTime.UtcNow:O}] Bulk insert (deck words) took {timer.ElapsedMilliseconds} ms for DeckId {deckId} with {deduplicatedWords.Count} unique words.");
     }
 
-    public static async Task BulkInsertExampleSentences(IDbContextFactory<JitenDbContext> contextFactory, ICollection<ExampleSentence> exampleSentences, int deckId)
+    /// <summary>
+    /// Makes a deck's occurrences match this parse in one transaction: a line that's still there keeps its row, id and
+    /// translation, a new one is added, and a dropped one is deleted, or kept and hidden if a user mined it.
+    /// </summary>
+    public static async Task SaveExampleSentences(IDbContextFactory<JitenDbContext> contextFactory, ICollection<ExampleSentence> exampleSentences, int deckId)
     {
         var timer = Stopwatch.StartNew();
-        // Console.WriteLine($"[{DateTime.UtcNow:O}] Bulk inserting {exampleSentences.Count} example sentences for DeckId {deckId}...");
-        if (!exampleSentences.Any()) return;
 
         await CopySemaphore.WaitAsync();
         try
         {
-            await using (var ctx = await contextFactory.CreateDbContextAsync())
+            await using var ctx = await contextFactory.CreateDbContextAsync();
+            var conn = (NpgsqlConnection)ctx.Database.GetDbConnection();
+            await conn.OpenAsync();
+            await using var transaction = await conn.BeginTransactionAsync();
+
+            // Disable statement timeout for this transaction
+            await ExecuteAsync(conn, @"SET LOCAL statement_timeout = 0");
+
+            var sentences = exampleSentences.ToList();
+            var centralIds = await EnsureCentralSentences(conn, sentences.Select(s => s.Text).ToArray());
+            var stored = await LoadStoredOccurrences(conn, deckId);
+            var incoming = sentences.Select((s, i) => new SentenceOccurrenceMatcher.Incoming(centralIds[i], s.Position)).ToList();
+            var matches = SentenceOccurrenceMatcher.Match(stored, incoming);
+
+            // New rows get ids up front, from the backing sequence, so one statement can write them with the matched rows
+            var newIds = new Queue<long>(await AllocateSentenceIds(conn, matches.Count(m => m == null)));
+
+            await ExecuteAsync(conn, @"CREATE TEMP TABLE incoming_sentences (LIKE jiten.""ExampleSentences"") ON COMMIT DROP");
+            await using (var writer = await conn.BeginBinaryImportAsync(
+                @"COPY incoming_sentences (""SentenceId"", ""Text"", ""Position"", ""DeckId"", ""Difficulty"", ""Tokens"", ""WordKeys"", ""CentralSentenceId"", ""RemovedFromDeck"") FROM STDIN (FORMAT BINARY)"))
             {
-                var conn = (NpgsqlConnection)ctx.Database.GetDbConnection();
-                await conn.OpenAsync();
-
-                // Disable statement timeout for this session scope
-                await using (var timeoutCmd = new NpgsqlCommand(@"SET LOCAL statement_timeout = 0", conn))
+                for (var i = 0; i < sentences.Count; i++)
                 {
-                    timeoutCmd.CommandTimeout = 0;
-                    await timeoutCmd.ExecuteNonQueryAsync();
+                    var sentence = sentences[i];
+                    var id = matches[i] ?? newIds.Dequeue();
+                    await writer.StartRowAsync();
+                    await writer.WriteAsync(id);
+                    await writer.WriteAsync(sentence.Text);
+                    await writer.WriteAsync(sentence.Position);
+                    await writer.WriteAsync(deckId);
+                    await writer.WriteAsync(sentence.Difficulty);
+
+                    await writer.WriteAsync(sentence.Tokens, NpgsqlDbType.Bytea);
+                    await writer.WriteAsync(sentence.WordKeys, NpgsqlDbType.Array | NpgsqlDbType.Integer);
+                    await writer.WriteAsync(centralIds[i]);
+                    await writer.WriteAsync(false);
+
+                    sentence.SentenceId = id;
+                    sentence.DeckId = deckId;
+                    sentence.CentralSentenceId = centralIds[i];
+                    sentence.RemovedFromDeck = false;
                 }
 
-                // Step 1: preallocate unique IDs from the backing sequence (safe under concurrency)
-                var ids = new List<long>(exampleSentences.Count);
-                await using (var idCmd = new NpgsqlCommand(
-                    @"SELECT nextval(pg_get_serial_sequence('jiten.""ExampleSentences""', 'SentenceId')::regclass)
-                         FROM generate_series(1, @cnt)", conn))
-                {
-                    idCmd.CommandTimeout = 0;
-                    idCmd.Parameters.AddWithValue("cnt", exampleSentences.Count);
-                    await using var reader = await idCmd.ExecuteReaderAsync();
-                    while (await reader.ReadAsync())
-                    {
-                        ids.Add(reader.GetInt64(0));
-                    }
-                }
-
-                if (ids.Count != exampleSentences.Count)
-                    throw new InvalidOperationException("Failed to allocate IDs for example sentences.");
-
-                // Step 2: COPY sentences
-                await using (var writer = await conn.BeginBinaryImportAsync(
-                    @"COPY jiten.""ExampleSentences"" (""SentenceId"", ""Text"", ""Position"", ""DeckId"", ""Difficulty"", ""Tokens"", ""WordKeys"") FROM STDIN (FORMAT BINARY)"))
-                {
-                    var idx = 0;
-                    foreach (var sentence in exampleSentences)
-                    {
-                        var id = ids[idx++];
-                        await writer.StartRowAsync();
-                        await writer.WriteAsync(id);
-                        await writer.WriteAsync(sentence.Text);
-                        await writer.WriteAsync(sentence.Position);
-                        await writer.WriteAsync(deckId);
-                        await writer.WriteAsync(sentence.Difficulty);
-
-                        await writer.WriteAsync(sentence.Tokens, NpgsqlDbType.Bytea);
-                        await writer.WriteAsync(sentence.WordKeys, NpgsqlDbType.Array | NpgsqlDbType.Integer);
-
-                        sentence.SentenceId = id;
-                        sentence.DeckId = deckId;
-                    }
-
-                    await writer.CompleteAsync();
-                }
+                await writer.CompleteAsync();
             }
+
+            await ExecuteAsync(conn, @"
+                INSERT INTO jiten.""ExampleSentences"" (""SentenceId"", ""Text"", ""Position"", ""DeckId"", ""Difficulty"", ""Tokens"", ""WordKeys"", ""CentralSentenceId"", ""RemovedFromDeck"")
+                SELECT ""SentenceId"", ""Text"", ""Position"", ""DeckId"", ""Difficulty"", ""Tokens"", ""WordKeys"", ""CentralSentenceId"", ""RemovedFromDeck"" FROM incoming_sentences
+                ON CONFLICT (""SentenceId"") DO UPDATE SET
+                    ""Text"" = EXCLUDED.""Text"", ""Position"" = EXCLUDED.""Position"", ""Difficulty"" = EXCLUDED.""Difficulty"",
+                    ""Tokens"" = EXCLUDED.""Tokens"", ""WordKeys"" = EXCLUDED.""WordKeys"",
+                    ""CentralSentenceId"" = EXCLUDED.""CentralSentenceId"", ""RemovedFromDeck"" = FALSE");
+
+            var dropped = stored.Select(s => s.SentenceId).Except(matches.OfType<long>()).ToArray();
+            if (dropped.Length > 0)
+            {
+                await ExecuteAsync(conn, @"
+                    DELETE FROM jiten.""ExampleSentences"" es
+                    WHERE es.""SentenceId"" = ANY(@ids)
+                      AND NOT EXISTS (SELECT 1 FROM ""user"".""MinedSentences"" m WHERE m.""ExampleSentenceId"" = es.""SentenceId"")",
+                    new NpgsqlParameter("ids", dropped));
+                await ExecuteAsync(conn, @"
+                    UPDATE jiten.""ExampleSentences"" SET ""RemovedFromDeck"" = TRUE, ""WordKeys"" = '{}'
+                    WHERE ""SentenceId"" = ANY(@ids)",
+                    new NpgsqlParameter("ids", dropped));
+            }
+
+            await transaction.CommitAsync();
         }
         finally
         {
             CopySemaphore.Release();
         }
 
-        Console.WriteLine($"[{DateTime.UtcNow:O}] Bulk insert (example sentences) took {timer.ElapsedMilliseconds} ms for DeckId {deckId} with {exampleSentences.Count} sentences.");
+        Console.WriteLine($"[{DateTime.UtcNow:O}] Saving example sentences took {timer.ElapsedMilliseconds} ms for DeckId {deckId} with {exampleSentences.Count} sentences.");
+    }
+
+    /// <summary>The Sentences row for each text, in order, adding any that are new.</summary>
+    private static async Task<long[]> EnsureCentralSentences(NpgsqlConnection conn, string[] texts)
+    {
+        // Sorted, so decks saved in parallel that share lines can't deadlock on the unique index
+        await ExecuteAsync(conn, @"
+            INSERT INTO jiten.""Sentences"" (""TextHash"", ""Text"")
+            SELECT DISTINCT sha256(convert_to(t, 'UTF8')), t
+            FROM (SELECT jiten.normalize_sentence(unnest(@texts)) AS t) n
+            ORDER BY 1
+            ON CONFLICT (""TextHash"") DO NOTHING",
+            new NpgsqlParameter("texts", texts));
+
+        await using var cmd = new NpgsqlCommand(@"
+            SELECT s.""Id""
+            FROM unnest(@texts) WITH ORDINALITY AS u(t, ord)
+            JOIN jiten.""Sentences"" s ON s.""TextHash"" = sha256(convert_to(jiten.normalize_sentence(u.t), 'UTF8'))
+            ORDER BY u.ord", conn);
+        cmd.CommandTimeout = 0;
+        cmd.Parameters.AddWithValue("texts", texts);
+
+        var ids = new List<long>(texts.Length);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            ids.Add(reader.GetInt64(0));
+
+        if (ids.Count != texts.Length)
+            throw new InvalidOperationException("Failed to resolve central sentences.");
+
+        return ids.ToArray();
+    }
+
+    /// <summary>The deck's rows, including lines kept after a reparse dropped them, so a line that returns takes its row back.</summary>
+    private static async Task<List<SentenceOccurrenceMatcher.Stored>> LoadStoredOccurrences(NpgsqlConnection conn, int deckId)
+    {
+        await using var cmd = new NpgsqlCommand(
+            @"SELECT ""SentenceId"", COALESCE(""CentralSentenceId"", 0), ""Position"" FROM jiten.""ExampleSentences"" WHERE ""DeckId"" = @deckId", conn);
+        cmd.CommandTimeout = 0;
+        cmd.Parameters.AddWithValue("deckId", deckId);
+
+        var stored = new List<SentenceOccurrenceMatcher.Stored>();
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            stored.Add(new SentenceOccurrenceMatcher.Stored(reader.GetInt64(0), reader.GetInt64(1), reader.GetInt32(2)));
+        return stored;
+    }
+
+    private static async Task<List<long>> AllocateSentenceIds(NpgsqlConnection conn, int count)
+    {
+        await using var cmd = new NpgsqlCommand(
+            @"SELECT nextval(pg_get_serial_sequence('jiten.""ExampleSentences""', 'SentenceId')::regclass)
+                 FROM generate_series(1, @cnt)", conn);
+        cmd.CommandTimeout = 0;
+        cmd.Parameters.AddWithValue("cnt", count);
+
+        var ids = new List<long>(count);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            ids.Add(reader.GetInt64(0));
+
+        if (ids.Count != count)
+            throw new InvalidOperationException("Failed to allocate IDs for example sentences.");
+
+        return ids;
+    }
+
+    private static async Task ExecuteAsync(NpgsqlConnection conn, string sql, params NpgsqlParameter[] parameters)
+    {
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.CommandTimeout = 0;
+        cmd.Parameters.AddRange(parameters);
+        await cmd.ExecuteNonQueryAsync();
     }
 
     private static (List<DeckWord> deckWords, List<ExampleSentence> exampleSentences) UpdateDeckMetadata(JitenDbContext context, Deck existingDeck, Deck deck)
@@ -432,7 +521,6 @@ public static class JitenHelper
     public static async Task DeleteDeckData(JitenDbContext context, int deckId)
     {
         await context.Database.ExecuteSqlRawAsync($@"DELETE FROM jiten.""DeckWords"" WHERE ""DeckId"" = {{0}}", deckId);
-        await context.Database.ExecuteSqlRawAsync($@"DELETE FROM jiten.""ExampleSentences"" WHERE ""DeckId"" = {{0}}", deckId);
     }
 
     public static async Task BulkInsertDeckData(IDbContextFactory<JitenDbContext> contextFactory, int deckId, List<DeckWord> deckWords, List<ExampleSentence> exampleSentences)
@@ -442,8 +530,7 @@ public static class JitenHelper
         if (deckWords.Count > 0)
             tasks.Add(BulkInsertDeckWords(contextFactory, deckWords, deckId));
 
-        if (exampleSentences.Count > 0)
-            tasks.Add(BulkInsertExampleSentences(contextFactory, exampleSentences, deckId));
+        tasks.Add(SaveExampleSentences(contextFactory, exampleSentences, deckId));
 
         await Task.WhenAll(tasks);
     }
@@ -631,7 +718,7 @@ public static class JitenHelper
                 bulkTasks.Add(BulkInsertDeckWords(contextFactory, words, deckId));
 
             if (sentences is { Count: > 0 })
-                bulkTasks.Add(BulkInsertExampleSentences(contextFactory, sentences, deckId));
+                bulkTasks.Add(SaveExampleSentences(contextFactory, sentences, deckId));
         }
 
         await Task.WhenAll(bulkTasks);

@@ -22,7 +22,8 @@ public class SentenceCueLookup(JitenDbContext context, IMemoryCache cache)
     /// <summary>Null when the sentence doesn't exist, its deck has no stored cues, or no cue matches it.</summary>
     public async Task<SentenceCues?> FindAsync(long sentenceId, CancellationToken ct)
     {
-        var sentence = await context.ExampleSentences.AsNoTracking()
+        // IgnoreQueryFilters: a mined line a reparse dropped still gets its media
+        var sentence = await context.ExampleSentences.AsNoTracking().IgnoreQueryFilters()
                                     .Where(s => s.SentenceId == sentenceId)
                                     .Select(s => new { s.DeckId, s.Text, s.Position, s.Deck!.SentenceCount })
                                     .FirstOrDefaultAsync(ct);
