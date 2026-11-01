@@ -952,14 +952,11 @@ namespace Jiten.Core.Migrations
 
             modelBuilder.Entity("Jiten.Core.Data.ExampleSentenceTranslation", b =>
                 {
-                    b.Property<long>("SentenceId")
+                    b.Property<long>("CentralSentenceId")
                         .HasColumnType("bigint");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("DeckId")
-                        .HasColumnType("integer");
 
                     b.Property<string>("Model")
                         .IsRequired()
@@ -975,9 +972,7 @@ namespace Jiten.Core.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.HasKey("SentenceId");
-
-                    b.HasIndex("DeckId");
+                    b.HasKey("CentralSentenceId");
 
                     b.ToTable("ExampleSentenceTranslations", "jiten");
                 });
@@ -3274,9 +3269,9 @@ namespace Jiten.Core.Migrations
 
             modelBuilder.Entity("Jiten.Core.Data.ExampleSentenceTranslation", b =>
                 {
-                    b.HasOne("Jiten.Core.Data.ExampleSentence", null)
+                    b.HasOne("Jiten.Core.Data.Sentence", null)
                         .WithOne()
-                        .HasForeignKey("Jiten.Core.Data.ExampleSentenceTranslation", "SentenceId")
+                        .HasForeignKey("Jiten.Core.Data.ExampleSentenceTranslation", "CentralSentenceId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

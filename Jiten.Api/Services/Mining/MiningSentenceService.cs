@@ -95,8 +95,10 @@ public class MiningSentenceService(
         if (request.RequireEnglish)
         {
             var withTrack = (await context.DeckEnglishTracks.AsNoTracking().Where(t => deckIds.Contains(t.DeckId)).Select(t => t.DeckId).ToListAsync(ct)).ToHashSet();
-            var translated = (await context.ExampleSentenceTranslations.AsNoTracking().Where(t => deckIds.Contains(t.DeckId)).Select(t => t.SentenceId)
-                                           .ToListAsync(ct)).ToHashSet();
+            var translated = (await context.ExampleSentences.AsNoTracking()
+                                           .Where(s => deckIds.Contains(s.DeckId!.Value)
+                                                       && context.ExampleSentenceTranslations.Any(t => t.CentralSentenceId == s.CentralSentenceId))
+                                           .Select(s => s.SentenceId).ToListAsync(ct)).ToHashSet();
             hits = hits.Where(h => withTrack.Contains(h.DeckId) || translated.Contains(h.SentenceId)).ToList();
         }
 

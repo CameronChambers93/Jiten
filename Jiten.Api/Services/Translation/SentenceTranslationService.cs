@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using Jiten.Core;
 using Jiten.Core.Data;
 using Jiten.Core.Media;
@@ -39,7 +40,7 @@ public class SentenceTranslationService(
         var cues = await cueLookup.FindAsync(sentenceId, ct);
         if (await FromSubtitlesAsync(cues, ct) is { } fromSubtitles) return fromSubtitles;
 
-        var cached = await context.ExampleSentenceTranslations.AsNoTracking().FirstOrDefaultAsync(t => t.SentenceId == sentenceId, ct);
+        var cached = (await CachedAsync(s => s.SentenceId == sentenceId, ct)).FirstOrDefault().Translation;
         if (cached != null) return new SentenceTranslationDto(cached.Text, TranslationOrigin.Ai, cached.Provider, cached.Model, null);
 
         return allowAi ? await TranslateWithAiAsync(sentenceId, cues, ct) : null;
@@ -54,9 +55,8 @@ public class SentenceTranslationService(
                 result[id] = fromSubtitles;
 
         var missing = sentenceIds.Where(id => !result.ContainsKey(id)).ToList();
-        var cached = await context.ExampleSentenceTranslations.AsNoTracking().Where(t => missing.Contains(t.SentenceId)).ToListAsync(ct);
-        foreach (var t in cached)
-            result[t.SentenceId] = new SentenceTranslationDto(t.Text, TranslationOrigin.Ai, t.Provider, t.Model, null);
+        foreach (var (id, t) in await CachedAsync(s => missing.Contains(s.SentenceId), ct))
+            result[id] = new SentenceTranslationDto(t.Text, TranslationOrigin.Ai, t.Provider, t.Model, null);
 
         return result;
     }
@@ -73,8 +73,7 @@ public class SentenceTranslationService(
         var sentences = await context.ExampleSentences.AsNoTracking().Where(s => s.DeckId == deckId)
                                      .Select(s => new { s.SentenceId, s.Text, s.Position }).ToListAsync(ct);
         var sentenceCount = await context.Decks.AsNoTracking().Where(d => d.DeckId == deckId).Select(d => d.SentenceCount).FirstOrDefaultAsync(ct);
-        var cached = (await context.ExampleSentenceTranslations.AsNoTracking().Where(t => t.DeckId == deckId)
-                                   .Select(t => t.SentenceId).ToListAsync(ct)).ToHashSet();
+        var cached = (await CachedAsync(s => s.DeckId == deckId, ct)).Select(c => c.SentenceId).ToHashSet();
         var matcher = await cueLookup.MatcherAsync(deckId, ct);
         var english = await EnglishAsync(deckId, ct);
 
@@ -116,7 +115,7 @@ public class SentenceTranslationService(
                                     .Where(s => s.SentenceId == sentenceId && s.DeckId != null)
                                     .Select(s => new
                                     {
-                                        DeckId = s.DeckId!.Value, s.Text,
+                                        s.CentralSentenceId, s.Text,
                                         Title = s.Deck!.ParentDeck != null ? s.Deck.ParentDeck.OriginalTitle : s.Deck.OriginalTitle
                                     })
                                     .FirstOrDefaultAsync(ct)
@@ -134,7 +133,7 @@ public class SentenceTranslationService(
 
         context.ExampleSentenceTranslations.Add(new ExampleSentenceTranslation
         {
-            SentenceId = sentenceId, DeckId = sentence.DeckId, Text = result.Text,
+            CentralSentenceId = sentence.CentralSentenceId!.Value, Text = result.Text,
             Provider = active.Provider.Id, Model = result.Model, CreatedAt = DateTime.UtcNow
         });
         try
@@ -149,6 +148,16 @@ public class SentenceTranslationService(
         }
 
         return new SentenceTranslationDto(result.Text, TranslationOrigin.Ai, active.Provider.Id, result.Model, null);
+    }
+
+    /// <summary>The cached translations of deck occurrences' texts; a private line's id finds nothing.</summary>
+    private async Task<List<(long SentenceId, ExampleSentenceTranslation Translation)>> CachedAsync(Expression<Func<ExampleSentence, bool>> occurrences, CancellationToken ct)
+    {
+        var rows = await context.ExampleSentences.AsNoTracking().IgnoreQueryFilters().Where(s => s.DeckId != null).Where(occurrences)
+                                .Join(context.ExampleSentenceTranslations.AsNoTracking(), s => s.CentralSentenceId, t => (long?)t.CentralSentenceId,
+                                      (s, t) => new { s.SentenceId, Translation = t })
+                                .ToListAsync(ct);
+        return rows.Select(r => (r.SentenceId, r.Translation)).ToList();
     }
 
     private async Task<SentenceTranslationDto?> FromSubtitlesAsync(SentenceCues? cues, CancellationToken ct)

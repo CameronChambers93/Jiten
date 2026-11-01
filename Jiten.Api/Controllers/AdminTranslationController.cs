@@ -188,7 +188,8 @@ public class AdminTranslationController(
         if (deckId != null)
         {
             var deckIds = await DeckAndChildren(deckId.Value, ct);
-            query = query.Where(t => deckIds.Contains(t.DeckId));
+            query = query.Where(t => context.ExampleSentences.IgnoreQueryFilters()
+                                            .Any(s => s.CentralSentenceId == t.CentralSentenceId && s.DeckId != null && deckIds.Contains(s.DeckId.Value)));
         }
 
         return Ok(new { deleted = await query.ExecuteDeleteAsync(ct) });

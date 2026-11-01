@@ -439,14 +439,13 @@ public class JitenDbContext : DbContext
         modelBuilder.Entity<ExampleSentenceTranslation>(entity =>
         {
             entity.ToTable("ExampleSentenceTranslations", "jiten");
-            entity.HasKey(t => t.SentenceId);
-            entity.Property(t => t.SentenceId).ValueGeneratedNever();
+            entity.HasKey(t => t.CentralSentenceId);
+            entity.Property(t => t.CentralSentenceId).ValueGeneratedNever();
             entity.Property(t => t.Provider).HasMaxLength(50);
             entity.Property(t => t.Model).HasMaxLength(100);
-            entity.HasIndex(t => t.DeckId);
-            entity.HasOne<ExampleSentence>()
+            entity.HasOne<Sentence>()
                   .WithOne()
-                  .HasForeignKey<ExampleSentenceTranslation>(t => t.SentenceId)
+                  .HasForeignKey<ExampleSentenceTranslation>(t => t.CentralSentenceId)
                   .OnDelete(DeleteBehavior.Cascade);
         });
 
