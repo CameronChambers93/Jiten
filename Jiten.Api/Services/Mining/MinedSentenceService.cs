@@ -1,6 +1,8 @@
 using System.Text.RegularExpressions;
 using Jiten.Api.Dtos;
+using Hangfire;
 using Jiten.Api.Helpers;
+using Jiten.Api.Jobs;
 using Jiten.Core;
 using Jiten.Core.Data.User;
 using Microsoft.EntityFrameworkCore;
@@ -95,6 +97,7 @@ public class MinedSentenceService(
     MinedSyncService sync,
     IDbContextFactory<JitenDbContext> contextFactory,
     ICdnService cdn,
+    IBackgroundJobClient backgroundJobs,
     ILogger<MinedSentenceService> logger)
 {
     public const int MaxNotesPerImport = 20;
@@ -155,6 +158,7 @@ public class MinedSentenceService(
             }
         }
 
+        if (results.Any(r => r.Status == "imported")) backgroundJobs.Enqueue<SentenceParseJob>(job => job.ParsePending(CancellationToken.None));
         return results;
     }
 
@@ -329,9 +333,11 @@ public class MinedSentenceService(
         else
         {
             sentence.ExampleSentenceId = await MinedLineStore.EnsureOccurrenceAsync(jiten, userId, line, sentence, ct);
-            // The private line now holds this text, unless the note's markup can't be rebuilt from it.
-            if (line.ToHtml() == sentence.Text) sentence.Text = null;
         }
+
+        // The occurrence now holds this text, unless the note's markup can't be rebuilt from it.
+        await MinedLineStore.FillAsync(jiten, userId, [sentence], ct);
+        if (sentence.OccurrenceHtml == sentence.Text) sentence.Text = null;
 
         userContext.MinedSentences.Add(sentence);
     }

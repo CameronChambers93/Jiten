@@ -2436,6 +2436,12 @@ namespace Jiten.Core.Migrations
                         .IsRequired()
                         .HasColumnType("bytea");
 
+                    b.Property<byte[]>("Tokens")
+                        .HasColumnType("bytea");
+
+                    b.PrimitiveCollection<int[]>("WordKeys")
+                        .HasColumnType("integer[]");
+
                     b.HasKey("Id");
 
                     b.HasIndex("TextHash")

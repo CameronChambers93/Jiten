@@ -895,6 +895,7 @@ public class JitenDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Id).ValueGeneratedOnAdd();
             entity.HasIndex(e => e.TextHash).IsUnique();
+            if (isNpgsql) entity.Property(e => e.WordKeys).HasColumnType("integer[]");
         });
 
         modelBuilder.Entity<ExampleSentence>(entity =>

@@ -9,6 +9,12 @@ public class MinedLineTests
     private static MinedLine From(string html) => MinedLine.From(html, MinedLineStore.PlainText);
 
     [Fact]
+    public void ShowsTheTextWhenTheMarkIsPastItsEnd()
+    {
+        new MinedLine("短い", null, 5, 2).ToHtml().Should().Be("短い");
+    }
+
+    [Fact]
     public void KeepsWhereTheNoteMarkedTheWord()
     {
         var line = From("いえ、<b>特に</b>は・・・");

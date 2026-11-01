@@ -975,6 +975,7 @@ builder.Services.AddScoped<YouTubeImportJob>();
 builder.Services.AddScoped<YouTubeFetchJob>();
 builder.Services.AddScoped<YouTubeSyncSweepJob>();
 builder.Services.AddScoped<ReparseJob>();
+builder.Services.AddScoped<SentenceParseJob>();
 builder.Services.AddScoped<ComputationJob>();
 builder.Services.AddScoped<SrsRecomputeJob>();
 builder.Services.AddScoped<FsrsModelMigrationJob>();
@@ -1208,6 +1209,11 @@ if (!app.Environment.IsEnvironment("Testing"))
         "youtube-import-fetched",
         job => job.ImportAllFetched(),
         Cron.Hourly(40));
+
+    recurringJobs.AddOrUpdate<SentenceParseJob>(
+        "sentence-parse",
+        job => job.ParsePending(CancellationToken.None),
+        Cron.Hourly());
 
     recurringJobs.AddOrUpdate<StripeReconcileJob>(
         "stripe-reconcile",

@@ -39,7 +39,7 @@ public readonly record struct MinedLine(string Text, string? Speaker, int? Targe
     /// <summary>The line as a card field shows it, the word in <c>&lt;b&gt;</c>.</summary>
     public string ToHtml()
     {
-        var html = TargetPosition is { } start && TargetLength is { } length
+        var html = TargetPosition is { } start && TargetLength is { } length && start + length <= Text.Length
             ? $"{Text[..start]}<b>{Text.Substring(start, length)}</b>{Text[(start + length)..]}"
             : Text;
         return Speaker + html;

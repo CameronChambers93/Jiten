@@ -13,4 +13,9 @@ public class Sentence
 
     /// <summary>The normalized text: tags stripped, trimmed, NFC.</summary>
     public required string Text { get; set; }
+
+    /// <summary>The parsed words (see <see cref="ExampleSentenceTokens"/>); null until parsed. Only private lines are parsed here so far, a deck's tokens are on its occurrences.</summary>
+    public byte[]? Tokens { get; set; }
+
+    public int[]? WordKeys { get; set; }
 }
