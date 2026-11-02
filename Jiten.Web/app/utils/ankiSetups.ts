@@ -1,3 +1,4 @@
+import type { ExampleSentence } from '~/types';
 import type { MiningFieldSource } from '~/utils/miningCardFields';
 import { guessFieldSource } from '~/utils/miningCardFields';
 
@@ -27,21 +28,95 @@ export interface AnkiNoteTypeSetup {
   updateMainFields: boolean;
   sentenceList: SentenceListFormat;
   scriptVersion: number | null;
+  /** How mining treats the note type; null or missing for the defaults (`miningOf`). */
+  mining?: MiningSettings | null;
 }
 
 /** When mining would leave a field empty: add the card and say so, or don't add it. */
 export type EmptyFieldPolicy = 'warn' | 'deny';
 export type EmptyFieldPolicies = Partial<Record<FieldRole, EmptyFieldPolicy>>;
 
-/** Where new mined cards go (`api/anki-sync/card-target`). */
-export interface AnkiCardTarget {
+/** When a word already has a card of the note type: add the sentence to it without asking, or ask. */
+export type MiningExisting = 'auto' | 'ask';
+
+/** The parts of a sentence mining builds for a note type. One that's off isn't cut or stored, and never counts as empty. */
+export interface MiningParts {
+  audio: boolean;
+  picture: boolean;
+  english: boolean;
+}
+
+/** How mining treats one note type, stored on its setup. */
+export interface MiningSettings {
+  existing: MiningExisting;
+  parts: MiningParts;
+  /** What mining does when it would leave a role empty; null for `DEFAULT_EMPTY_FIELDS`. */
+  emptyFields: EmptyFieldPolicies | null;
+}
+
+export const DEFAULT_PARTS: MiningParts = { audio: true, picture: true, english: true };
+
+/** The role each part fills. */
+export const PART_ROLES: Record<keyof MiningParts, FieldRole> = { audio: 'sentenceAudio', picture: 'picture', english: 'sentenceEnglish' };
+
+/** A setup's mining settings, with the defaults filled in. */
+export function miningOf(setup: Pick<AnkiNoteTypeSetup, 'mining'> | null | undefined): MiningSettings {
+  const m = setup?.mining;
+  return { existing: m?.existing ?? 'ask', parts: { ...DEFAULT_PARTS, ...m?.parts }, emptyFields: m?.emptyFields ?? null };
+}
+
+/** The roles of parts that are off, which mining leaves empty on purpose. */
+export function partsOffRoles(parts: MiningParts): FieldRole[] {
+  return (Object.keys(PART_ROLES) as (keyof MiningParts)[]).filter((p) => !parts[p]).map((p) => PART_ROLES[p]);
+}
+
+/** A title a target's rule matches, with its name for showing the rule. */
+export interface RuleTitle {
+  deckId: number;
+  title: string;
+}
+
+/** Which lines a target takes: any of the media types, or any of the titles. */
+export interface CardTargetRule {
+  mediaTypes: number[];
+  titles: RuleTitle[];
+}
+
+/** One place new mined cards go. Its note type's setup has the field roles and mining settings. */
+export interface NewCardTarget {
   deckName: string;
   modelName: string;
   tags: string;
+  /** Null on the last target, which takes every line the others don't. */
+  when: CardTargetRule | null;
+}
+
+/** Where new mined cards go (`api/anki-sync/card-target`): the first target whose rule matches; the audio padding is shared. */
+export interface CardTargets {
+  targets: NewCardTarget[];
   padStartMs: number;
   padEndMs: number;
-  /** What mining does when it would leave a role empty; null or missing for `DEFAULT_EMPTY_FIELDS`. */
-  emptyFields?: EmptyFieldPolicies | null;
+}
+
+export const DEFAULT_CARD_TARGETS: CardTargets = {
+  targets: [{ deckName: '', modelName: '', tags: 'jiten', when: null }],
+  padStartMs: 250,
+  padEndMs: 250,
+};
+
+/** Whether the rule takes the line: its media type, or its title or the title's parent (a series for an episode). */
+export function ruleMatches(rule: CardTargetRule | null, sentence: Pick<ExampleSentence, 'sourceDeck' | 'sourceDeckParent'>): boolean {
+  if (!rule) return false;
+  const mediaType = sentence.sourceDeckParent?.mediaType ?? sentence.sourceDeck?.mediaType;
+  if (mediaType != null && rule.mediaTypes.includes(mediaType)) return true;
+  const ids = [sentence.sourceDeck?.deckId, sentence.sourceDeckParent?.deckId].filter((id): id is number => id != null);
+  return rule.titles.some((t) => ids.includes(t.deckId));
+}
+
+/** The target a new card for the line goes to: the first whose rule matches, else the last. */
+export function pickTarget(targets: CardTargets, sentence: Pick<ExampleSentence, 'sourceDeck' | 'sourceDeckParent'>): NewCardTarget {
+  const list = targets.targets.length ? targets.targets : DEFAULT_CARD_TARGETS.targets;
+  return list.slice(0, -1).find((t) => ruleMatches(t.when, sentence)) ?? list[list.length - 1]!;
 }
 
 export const ROLE_LABELS: Record<FieldRole, string> = {
@@ -112,6 +187,20 @@ export const PRESETS: Preset[] = [
   },
   { name: 'Lapis', roles: { ...LAPIS_ROLES, SentenceEnglish: 'sentenceEnglish' } },
   { name: 'Kiku', roles: LAPIS_ROLES },
+  {
+    name: 'Core 2000',
+    roles: {
+      Expression: 'word',
+      'Vocabulary-Furigana': 'wordFurigana',
+      vocabularyKana: 'wordReading',
+      vocabularyEnglish: 'mainDefinition',
+      SentenceKanji: 'sentence',
+      SentenceFurigana: 'sentenceFurigana',
+      SentenceEnglish: 'sentenceEnglish',
+      'Sentence-Audio': 'sentenceAudio',
+      Sentences: 'sentenceList',
+    },
+  },
   {
     name: 'JP Mining Note',
     roles: {

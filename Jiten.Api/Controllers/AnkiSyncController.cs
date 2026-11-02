@@ -49,7 +49,7 @@ public class AnkiSyncController(AnkiSyncSetupService setups, ICurrentUserService
     }
 
     [HttpGet("card-target")]
-    [SwaggerOperation(Summary = "The deck, note type, tags and audio padding new mined cards get")]
+    [SwaggerOperation(Summary = "Where new mined cards go: the targets in order, each with a deck, note type, tags and rule, and the audio padding")]
     public async Task<IActionResult> CardTarget(CancellationToken ct)
     {
         if (userService.UserId is not { } userId) return Unauthorized();
@@ -58,10 +58,11 @@ public class AnkiSyncController(AnkiSyncSetupService setups, ICurrentUserService
 
     [HttpPut("card-target")]
     [SwaggerOperation(Summary = "Sets where new mined cards go")]
-    public async Task<IActionResult> SaveCardTarget([FromBody] AnkiCardTargetDto target, CancellationToken ct)
+    public async Task<IActionResult> SaveCardTarget([FromBody] AnkiCardTargetsDto targets, CancellationToken ct)
     {
         if (userService.UserId is not { } userId) return Unauthorized();
-        await setups.SaveCardTargetAsync(userId, target, ct);
+        if (AnkiSyncSetupService.Validate(targets) is { } error) return BadRequest(new { message = error });
+        await setups.SaveCardTargetAsync(userId, targets, ct);
         return NoContent();
     }
 

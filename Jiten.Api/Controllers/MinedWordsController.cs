@@ -165,11 +165,11 @@ public class MinedWordsController(MinedSentenceService mined, MinedSyncService s
     }
 
     [HttpGet("notes")]
-    [SwaggerOperation(Summary = "The Anki note ids already in the store, so the browser only reads new notes")]
+    [SwaggerOperation(Summary = "The Anki note ids already in the store, so the browser only reads new notes, and those without a sentence of their own")]
     public async Task<IActionResult> NoteIds(CancellationToken ct)
     {
         if (userService.UserId is not { } userId) return Unauthorized();
-        return Ok(new { ankiNoteIds = await mined.NoteIdsAsync(userId, ct) });
+        return Ok(new { ankiNoteIds = await mined.NoteIdsAsync(userId, ct), withoutSentence = await mined.NoteIdsWithoutSentenceAsync(userId, ct) });
     }
 
     [HttpGet("words")]

@@ -1,7 +1,22 @@
 import type { DeckIPlusOneSentence, ExampleSentence, Word } from '~/types';
 import { ankiConnect } from '~/composables/useAnkiConnect';
 import { ankiPitchCategories, ankiPitchPositions } from '~/utils/pitchAccent';
-import { ankiSearchValue, fieldFor, fieldsFor, setupQuery, type AnkiNoteTypeSetup, type FieldRole } from '~/utils/ankiSetups';
+import {
+  ankiSearchValue,
+  fieldFor,
+  fieldsFor,
+  miningOf,
+  PART_ROLES,
+  partsOffRoles,
+  pickTarget,
+  setupQuery,
+  type AnkiNoteTypeSetup,
+  type CardTargets,
+  type FieldRole,
+  type MiningParts,
+  type MiningSettings,
+  type NewCardTarget,
+} from '~/utils/ankiSetups';
 import { mainFieldValues, noteWriteFields, type MainFields, type NoteWrite } from '~/utils/ankiNoteWrite';
 import { DEFAULT_EMPTY_FIELDS, emptyFieldWarnings, failureReason, MineDenied, rolesWith, type EmptyReasons } from '~/utils/miningWarnings';
 import type { AnkiNoteInfo } from '~/utils/minedImport';
@@ -65,6 +80,8 @@ export interface MinedResult {
   added: boolean;
   sentences: number;
   warnings: string[];
+  /** For a new card, the target it went to. */
+  target?: NewCardTarget;
 }
 
 /** A sentence as both ways of mining send it to `api/mined`: the word in bold, before the target template. */
@@ -103,13 +120,34 @@ export function useMiningCards() {
   const anki = useAnkiSetups();
   if (import.meta.client) anki.load().catch(() => {});
 
-  /** The new-card target, with the target note type's roles. */
-  const settings = computed(() => {
-    const target = anki.cardTarget.value;
-    return { ...target, fieldRoles: (anki.setupFor(target.modelName)?.fieldRoles ?? {}) as Record<string, FieldRole> };
+  const targets = computed(() => anki.cardTargets.value as CardTargets);
+
+  /** The audio padding every target shares. */
+  const settings = computed(() => ({ padStartMs: targets.value.padStartMs, padEndMs: targets.value.padEndMs }));
+
+  function rolesOf(modelName: string): Record<string, FieldRole> {
+    return (anki.setupFor(modelName)?.fieldRoles ?? {}) as Record<string, FieldRole>;
+  }
+
+  function targetReady(t: NewCardTarget): boolean {
+    return !!t.deckName && !!t.modelName && Object.keys(rolesOf(t.modelName)).length > 0;
+  }
+
+  /** The last target, which takes every line the others don't, has a deck, a note type and field roles. */
+  const configured = computed(() => {
+    const list = targets.value.targets;
+    return list.length > 0 && targetReady(list[list.length - 1]!);
   });
 
-  const configured = computed(() => !!settings.value.deckName && !!settings.value.modelName && Object.keys(settings.value.fieldRoles).length > 0);
+  /** The target a new card for the line goes to. */
+  function targetFor(sentence: ExampleSentence): NewCardTarget {
+    return pickTarget(targets.value, sentence);
+  }
+
+  /** The note type's mining settings, with the defaults. */
+  function miningFor(modelName: string): MiningSettings {
+    return miningOf(anki.setupFor(modelName));
+  }
 
   function fetchAudio(sentenceId: number): Promise<Blob> {
     return $api<Blob>(`sentence-media/${sentenceId}/audio`, {
@@ -217,14 +255,26 @@ export function useMiningCards() {
     };
   }
 
-  /** The roles reported after the writes: those that warn, and those that deny but still ended up empty. */
-  function warnRoles(): readonly FieldRole[] {
-    return rolesWith(anki.cardTarget.value.emptyFields ?? DEFAULT_EMPTY_FIELDS, 'warn', 'deny');
+  /** The roles of the parts built for a stored sentence, whose failures are listed by reason. */
+  function builtPartRoles(parts: MiningParts): FieldRole[] {
+    return (['english', 'audio', 'picture'] as const).filter((p) => parts[p]).map((p) => PART_ROLES[p]);
   }
 
-  /** The roles that stop mining when they would be empty. */
-  function denyRoles(): FieldRole[] {
-    return rolesWith(anki.cardTarget.value.emptyFields ?? DEFAULT_EMPTY_FIELDS, 'deny');
+  /**
+   * The note type's roles reported after the writes: those that warn, and those that deny but still ended up empty.
+   * Parts the note type turns off aren't reported.
+   */
+  function warnRoles(modelName: string): readonly FieldRole[] {
+    const m = miningFor(modelName);
+    const off = partsOffRoles(m.parts);
+    return rolesWith(m.emptyFields ?? DEFAULT_EMPTY_FIELDS, 'warn', 'deny').filter((r) => !off.includes(r));
+  }
+
+  /** The note type's roles that stop mining when they would be empty. */
+  function denyRoles(modelName: string): FieldRole[] {
+    const m = miningFor(modelName);
+    const off = partsOffRoles(m.parts);
+    return rolesWith(m.emptyFields ?? DEFAULT_EMPTY_FIELDS, 'deny').filter((r) => !off.includes(r));
   }
 
   /** Whether the note type's setup writes a sentence list but has no field for it, or the note lacks that field. */
@@ -327,41 +377,54 @@ export function useMiningCards() {
     if (notes.length) await $api('mined/sync/main-written', { method: 'POST', body: { notes } });
   }
 
+  /** The word's kept note (its oldest, `noteIds[0]`), with its note type and fields; null when it can't be read. */
+  async function keptNote(noteIds: number[]): Promise<AnkiNoteInfo | null> {
+    if (!noteIds.length) return null;
+    const [kept] = await ankiConnect<(AnkiNoteInfo | Record<string, never>)[]>('notesInfo', { notes: [noteIds[0]] });
+    return kept && 'noteId' in kept ? (kept as AnkiNoteInfo) : null;
+  }
+
   /**
    * Adds the sentence to the word's existing note instead of creating another: it joins the word's sentences in the
    * store, its media goes into Anki's collection, and the kept note's Sentences field is rewritten. Notes not in the
-   * store yet (a Yomitan card never synced) are imported first, so their own sentence stays on the card.
+   * store yet (a Yomitan card never synced) are imported first, so their own sentence stays on the card, first in the
+   * rotation. The kept note's note type decides the parts built and the empty-field policies.
    */
-  async function addToExistingNote(sentence: ExampleSentence, noteIds: number[]): Promise<MinedResult> {
-    const { ankiNoteIds } = await $api<{ ankiNoteIds: number[] }>('mined/notes');
+  async function addToExistingNote(sentence: ExampleSentence, noteIds: number[], keptInfo?: AnkiNoteInfo | null): Promise<MinedResult> {
+    const kept = keptInfo !== undefined ? keptInfo : await keptNote(noteIds);
+    const modelName = kept?.modelName ?? '';
+    const { parts } = miningFor(modelName);
+    const { ankiNoteIds, withoutSentence } = await $api<{ ankiNoteIds: number[]; withoutSentence?: number[] }>('mined/notes');
     const known = new Set(ankiNoteIds);
     const missing = noteIds.filter((id) => !known.has(id));
+    // A kept note stored without its own sentence (synced for its list before its note type mapped one) gets it now, so
+    // it stays first in the rotation.
+    const keptSetup = anki.setupFor(modelName);
+    if (
+      known.has(noteIds[0]!) &&
+      withoutSentence?.includes(noteIds[0]!) &&
+      keptSetup &&
+      Object.values(keptSetup.fieldRoles).some((r) => r === 'sentence' || r === 'sentencePlain' || r === 'sentenceFurigana')
+    )
+      missing.unshift(noteIds[0]!);
     if (missing.length) {
       const failed = (await importNotes(missing)).find((r) => r.status === 'failed');
       if (failed) throw new Error(failed.error ?? "Couldn't read the existing note");
     }
 
-    const built = await buildSentence(sentence, { audio: true, picture: true, english: true });
+    const built = await buildSentence(sentence, parts);
+    const builtParts = builtPartRoles(parts);
 
     // Denied parts stop the sentence before the store or the note changes.
-    const deny = denyRoles();
+    const deny = denyRoles(modelName);
     if (deny.length) {
-      const lines = emptyFieldWarnings({
-        fieldRoles: {},
-        fields: {},
-        warn: deny,
-        reasons: built.reasons,
-        parts: ['sentenceEnglish', 'sentenceAudio', 'picture'],
-      });
-      if (deny.includes('sentenceList')) {
-        const [kept] = await ankiConnect<(AnkiNoteInfo | Record<string, never>)[]>('notesInfo', { notes: [noteIds[0]] });
-        if (kept && 'noteId' in kept && listFieldMissing(kept.modelName, kept.fields)) lines.push(missingListWarning(kept.modelName));
-      }
+      const lines = emptyFieldWarnings({ fieldRoles: {}, fields: {}, warn: deny, reasons: built.reasons, parts: builtParts });
+      if (deny.includes('sentenceList') && kept && listFieldMissing(kept.modelName, kept.fields)) lines.push(missingListWarning(kept.modelName));
       if (lines.length) throw new MineDenied(lines);
     }
 
     const result = await $api<AddedSentence>('mined/sentences', { method: 'POST', body: { ankiNoteId: noteIds[0], ...built.body } });
-    const warnings = result.added ? await writeAndCheck(result.write, built.reasons, ['sentenceEnglish', 'sentenceAudio', 'picture']) : [];
+    const warnings = result.added ? await writeAndCheck(result.write, built.reasons, builtParts, modelName) : [];
     return { ankiNoteId: result.ankiNoteId, added: result.added, sentences: result.sentences, warnings };
   }
 
@@ -369,8 +432,8 @@ export function useMiningCards() {
    * Writes the kept note and lists what was left empty: the list field, and the main fields when they were written. The
    * added sentence's English, audio and picture (`parts`) are stored with it, so their failures are listed by reason.
    */
-  async function writeAndCheck(write: NoteWrite | null, reasons: EmptyReasons, parts: FieldRole[]): Promise<string[]> {
-    const warn = warnRoles();
+  async function writeAndCheck(write: NoteWrite | null, reasons: EmptyReasons, parts: FieldRole[], modelName: string): Promise<string[]> {
+    const warn = warnRoles(write?.modelName ?? modelName);
     const partsOnly = () => emptyFieldWarnings({ fieldRoles: {}, fields: {}, warn, reasons, parts });
     if (!write) return partsOnly();
     let done: Awaited<ReturnType<typeof writeNote>>;
@@ -392,13 +455,23 @@ export function useMiningCards() {
 
   /**
    * Creates the note in Anki through AnkiConnect, then records it in the sentence store at once. Its sentence fields are
-   * the main fields Sync would write, from the same sentence the store keeps.
+   * the main fields Sync would write, from the same sentence the store keeps. The note goes to the target picked for the
+   * line, and its note type decides the parts built and the empty-field policies. `keptModelName` is the note type of the
+   * word's older note when it has one ("Create a new note"): that note gets the sentence list, so its note type decides
+   * whether a missing list field is denied.
    */
-  async function addCard(item: DeckIPlusOneSentence): Promise<MinedResult> {
+  async function addCard(item: DeckIPlusOneSentence, keptModelName?: string | null): Promise<MinedResult> {
     const { sentence, word } = item;
     await anki.load();
-    const mapping = settings.value.fieldRoles;
-    const wanted = new Set(Object.values(mapping));
+    const target = targetFor(sentence);
+    if (!targetReady(target))
+      throw new Error(`The card target for this line (${target.deckName || 'no deck'}, ${target.modelName || 'no note type'}) isn't set up. Check Card settings.`);
+    const mapping = rolesOf(target.modelName);
+    const { parts } = miningFor(target.modelName);
+    const off = partsOffRoles(parts);
+    const wanted = new Set(Object.values(mapping).filter((r) => !off.includes(r)));
+    // The stored sentence also joins an older kept note's list, so it gets the parts that note type builds too.
+    const keptParts = keptModelName ? miningFor(keptModelName).parts : null;
     const reasons: EmptyReasons = {};
 
     const [details, built, { targetWordTemplate }] = await Promise.all([
@@ -409,7 +482,11 @@ export function useMiningCards() {
             return null;
           })
         : null,
-      buildSentence(sentence, { audio: wanted.has('sentenceAudio'), picture: wanted.has('picture'), english: wanted.has('sentenceEnglish') }),
+      buildSentence(sentence, {
+        audio: wanted.has('sentenceAudio') || !!keptParts?.audio,
+        picture: wanted.has('picture') || !!keptParts?.picture,
+        english: wanted.has('sentenceEnglish') || !!keptParts?.english,
+      }),
       $api<{ targetWordTemplate: string }>('mined/settings'),
     ]);
     Object.assign(reasons, built.reasons);
@@ -421,9 +498,10 @@ export function useMiningCards() {
       sentence: applyTargetTemplate(b.sentence, targetWordTemplate),
       sentencePlain: sentence.text,
       furigana: b.furigana == null ? null : applyTargetTemplate(b.furigana, targetWordTemplate),
-      english: b.english,
-      audioFilename: b.audioFilename,
-      pictureFilename: b.pictureFilename,
+      // A part this note type turns off stays off its own fields, though it was built for the kept note's list.
+      english: parts.english ? b.english : null,
+      audioFilename: parts.audio ? b.audioFilename : null,
+      pictureFilename: parts.picture ? b.pictureFilename : null,
       source: b.sourceTitle,
     };
     const values: Partial<Record<FieldRole, string>> = {
@@ -444,26 +522,22 @@ export function useMiningCards() {
     Object.assign(fields, mainFieldValues(main, mapping));
 
     // Every field is known now, so a denied role that would be empty stops the card before Anki has it.
-    const deny = denyRoles();
-    if (deny.length) {
+    const deny = denyRoles(target.modelName);
+    const listModel = keptModelName || target.modelName;
+    const denyList = denyRoles(listModel).includes('sentenceList');
+    if (deny.length || denyList) {
       const planned = Object.fromEntries(Object.keys(mapping).map((name) => [name, { value: fields[name] ?? '' }]));
-      const lines = emptyFieldWarnings({
-        fieldRoles: mapping,
-        fields: planned,
-        warn: deny,
-        reasons,
-        roles: [...new Set(Object.values(mapping))].filter((r) => r !== 'sentenceList'),
-      });
-      if (deny.includes('sentenceList') && listFieldMissing(settings.value.modelName)) lines.push(missingListWarning(settings.value.modelName));
+      const lines = emptyFieldWarnings({ fieldRoles: mapping, fields: planned, warn: deny, reasons, roles: [...wanted].filter((r) => r !== 'sentenceList') });
+      if (denyList && listFieldMissing(listModel)) lines.push(missingListWarning(listModel));
       if (lines.length) throw new MineDenied(lines);
     }
 
     const ankiNoteId = await ankiConnect<number>('addNote', {
       note: {
-        deckName: settings.value.deckName,
-        modelName: settings.value.modelName,
+        deckName: target.deckName,
+        modelName: target.modelName,
         fields,
-        tags: settings.value.tags.split(/\s+/).filter(Boolean),
+        tags: target.tags.split(/\s+/).filter(Boolean),
         options: { allowDuplicate: false, duplicateScope: 'deck' },
       },
     });
@@ -475,8 +549,8 @@ export function useMiningCards() {
         method: 'POST',
         body: {
           ankiNoteId,
-          modelName: settings.value.modelName,
-          deckName: settings.value.deckName,
+          modelName: target.modelName,
+          deckName: target.deckName,
           wordId: word.wordId,
           readingIndex: word.readingIndex,
           expression: plainFieldText(fields[fieldFor(mapping, 'word') ?? ''] ?? '') || word.reading,
@@ -498,7 +572,7 @@ export function useMiningCards() {
       try {
         // The server has recorded the main fields already.
         const done = await writeNote(write, undefined, false);
-        if (done.missingList && warnRoles().includes('sentenceList')) warnings.push(missingListWarning(write.modelName));
+        if (done.missingList && warnRoles(write.modelName).includes('sentenceList')) warnings.push(missingListWarning(write.modelName));
         listWritten = write.ankiNoteId === ankiNoteId && write.sentencesHtml != null && !done.missingList;
         if (write.ankiNoteId === ankiNoteId) current = done.fields;
       } catch (e) {
@@ -507,10 +581,24 @@ export function useMiningCards() {
       }
     }
     current ??= await noteFields(ankiNoteId);
-    const roles = [...new Set(Object.values(mapping))].filter((r) => r !== 'sentenceList' || listWritten);
-    warnings.push(...emptyFieldWarnings({ fieldRoles: mapping, fields: current, warn: warnRoles(), reasons, roles }));
-    return { ankiNoteId, added: true, sentences: recorded?.sentences ?? 1, warnings };
+    const roles = [...wanted].filter((r) => r !== 'sentenceList' || listWritten);
+    warnings.push(...emptyFieldWarnings({ fieldRoles: mapping, fields: current, warn: warnRoles(target.modelName), reasons, roles }));
+    return { ankiNoteId, added: true, sentences: recorded?.sentences ?? 1, warnings, target };
   }
 
-  return { settings, configured, fetchAudio, fetchPicture, addCard, existingNotes, wordsInAnki, writeNote, recordMainWritten, addToExistingNote };
+  return {
+    settings,
+    configured,
+    fetchAudio,
+    fetchPicture,
+    addCard,
+    existingNotes,
+    keptNote,
+    miningFor,
+    targetFor,
+    wordsInAnki,
+    writeNote,
+    recordMainWritten,
+    addToExistingNote,
+  };
 }

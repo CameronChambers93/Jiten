@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 namespace Jiten.Api.Services.Mining;
 
 /// <summary>A note type's setup for Sync; see <see cref="AnkiNoteTypeSetup"/>.</summary>
+/// <param name="Mining">How mining treats the note type; null on a save leaves it as it is, and on a read means the defaults.</param>
 public record AnkiNoteTypeSetupDto(
     string ModelName,
     string? Filter,
@@ -18,20 +19,42 @@ public record AnkiNoteTypeSetupDto(
     bool FoldDuplicates,
     bool UpdateMainFields,
     string SentenceList,
-    int? ScriptVersion);
+    int? ScriptVersion,
+    AnkiMiningSettingsDto? Mining = null);
 
 public record AnkiSetupsDto(List<AnkiNoteTypeSetupDto> Setups, DateTime? KnownWordsSyncedAt);
 
+/// <summary>Which parts of a sentence mining builds for a note type: the audio, the screenshot, the English.</summary>
+public record AnkiMiningPartsDto(bool Audio = true, bool Picture = true, bool English = true);
+
 /// <summary>
-/// Where new mined cards go. The field mapping is the note type's setup. <c>EmptyFields</c> maps field roles to what
-/// mining does when it would leave them empty: "warn" (add, and say so) or "deny" (don't add); null for the browser's
-/// defaults.
+/// How mining treats a note type. <c>Existing</c>: when a word already has a card of this type, add the sentence to it
+/// ("auto") or ask ("ask"). <c>EmptyFields</c> maps field roles to what mining does when it would leave them empty: "warn"
+/// (add, and say so) or "deny" (don't add); null for the browser's defaults.
 /// </summary>
-public record AnkiCardTargetDto(string DeckName, string ModelName, string Tags, int PadStartMs, int PadEndMs,
-                                Dictionary<string, string>? EmptyFields = null)
+public record AnkiMiningSettingsDto(string Existing = AnkiMiningExisting.Ask, AnkiMiningPartsDto? Parts = null,
+                                    Dictionary<string, string>? EmptyFields = null);
+
+/// <summary>A title a rule matches, with its name for showing the rule.</summary>
+public record AnkiRuleTitleDto(int DeckId, string Title);
+
+/// <summary>Which lines a new-card target takes: any of the media types, or any of the titles. Empty matches nothing.</summary>
+public record AnkiCardTargetRuleDto(List<int>? MediaTypes = null, List<AnkiRuleTitleDto>? Titles = null);
+
+/// <summary>One place new mined cards go. The field mapping is the note type's setup.</summary>
+public record AnkiNewCardTargetDto(string DeckName, string ModelName, string Tags, AnkiCardTargetRuleDto? When = null);
+
+/// <summary>
+/// Where new mined cards go: the first target whose rule matches the line; the last has no rule and takes the rest.
+/// The audio padding is shared.
+/// </summary>
+public record AnkiCardTargetsDto(List<AnkiNewCardTargetDto> Targets, int PadStartMs, int PadEndMs)
 {
-    public static readonly AnkiCardTargetDto Default = new("", "", "jiten", 250, 250);
+    public static AnkiCardTargetsDto Default => new([new AnkiNewCardTargetDto("", "", "jiten")], 250, 250);
 }
+
+/// <summary>The single target stored before there could be several; read once and converted.</summary>
+internal record LegacyCardTarget(string DeckName, string ModelName, string Tags, int PadStartMs, int PadEndMs, Dictionary<string, string>? EmptyFields);
 
 /// <param name="Previous">The value Sync read when it started; the update only applies if it's still that.</param>
 public record KnownWordsSyncedRequest(DateTime SyncedAt, DateTime? Previous);
@@ -42,6 +65,8 @@ public class AnkiSyncSetupService(UserDbContext userContext)
     public const int MaxSetups = 50;
     public const int MaxFilterLength = 1000;
     public const int MaxPadMs = 5000;
+    public const int MaxTargets = 20;
+    public const int MaxRuleItems = 50;
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -67,6 +92,7 @@ public class AnkiSyncSetupService(UserDbContext userContext)
         if (setup.KnownWords != null && !AnkiKnownWordsState.All.Contains(setup.KnownWords)) return "Unknown known-words state.";
         if (!AnkiSentenceListFormat.All.Contains(setup.SentenceList)) return "Unknown sentence list format.";
         if (setup.Preset is { Length: > 50 }) return "The preset name is too long.";
+        if (setup.Mining is { } m && !AnkiMiningExisting.All.Contains(m.Existing)) return "Unknown choice for a word's existing card.";
 
         var roles = setup.FieldRoles.Values.ToHashSet();
         if ((setup.KnownWords != null || setup.ImportSentences) && !roles.Contains("word")) return "Map a field to Word first.";
@@ -109,6 +135,7 @@ public class AnkiSyncSetupService(UserDbContext userContext)
         setup.UpdateMainFields = dto.UpdateMainFields;
         setup.SentenceList = dto.SentenceList;
         setup.ScriptVersion = dto.ScriptVersion;
+        if (dto.Mining != null) setup.MiningJson = JsonSerializer.Serialize(CleanMining(dto.Mining), Json);
         setup.UpdatedAt = DateTime.UtcNow;
         await userContext.SaveChangesAsync(ct);
         return ToDto(setup);
@@ -117,29 +144,114 @@ public class AnkiSyncSetupService(UserDbContext userContext)
     public async Task<bool> DeleteAsync(string userId, string modelName, CancellationToken ct) =>
         await userContext.AnkiNoteTypeSetups.Where(s => s.UserId == userId && s.ModelName == modelName).ExecuteDeleteAsync(ct) > 0;
 
-    public async Task<AnkiCardTargetDto> CardTargetAsync(string userId, CancellationToken ct)
+    /// <summary>
+    /// The new-card targets. A target saved before there could be several is converted on the first read: its empty-field
+    /// policies move to its note type's setup, unless that setup has its own already.
+    /// </summary>
+    public async Task<AnkiCardTargetsDto> CardTargetAsync(string userId, CancellationToken ct)
     {
         var json = await userContext.UserSettings.AsNoTracking().Where(s => s.UserId == userId).Select(s => s.AnkiCardTargetJson).FirstOrDefaultAsync(ct);
-        if (string.IsNullOrEmpty(json) || json == "{}") return AnkiCardTargetDto.Default;
+        if (string.IsNullOrEmpty(json) || json == "{}") return AnkiCardTargetsDto.Default;
         try
         {
-            return JsonSerializer.Deserialize<AnkiCardTargetDto>(json, Json) ?? AnkiCardTargetDto.Default;
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return AnkiCardTargetsDto.Default;
+            if (doc.RootElement.TryGetProperty("targets", out _))
+                return CleanTargets(JsonSerializer.Deserialize<AnkiCardTargetsDto>(json, Json) ?? AnkiCardTargetsDto.Default);
+            var legacy = JsonSerializer.Deserialize<LegacyCardTarget>(json, Json);
+            return legacy == null ? AnkiCardTargetsDto.Default : await ConvertLegacyAsync(userId, legacy, ct);
         }
         catch (JsonException)
         {
-            return AnkiCardTargetDto.Default;
+            return AnkiCardTargetsDto.Default;
         }
     }
 
-    public async Task SaveCardTargetAsync(string userId, AnkiCardTargetDto target, CancellationToken ct)
+    private async Task<AnkiCardTargetsDto> ConvertLegacyAsync(string userId, LegacyCardTarget legacy, CancellationToken ct)
     {
-        var clean = new AnkiCardTargetDto(Truncate(target.DeckName.Trim(), 200), Truncate(target.ModelName.Trim(), 200), Truncate(target.Tags.Trim(), 500),
-                                          Math.Clamp(target.PadStartMs, 0, MaxPadMs), Math.Clamp(target.PadEndMs, 0, MaxPadMs),
-                                          target.EmptyFields?.Where(p => p.Key.Length is > 0 and <= 40 && p.Value is "warn" or "deny").Take(40)
-                                                .ToDictionary(p => p.Key, p => p.Value));
+        var targets = CleanTargets(new AnkiCardTargetsDto([new AnkiNewCardTargetDto(legacy.DeckName ?? "", legacy.ModelName ?? "", legacy.Tags ?? "")],
+                                                          legacy.PadStartMs, legacy.PadEndMs));
+        var modelName = targets.Targets[0].ModelName;
+        // Policies on a note type without a setup never applied: mining needs the setup's roles.
+        if (legacy.EmptyFields is { Count: > 0 } policies && modelName != "")
+        {
+            var setup = await userContext.AnkiNoteTypeSetups.FirstOrDefaultAsync(s => s.UserId == userId && s.ModelName == modelName, ct);
+            if (setup != null)
+            {
+                var mining = Mining(setup) ?? new AnkiMiningSettingsDto();
+                if (mining.EmptyFields == null)
+                    setup.MiningJson = JsonSerializer.Serialize(CleanMining(mining with { EmptyFields = policies }), Json);
+            }
+        }
+
+        var settings = await SettingsAsync(userId, ct);
+        settings.AnkiCardTargetJson = JsonSerializer.Serialize(targets, Json);
+        await userContext.SaveChangesAsync(ct);
+        return targets;
+    }
+
+    public async Task SaveCardTargetAsync(string userId, AnkiCardTargetsDto targets, CancellationToken ct)
+    {
+        var clean = Clean(targets);
         var settings = await SettingsAsync(userId, ct);
         settings.AnkiCardTargetJson = JsonSerializer.Serialize(clean, Json);
         await userContext.SaveChangesAsync(ct);
+    }
+
+    /// <summary>Why the targets can't be saved, or null when they can. Checks what <see cref="Clean"/> leaves.</summary>
+    public static string? Validate(AnkiCardTargetsDto targets)
+    {
+        if (targets.Targets is { Count: > 0 and <= MaxTargets }) targets = Clean(targets);
+        if (targets.Targets is not { Count: > 0 }) return "Add a target for new cards.";
+        if (targets.Targets.Count > MaxTargets) return $"At most {MaxTargets} targets.";
+        for (var i = 0; i < targets.Targets.Count - 1; i++)
+        {
+            var when = targets.Targets[i].When;
+            if (when == null || ((when.MediaTypes?.Count ?? 0) == 0 && (when.Titles?.Count ?? 0) == 0))
+                return $"Target {i + 1} needs a media type or a title; only the last one takes everything else.";
+        }
+
+        return null;
+    }
+
+    /// <summary>The targets trimmed and capped, with unknown media types and titles dropped and no rule on the last.</summary>
+    public static AnkiCardTargetsDto Clean(AnkiCardTargetsDto targets) => CleanTargets(targets);
+
+    private static AnkiCardTargetsDto CleanTargets(AnkiCardTargetsDto targets)
+    {
+        var list = (targets.Targets ?? []).Take(MaxTargets).Select((t, i) => new AnkiNewCardTargetDto(
+            Truncate((t.DeckName ?? "").Trim(), 200), Truncate((t.ModelName ?? "").Trim(), 200), Truncate((t.Tags ?? "").Trim(), 500),
+            i == targets.Targets!.Count - 1 ? null : CleanRule(t.When))).ToList();
+        if (list.Count == 0) list.Add(AnkiCardTargetsDto.Default.Targets[0]);
+        return new AnkiCardTargetsDto(list, Math.Clamp(targets.PadStartMs, 0, MaxPadMs), Math.Clamp(targets.PadEndMs, 0, MaxPadMs));
+    }
+
+    private static AnkiCardTargetRuleDto? CleanRule(AnkiCardTargetRuleDto? rule) =>
+        rule == null
+            ? null
+            : new AnkiCardTargetRuleDto(
+                (rule.MediaTypes ?? []).Where(m => Enum.IsDefined(typeof(MediaType), m)).Distinct().Take(MaxRuleItems).ToList(),
+                (rule.Titles ?? []).Where(t => t.DeckId > 0).DistinctBy(t => t.DeckId).Take(MaxRuleItems)
+                                   .Select(t => t with { Title = Truncate((t.Title ?? "").Trim(), 300) }).ToList());
+
+    private static AnkiMiningSettingsDto CleanMining(AnkiMiningSettingsDto m) =>
+        new(AnkiMiningExisting.All.Contains(m.Existing) ? m.Existing : AnkiMiningExisting.Ask,
+            m.Parts ?? new AnkiMiningPartsDto(),
+            m.EmptyFields?.Where(p => AnkiFieldRoles.All.Contains(p.Key) && p.Value is "warn" or "deny").ToDictionary(p => p.Key, p => p.Value));
+
+    /// <summary>The setup's mining settings, or null for the defaults.</summary>
+    public static AnkiMiningSettingsDto? Mining(AnkiNoteTypeSetup setup)
+    {
+        if (string.IsNullOrEmpty(setup.MiningJson)) return null;
+        try
+        {
+            var m = JsonSerializer.Deserialize<AnkiMiningSettingsDto>(setup.MiningJson, Json);
+            return m == null ? null : CleanMining(m);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     public async Task<bool> SetKnownWordsSyncedAsync(string userId, DateTime syncedAt, DateTime? previous, CancellationToken ct)
@@ -184,7 +296,7 @@ public class AnkiSyncSetupService(UserDbContext userContext)
 
     private static AnkiNoteTypeSetupDto ToDto(AnkiNoteTypeSetup s) =>
         new(s.ModelName, s.Filter, Roles(s), s.Preset, s.KnownWords, s.ImportSentences, s.TakeFlags, s.FoldDuplicates, s.UpdateMainFields,
-            s.SentenceList, s.ScriptVersion);
+            s.SentenceList, s.ScriptVersion, Mining(s));
 
     private static string Truncate(string value, int max) => value.Length <= max ? value : value[..max];
 }

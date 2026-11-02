@@ -1,6 +1,7 @@
 import { useToast } from 'primevue/usetoast';
 import type { ExampleSentence, WordSummary } from '~/types';
 import { MineDenied } from '~/utils/miningWarnings';
+import type { NewCardTarget } from '~/utils/ankiSetups';
 
 /** What adding a sentence did: a new note, or the sentence joined the word's existing card. `warnings` lists fields left empty. */
 export type MineOutcome = { kind: 'created'; warnings: string[] } | { kind: 'existing'; added: boolean; sentences: number; warnings: string[] };
@@ -9,22 +10,27 @@ export type MineOutcome = { kind: 'created'; warnings: string[] } | { kind: 'exi
 export interface MineChoice {
   word: WordSummary;
   notes: number[];
+  /** The note type of the card that would get the sentence (the word's oldest note); empty when it couldn't be read. */
+  modelName: string;
+  /** Where a new note would go. */
+  target: NewCardTarget;
 }
 
 /**
- * Adding a sentence to Anki, the same on every page (n1miner). When the word already has a note the user chooses: add
- * the sentence to that card (the default) or create another note. Render `MineChoiceDialog` with `choice` and `answer`.
+ * Adding a sentence to Anki, the same on every page (n1miner). When the word already has a note, its note type's
+ * mining settings decide: add the sentence to that card without asking, or ask the user, defaulting to the card. Render
+ * `MineChoiceDialog` with `choice` and `answer`.
  */
 export function useMineSentence() {
   const toast = useToast();
-  const { addCard, existingNotes, addToExistingNote } = useMiningCards();
+  const { addCard, existingNotes, keptNote, miningFor, targetFor, addToExistingNote } = useMiningCards();
 
   const choice = ref<MineChoice | null>(null);
   let resolveChoice: ((answer: 'existing' | 'new' | null) => void) | null = null;
 
-  function ask(word: WordSummary, notes: number[]): Promise<'existing' | 'new' | null> {
+  function ask(next: MineChoice): Promise<'existing' | 'new' | null> {
     resolveChoice?.(null);
-    choice.value = { word, notes };
+    choice.value = next;
     return new Promise((resolve) => (resolveChoice = resolve));
   }
 
@@ -63,17 +69,21 @@ export function useMineSentence() {
    */
   async function mine(word: WordSummary, sentence: ExampleSentence): Promise<MineOutcome | null> {
     let notes: number[];
+    let kept: Awaited<ReturnType<typeof keptNote>> = null;
     try {
       notes = await existingNotes(word.reading);
+      if (notes.length) kept = await keptNote(notes);
     } catch (e) {
       failed(e, "Couldn't check Anki for the word");
       return null;
     }
 
-    const pick = notes.length > 0 ? await ask(word, notes) : 'new';
+    const modelName = kept?.modelName ?? '';
+    let pick: 'existing' | 'new' | null = 'new';
+    if (notes.length) pick = modelName && miningFor(modelName).existing === 'auto' ? 'existing' : await ask({ word, notes, modelName, target: targetFor(sentence) });
     if (pick === 'new') {
       try {
-        const result = await addCard({ word, sentence, wordSentences: 0 });
+        const result = await addCard({ word, sentence, wordSentences: 0 }, modelName || null);
         done(`Added ${word.reading} to Anki`, result.warnings);
         return { kind: 'created', warnings: result.warnings };
       } catch (e) {
@@ -83,10 +93,10 @@ export function useMineSentence() {
     }
     if (pick === 'existing') {
       try {
-        const result = await addToExistingNote(sentence, notes);
+        const result = await addToExistingNote(sentence, notes, kept);
         done(
           result.added
-            ? `Added to ${word.reading}, now ${result.sentences} sentences`
+            ? `Added to ${word.reading}${modelName ? ` on ${modelName}` : ''}, now ${result.sentences} sentences`
             : `${word.reading} already has this sentence (${result.sentences} sentences)`,
           result.warnings,
           result.added ? 'success' : 'info'

@@ -149,31 +149,155 @@ public class AnkiSyncTests(JitenWebApplicationFactory factory)
         (await Get("/api/anki-sync/setups")).GetProperty("knownWordsSyncedAt").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
+    private Task<HttpResponseMessage> PutTargets(object targets, string user = TestUsers.UserA) =>
+        _client.SendAsync(new HttpRequestMessage(HttpMethod.Put, "/api/anki-sync/card-target").WithUser(user).WithJsonContent(targets));
+
     [Fact]
-    public async Task TheCardTargetIsKeptOnTheServer()
+    public async Task TheCardTargetsAreKeptOnTheServer()
     {
-        (await Get("/api/anki-sync/card-target")).GetProperty("tags").GetString().Should().Be("jiten");
-        var put = await _client.SendAsync(new HttpRequestMessage(HttpMethod.Put, "/api/anki-sync/card-target").WithUser(TestUsers.UserA)
-            .WithJsonContent(new { deckName = "Mining", modelName = "Lapis+", tags = "jiten anime", padStartMs = 99999, padEndMs = 100 }));
+        var empty = await Get("/api/anki-sync/card-target");
+        empty.GetProperty("targets").EnumerateArray().Should().ContainSingle().Which.GetProperty("tags").GetString().Should().Be("jiten");
+
+        var put = await PutTargets(new
+        {
+            targets = new object[]
+            {
+                new { deckName = "Anime Mining", modelName = "Lapis+", tags = "jiten anime",
+                      when = new { mediaTypes = new[] { 1, 2, 99 }, titles = new[] { new { deckId = 7, title = "ゆるキャン△" }, new { deckId = 7, title = "again" } } } },
+                new { deckName = "Mining", modelName = "Lapis+", tags = "jiten", when = new { mediaTypes = new[] { 4 }, titles = Array.Empty<object>() } },
+            },
+            padStartMs = 99999, padEndMs = 100
+        });
         put.StatusCode.Should().Be(HttpStatusCode.NoContent);
 
-        var target = await Get("/api/anki-sync/card-target");
-        target.GetProperty("deckName").GetString().Should().Be("Mining");
-        target.GetProperty("padStartMs").GetInt32().Should().Be(5000);
-        target.GetProperty("emptyFields").ValueKind.Should().Be(JsonValueKind.Null, "the browser's defaults apply until policies are chosen");
-        (await Get("/api/anki-sync/card-target", TestUsers.UserB)).GetProperty("deckName").GetString().Should().Be("");
+        var saved = await Get("/api/anki-sync/card-target");
+        saved.GetProperty("padStartMs").GetInt32().Should().Be(5000);
+        var targets = saved.GetProperty("targets").EnumerateArray().ToList();
+        targets.Should().HaveCount(2);
+        var first = targets[0].GetProperty("when");
+        first.GetProperty("mediaTypes").EnumerateArray().Select(m => m.GetInt32()).Should().Equal(1, 2);
+        first.GetProperty("titles").EnumerateArray().Should().ContainSingle().Which.GetProperty("title").GetString().Should().Be("ゆるキャン△");
+        targets[1].GetProperty("when").ValueKind.Should().Be(JsonValueKind.Null, "the last target takes everything else");
+        (await Get("/api/anki-sync/card-target", TestUsers.UserB)).GetProperty("targets")[0].GetProperty("deckName").GetString().Should().Be("");
     }
 
     [Fact]
-    public async Task TheCardTargetKeepsWhatToDoWithEmptyFields()
+    public async Task OnlyTheLastTargetMayHaveNoRule()
     {
-        var put = await _client.SendAsync(new HttpRequestMessage(HttpMethod.Put, "/api/anki-sync/card-target").WithUser(TestUsers.UserA)
-            .WithJsonContent(new { deckName = "Mining", modelName = "Lapis+", tags = "", padStartMs = 0, padEndMs = 0,
-                                   emptyFields = new Dictionary<string, string> { ["sentenceEnglish"] = "warn", ["picture"] = "deny", ["source"] = "maybe" } }));
-        put.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        var put = await PutTargets(new
+        {
+            targets = new object[]
+            {
+                new { deckName = "A", modelName = "Lapis+", tags = "", when = new { mediaTypes = Array.Empty<int>(), titles = Array.Empty<object>() } },
+                new { deckName = "B", modelName = "Lapis+", tags = "", when = (object?)null },
+            },
+            padStartMs = 0, padEndMs = 0
+        });
+        put.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await PutTargets(new { targets = Array.Empty<object>(), padStartMs = 0, padEndMs = 0 })).StatusCode.Should().Be(HttpStatusCode.BadRequest);
 
-        var policies = (await Get("/api/anki-sync/card-target")).GetProperty("emptyFields");
-        policies.EnumerateObject().Select(p => $"{p.Name}={p.Value.GetString()}").Should().BeEquivalentTo("sentenceEnglish=warn", "picture=deny");
+        // A rule that holds only unknown media types or titles is empty once cleaned.
+        var junk = await PutTargets(new
+        {
+            targets = new object[]
+            {
+                new { deckName = "A", modelName = "Lapis+", tags = "", when = new { mediaTypes = new[] { 999 }, titles = new[] { new { deckId = 0, title = "x" } } } },
+                new { deckName = "B", modelName = "Lapis+", tags = "", when = (object?)null },
+            },
+            padStartMs = 0, padEndMs = 0
+        });
+        junk.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task AnOldCardTargetBecomesAListAndItsPoliciesMoveToTheSetup()
+    {
+        await PutSetup(Setup());
+        using (var scope = factory.Services.CreateScope())
+        {
+            var userDb = scope.ServiceProvider.GetRequiredService<UserDbContext>();
+            userDb.UserSettings.Add(new UserSettings
+            {
+                UserId = TestUsers.UserA,
+                AnkiCardTargetJson = """{"deckName":"Mining","modelName":"Lapis+","tags":"jiten","padStartMs":100,"padEndMs":200,"emptyFields":{"picture":"deny","sentenceEnglish":"warn"}}"""
+            });
+            await userDb.SaveChangesAsync();
+        }
+
+        var target = await Get("/api/anki-sync/card-target");
+        var only = target.GetProperty("targets").EnumerateArray().Should().ContainSingle().Subject;
+        only.GetProperty("deckName").GetString().Should().Be("Mining");
+        target.GetProperty("padEndMs").GetInt32().Should().Be(200);
+
+        var setup = (await Get("/api/anki-sync/setups")).GetProperty("setups")[0];
+        var policies = setup.GetProperty("mining").GetProperty("emptyFields");
+        policies.EnumerateObject().Select(p => $"{p.Name}={p.Value.GetString()}").Should().BeEquivalentTo("picture=deny", "sentenceEnglish=warn");
+        setup.GetProperty("mining").GetProperty("existing").GetString().Should().Be("ask");
+
+        using var check = factory.Services.CreateScope();
+        var json = await check.ServiceProvider.GetRequiredService<UserDbContext>().UserSettings.AsNoTracking()
+                              .Where(s => s.UserId == TestUsers.UserA).Select(s => s.AnkiCardTargetJson).SingleAsync();
+        json.Should().Contain("\"targets\"", "the converted target is saved, so the move happens once");
+    }
+
+    [Fact]
+    public async Task ASetupKeepsItsMiningSettings()
+    {
+        (await Get("/api/anki-sync/setups")).GetProperty("setups").GetArrayLength().Should().Be(0);
+        await PutSetup(Setup());
+        (await Get("/api/anki-sync/setups")).GetProperty("setups")[0].GetProperty("mining").ValueKind.Should().Be(JsonValueKind.Null, "the defaults apply");
+
+        var withMining = new Dictionary<string, object?>
+        {
+            ["modelName"] = "Lapis+", ["filter"] = null,
+            ["fieldRoles"] = new Dictionary<string, string> { ["Expression"] = "word", ["Sentence"] = "sentence", ["Sentences"] = "sentenceList" },
+            ["preset"] = null, ["knownWords"] = null, ["importSentences"] = true, ["takeFlags"] = true, ["foldDuplicates"] = true,
+            ["updateMainFields"] = false, ["sentenceList"] = "script", ["scriptVersion"] = null,
+            ["mining"] = new
+            {
+                existing = "auto", parts = new { audio = true, picture = false, english = true },
+                emptyFields = new Dictionary<string, string> { ["sentenceAudio"] = "deny", ["sentenceEnglish"] = "warn", ["nonsense"] = "deny", ["picture"] = "maybe" }
+            }
+        };
+        (await PutSetup(withMining)).StatusCode.Should().Be(HttpStatusCode.OK);
+        var mining = (await Get("/api/anki-sync/setups")).GetProperty("setups")[0].GetProperty("mining");
+        mining.GetProperty("existing").GetString().Should().Be("auto");
+        mining.GetProperty("parts").GetProperty("picture").GetBoolean().Should().BeFalse();
+        mining.GetProperty("emptyFields").EnumerateObject().Select(p => p.Name).Should().BeEquivalentTo("sentenceAudio", "sentenceEnglish");
+
+        // A save without mining settings keeps them.
+        await PutSetup(Setup());
+        (await Get("/api/anki-sync/setups")).GetProperty("setups")[0].GetProperty("mining").GetProperty("existing").GetString().Should().Be("auto");
+
+        withMining["mining"] = new { existing = "always" };
+        (await PutSetup(withMining)).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task NotesStoredWithoutTheirOwnSentenceAreListed()
+    {
+        // A Core 2000 note synced for its list only: in the store, with a mined sentence but none of its own.
+        const long coreNote = 1339252521736;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var userDb = scope.ServiceProvider.GetRequiredService<UserDbContext>();
+            var word = new MinedWord { UserId = TestUsers.UserA, Expression = "約束", Reading = "やくそく" };
+            userDb.MinedWords.Add(word);
+            await userDb.SaveChangesAsync();
+            userDb.MinedNotes.Add(new MinedNote { MinedWordId = word.MinedWordId, UserId = TestUsers.UserA, AnkiNoteId = coreNote, ModelName = "Core 2000", DeckName = "Core 2000" });
+            userDb.MinedSentences.Add(new MinedSentence
+            {
+                MinedWordId = word.MinedWordId, UserId = TestUsers.UserA, Text = "分かった、<b>約束</b>する。", Origin = MinedSentenceOrigin.Jiten, SortOrder = 0
+            });
+            await userDb.SaveChangesAsync();
+        }
+
+        var ids = await Get("/api/mined/notes");
+        ids.GetProperty("withoutSentence").EnumerateArray().Select(i => i.GetInt64()).Should().Equal(coreNote);
+        ids.GetProperty("ankiNoteIds").EnumerateArray().Select(i => i.GetInt64()).Should().Equal(coreNote);
+
+        // Importing the note's own sentence writes the central sentence table, which needs Postgres; it was checked against
+        // the session database and Anki's test profile instead (run notes).
     }
 
     [Fact]

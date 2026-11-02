@@ -30,7 +30,7 @@ public record ImportNoteDto(
 
 public record ImportNotesRequest(List<ImportNoteDto> Notes);
 
-/// <param name="Status">"imported", "already" (the note was imported before) or "failed".</param>
+/// <param name="Status">"imported", "already" (the note was imported before), "sentence" (it was, without a sentence of its own, and now has it) or "failed".</param>
 public record ImportNoteResult(long AnkiNoteId, string Status, long? MinedWordId, bool Matched, string? Origin, string? Error);
 
 public record MinedWordSummaryDto(long MinedWordId, int? WordId, byte? ReadingIndex, string Expression, string Reading, int Sentences, int Notes,
@@ -127,7 +127,8 @@ public class MinedSentenceService(
                                       .Select(n => new { n.AnkiNoteId, n.MinedWordId }).ToListAsync(ct))
                     .ToDictionary(n => n.AnkiNoteId, n => n.MinedWordId);
 
-        var pairs = notes.Select(n => (Word: PlainText(n.Expression), Reading: PlainText(n.Reading)))
+        // Only new notes need their word looked up.
+        var pairs = notes.Where(n => !known.ContainsKey(n.AnkiNoteId)).Select(n => (Word: PlainText(n.Expression), Reading: PlainText(n.Reading)))
                          .Where(p => p.Word.Length > 0).Distinct().ToList();
         var lookup = pairs.Count == 0
             ? new Dictionary<(string Word, string Reading), Core.Data.DeckWord>()
@@ -138,7 +139,32 @@ public class MinedSentenceService(
         {
             if (known.TryGetValue(note.AnkiNoteId, out var existingWordId))
             {
-                results.Add(new ImportNoteResult(note.AnkiNoteId, "already", existingWordId, false, null, null));
+                // A note recorded before its note type mapped a sentence (Core 2000's notes, synced for their list only) gets
+                // its own sentence now, first in the rotation.
+                var ownSentence = await userContext.MinedSentences.AnyAsync(s => s.UserId == userId && s.SourceAnkiNoteId == note.AnkiNoteId, ct);
+                if (ownSentence || PlainText(note.Sentence).Length == 0)
+                {
+                    results.Add(new ImportNoteResult(note.AnkiNoteId, "already", existingWordId, false, null, null));
+                    continue;
+                }
+
+                try
+                {
+                    var knownWord = await userContext.MinedWords.FirstAsync(w => w.MinedWordId == existingWordId, ct);
+                    var ownOrigin = DetectedOrigin.From(note);
+                    await AddSentenceAsync(userId, knownWord, note, ownOrigin, ct, first: true);
+                    knownWord.UpdatedAt = DateTime.UtcNow;
+                    await userContext.SaveChangesAsync(ct);
+                    results.Add(new ImportNoteResult(note.AnkiNoteId, "sentence", existingWordId, true, ownOrigin.Origin, null));
+                }
+                catch (Exception e) when (e is ArgumentException or FormatException or DbUpdateException)
+                {
+                    userContext.ChangeTracker.Clear();
+                    logger.LogWarning(e, "Couldn't import the sentence of Anki note {NoteId}", note.AnkiNoteId);
+                    results.Add(new ImportNoteResult(note.AnkiNoteId, "failed", existingWordId, false, null,
+                                                     e is DbUpdateException ? "Couldn't save the note's sentence." : e.Message));
+                }
+
                 continue;
             }
 
@@ -172,7 +198,7 @@ public class MinedSentenceService(
             }
         }
 
-        if (results.Any(r => r.Status == "imported")) backgroundJobs.Enqueue<SentenceParseJob>(job => job.ParsePending(CancellationToken.None));
+        if (results.Any(r => r.Status is "imported" or "sentence")) backgroundJobs.Enqueue<SentenceParseJob>(job => job.ParsePending(CancellationToken.None));
         return results;
     }
 
@@ -323,6 +349,12 @@ public class MinedSentenceService(
     public Task<List<long>> NoteIdsAsync(string userId, CancellationToken ct) =>
         userContext.MinedNotes.AsNoTracking().Where(n => n.UserId == userId).Select(n => n.AnkiNoteId).ToListAsync(ct);
 
+    /// <summary>Notes in the store that none of their word's sentences came from, such as notes synced for their list only.</summary>
+    public Task<List<long>> NoteIdsWithoutSentenceAsync(string userId, CancellationToken ct) =>
+        userContext.MinedNotes.AsNoTracking()
+                   .Where(n => n.UserId == userId && !userContext.MinedSentences.Any(s => s.UserId == userId && s.SourceAnkiNoteId == n.AnkiNoteId))
+                   .Select(n => n.AnkiNoteId).ToListAsync(ct);
+
     public async Task<MinedWordsPage> ListAsync(string userId, string? search, int page, CancellationToken ct)
     {
         var query = userContext.MinedWords.AsNoTracking().Where(w => w.UserId == userId);
@@ -389,10 +421,11 @@ public class MinedSentenceService(
         return word;
     }
 
-    private async Task AddSentenceAsync(string userId, MinedWord word, ImportNoteDto note, DetectedOrigin origin, CancellationToken ct)
+    /// <param name="first">Put the sentence before the word's others, as its main sentence, instead of after them.</param>
+    private async Task AddSentenceAsync(string userId, MinedWord word, ImportNoteDto note, DetectedOrigin origin, CancellationToken ct, bool first = false)
     {
-        var existing = await userContext.MinedSentences.Where(s => s.MinedWordId == word.MinedWordId)
-                                        .Select(s => (int?)s.SortOrder).MaxAsync(ct);
+        var orders = userContext.MinedSentences.Where(s => s.MinedWordId == word.MinedWordId).Select(s => (int?)s.SortOrder);
+        var existing = first ? await orders.MinAsync(ct) : await orders.MaxAsync(ct);
         var english = PlainText(note.English ?? "").Length > 0 ? note.English!.Trim() : null;
         var previous = PlainText(note.PreviousLine ?? "");
 
@@ -409,7 +442,7 @@ public class MinedSentenceService(
             MinedAt = DateTimeOffset.FromUnixTimeMilliseconds(note.AnkiNoteId).UtcDateTime,
             AnkiAudioFilename = note.AudioFilename, AnkiPictureFilename = note.PictureFilename,
             SourceAnkiNoteId = note.AnkiNoteId,
-            SortOrder = (existing ?? -1) + 1,
+            SortOrder = first ? (existing ?? 1) - 1 : (existing ?? -1) + 1,
         };
 
         // A Jiten sentence's media is cut again from the episode; anything else only exists as the copy on the note.

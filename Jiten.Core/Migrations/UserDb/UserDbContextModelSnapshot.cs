@@ -752,6 +752,9 @@ namespace Jiten.Core.Migrations.UserDb
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");
 
+                    b.Property<string>("MiningJson")
+                        .HasColumnType("jsonb");
+
                     b.Property<string>("ModelName")
                         .IsRequired()
                         .HasMaxLength(200)
