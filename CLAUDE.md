@@ -18,7 +18,7 @@ Jiten (https://jiten.moe) analyses Japanese media (visual novels, subtitles, boo
 
 Dependencies: Api and Cli use Core and Parser; Parser uses Core; Tests use Api and Parser.
 
-Feature designs and the running task list live in the vault, not this repo: `/vault/Tooling/jiten/fork/`, with open work in `tasks.md` there. Read the bundle's `conventions.md` before editing it.
+Feature designs and the running task list live in the vault, not this repo: `/vault/Tooling/jiten/fork/`, with open work in `tasks.md` there. Read the bundle's `conventions.md` before editing it. The `feature` skill (`.claude/skills/feature/`) runs a feature from request to merge: design, build, review, tests, screenshots and the vault update.
 
 ## Build & Run Commands
 
