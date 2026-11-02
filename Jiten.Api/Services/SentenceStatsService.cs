@@ -35,12 +35,15 @@ public interface ISentenceStatsService
     /// <summary>A title's example sentences with exactly one unknown content word, for the user, in sentence id order. Null when the deck doesn't exist.</summary>
     Task<IPlusOneListing?> GetIPlusOneHitsAsync(int deckId);
 
+    /// <summary>A title's example sentences under a mining rule, one hit per target word, in sentence id order. Null when the deck doesn't exist.</summary>
+    Task<IPlusOneListing?> GetMiningHitsAsync(int deckId, MiningRule rule);
+
     /// <summary>Display summaries keyed by sentence word key.</summary>
     Task<Dictionary<int, WordSummaryDto>> LoadWordSummariesAsync(IEnumerable<int> wordKeys);
 }
 
 /// <summary>An example sentence whose one unknown content word is <paramref name="WordKey"/>, at <paramref name="Position"/> for <paramref name="Length"/> characters.</summary>
-public sealed record IPlusOneHit(long SentenceId, int DeckId, int WordKey, byte Position, byte Length, float Difficulty, int TextLength);
+public sealed record IPlusOneHit(long SentenceId, int DeckId, int WordKey, byte Position, byte Length, float Difficulty, int TextLength, MiningStatus Status = MiningStatus.New);
 
 /// <param name="Checked">Example sentences judged; a long title holds more than the cap.</param>
 public sealed record IPlusOneListing(List<IPlusOneHit> Hits, int Checked);
@@ -231,6 +234,13 @@ public class SentenceStatsService(
         return known.Contains;
     }
 
+    private async Task<Dictionary<int, MiningStatus>> MiningStatuses(IEnumerable<int> wordKeys)
+    {
+        var forms = wordKeys.Distinct().Select(ExampleSentenceTokens.FromWordKey).ToList();
+        var states = await currentUser.GetKnownWordsState(forms);
+        return states.ToDictionary(kv => ExampleSentenceTokens.WordKey(kv.Key.WordId, kv.Key.ReadingIndex), kv => SentenceComprehension.MiningStatusOf(kv.Value));
+    }
+
     private async Task Fill(DeckSentenceStatsDto result, SentenceStats stats, List<Part> parts, bool summaryOnly)
     {
         result.HasData = stats.Total > 0;
@@ -262,15 +272,17 @@ public class SentenceStatsService(
         result.Milestones = stats.Milestones;
     }
 
-    public async Task<IPlusOneListing?> GetIPlusOneHitsAsync(int deckId)
+    public Task<IPlusOneListing?> GetIPlusOneHitsAsync(int deckId) => GetMiningHitsAsync(deckId, MiningRule.Default);
+
+    public async Task<IPlusOneListing?> GetMiningHitsAsync(int deckId, MiningRule rule)
     {
-        var key = $"iplusone-hits:{currentUser.UserId}:{deckId}:{await KnownStamp()}";
+        var key = $"iplusone-hits:{currentUser.UserId}:{deckId}:{rule.CacheKey}:{await KnownStamp()}";
         if (cache.Cache.TryGetValue(key, out IPlusOneListing? cached)) return cached;
 
         var parts = await LoadParts(deckId);
         if (parts == null) return null;
 
-        var listing = await ListIPlusOne(parts.Select(p => p.DeckId).Append(deckId).Distinct().ToList());
+        var listing = await ListIPlusOne(parts.Select(p => p.DeckId).Append(deckId).Distinct().ToList(), rule);
         cache.Cache.Set(key, listing, new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = CacheTtl, Size = listing.Hits.Count + 1 });
         return listing;
     }
@@ -287,9 +299,9 @@ public class SentenceStatsService(
             .ToList();
 
     /// <summary>
-    /// The decks' example sentences with exactly one unknown content word
+    /// The decks' example sentences that can be mined under the rule; by default, those with exactly one unknown content word
     /// </summary>
-    private async Task<IPlusOneListing> ListIPlusOne(List<int> deckIds)
+    private async Task<IPlusOneListing> ListIPlusOne(List<int> deckIds, MiningRule rule)
     {
         var rows = await context.ExampleSentences.AsNoTracking()
                                 .Where(s => deckIds.Contains(s.DeckId!.Value))
@@ -304,15 +316,13 @@ public class SentenceStatsService(
         var contentKeys = decoded.SelectMany(d => d.Tokens)
                                  .Where(t => !t.IsFunctionWord && !SentenceComprehension.IsNameEntry(t.WordId))
                                  .Select(t => t.WordKey);
-        var isKnown = await KnownLookup(contentKeys);
+        var statuses = await MiningStatuses(contentKeys);
+        var statusOf = (int wordKey) => statuses.GetValueOrDefault(wordKey, MiningStatus.New);
 
         var hits = new List<IPlusOneHit>();
         foreach (var (row, tokens) in decoded)
-        {
-            var unknown = SentenceComprehension.UnknownTokens(tokens, 0, (id, ri) => isKnown(ExampleSentenceTokens.WordKey(id, ri))).ToList();
-            if (unknown.Count == 0 || unknown.Any(t => t.WordKey != unknown[0].WordKey)) continue;
-            hits.Add(new IPlusOneHit(row.SentenceId, row.DeckId, unknown[0].WordKey, unknown[0].Position, unknown[0].Length, row.Difficulty, row.TextLength));
-        }
+        foreach (var (token, status) in SentenceComprehension.MiningTargets(tokens, statusOf, rule))
+            hits.Add(new IPlusOneHit(row.SentenceId, row.DeckId, token.WordKey, token.Position, token.Length, row.Difficulty, row.TextLength, status));
 
         return new IPlusOneListing(hits, decoded.Count);
     }

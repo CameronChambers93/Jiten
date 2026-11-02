@@ -14,6 +14,8 @@ namespace Jiten.Api.Services.Mining;
 /// <param name="WordTypes">verb, i-adjective, na-adjective, noun, adverb, expression, other; none means all.</param>
 /// <param name="Script">kana (written without kanji) or kanji; none means both.</param>
 /// <param name="ExcludeTerms">Words to leave out, matched against every written form of a word (the client sends what's already in Anki).</param>
+/// <param name="Statuses">new, learning, young, mature: the target word's status; none means new and learning.</param>
+/// <param name="OthersKnownAt">young or mature: how well every other content word must be known; none means young.</param>
 /// <param name="Layout">word (one row per word with its best sentences) or sentence.</param>
 public record MineRequest(
     List<int>? DeckIds = null,
@@ -30,12 +32,15 @@ public record MineRequest(
     List<string>? WordTypes = null,
     string? Script = null,
     List<string>? ExcludeTerms = null,
+    List<string>? Statuses = null,
+    string? OthersKnownAt = null,
     string Layout = "word",
     int Offset = 0);
 
 /// <param name="Rank">The word's rank in the chosen frequency source.</param>
 /// <param name="WordSentences">The word's sentences after the filters.</param>
-public record MineItemDto(WordSummaryDto Word, int? Rank, string WordType, int WordSentences, List<ExampleSentenceDto> Sentences);
+/// <param name="Status">new, learning, young or mature.</param>
+public record MineItemDto(WordSummaryDto Word, int? Rank, string WordType, string Status, int WordSentences, List<ExampleSentenceDto> Sentences);
 
 /// <param name="Total">Rows in the chosen layout (words or sentences).</param>
 /// <param name="Checked">Example sentences judged across the titles.</param>
@@ -83,7 +88,7 @@ public class MiningSentenceService(
 
     public async Task<MineResponse> SearchAsync(MineRequest request, CancellationToken ct)
     {
-        var (hits, checkedCount) = await CollectHits(request.DeckIds, ct);
+        var (hits, checkedCount) = await CollectHits(request.DeckIds, RuleOf(request), ct);
 
         var deckIds = hits.Select(h => h.DeckId).Distinct().ToList();
         if (request.RequireAudio)
@@ -140,7 +145,7 @@ public class MiningSentenceService(
         }
 
         var pageHits = page.SelectMany(p => p.Sentences).ToList();
-        var dtos = (await exampleSentences.BuildDtosAsync(pageHits.Select(h => h.SentenceId).ToList(), 0, 0)).ToDictionary(d => d.SentenceId);
+        var dtos = (await exampleSentences.BuildDtosAsync(pageHits.Select(h => h.SentenceId).Distinct().ToList(), 0, 0)).ToDictionary(d => d.SentenceId);
         var summaries = await sentenceStats.LoadWordSummariesAsync(page.Select(p => p.WordKey));
 
         var items = new List<MineItemDto>(page.Count);
@@ -151,16 +156,24 @@ public class MiningSentenceService(
             foreach (var hit in sentences)
             {
                 if (!dtos.TryGetValue(hit.SentenceId, out var dto)) continue;
-                dto.WordPosition = hit.Position;
-                dto.WordLength = hit.Length;
-                sentenceDtos.Add(dto);
+                // A sentence can be on the page for two words, so each gets its own copy
+                sentenceDtos.Add(dto.ForWord(hit.Position, hit.Length));
             }
 
             if (sentenceDtos.Count > 0)
-                items.Add(new MineItemDto(summary, words[wordKey].Rank, words[wordKey].WordType, byWord[wordKey].Count, sentenceDtos));
+                items.Add(new MineItemDto(summary, words[wordKey].Rank, words[wordKey].WordType, sentences[0].Status.ToString().ToLowerInvariant(), byWord[wordKey].Count, sentenceDtos));
         }
 
         return new MineResponse(items, total, byWord.Count, hits.Count, checkedCount, rankSource);
+    }
+
+    private static MiningRule RuleOf(MineRequest request)
+    {
+        var targets = (request.Statuses ?? [])
+                      .Select(s => Enum.TryParse<MiningStatus>(s, ignoreCase: true, out var status) && status != MiningStatus.Settled ? status : (MiningStatus?)null)
+                      .OfType<MiningStatus>()
+                      .ToHashSet();
+        return new MiningRule(targets.Count > 0 ? targets : MiningRule.Default.Targets, request.OthersKnownAt == "mature");
     }
 
     /// <summary>Unranked words sort after ranked ones in either direction.</summary>
@@ -184,7 +197,7 @@ public class MiningSentenceService(
     }
 
     /// <summary>The cached i+1 hits of each selected title, narrowed to the selected episodes.</summary>
-    private async Task<(List<IPlusOneHit> Hits, int Checked)> CollectHits(List<int>? deckIds, CancellationToken ct)
+    private async Task<(List<IPlusOneHit> Hits, int Checked)> CollectHits(List<int>? deckIds, MiningRule rule, CancellationToken ct)
     {
         Dictionary<int, HashSet<int>?> wanted; // title -> episodes (null = whole title)
         if (deckIds is { Count: > 0 })
@@ -210,7 +223,7 @@ public class MiningSentenceService(
         var checkedCount = 0;
         foreach (var (titleId, episodes) in wanted)
         {
-            var listing = await sentenceStats.GetIPlusOneHitsAsync(titleId);
+            var listing = await sentenceStats.GetMiningHitsAsync(titleId, rule);
             if (listing == null) continue;
             checkedCount += listing.Checked;
             hits.AddRange(episodes == null ? listing.Hits : listing.Hits.Where(h => episodes.Contains(h.DeckId)));

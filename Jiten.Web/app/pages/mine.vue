@@ -27,6 +27,7 @@
     word: WordSummary;
     rank: number | null;
     wordType: string;
+    status: string;
     wordSentences: number;
     sentences: ExampleSentence[];
   }
@@ -79,6 +80,18 @@
     { label: 'Other', value: 'other' },
   ];
 
+  const statusOptions = [
+    { label: 'New', value: 'new' },
+    { label: 'Learning', value: 'learning' },
+    { label: 'Young', value: 'young' },
+    { label: 'Mature', value: 'mature' },
+  ];
+  const defaultStatuses = ['new', 'learning'];
+  const othersOptions = [
+    { label: 'Young or better', value: 'young' },
+    { label: 'Mature only', value: 'mature' },
+  ];
+
   const filters = reactive({
     titles: ids(q.titles),
     episodes: ids(q.episodes),
@@ -91,6 +104,8 @@
     hideUnranked: q.ranked === '1',
     lengthMin: num(q.lmin),
     lengthMax: num(q.lmax),
+    statuses: str(q.status)?.split(',').filter(Boolean) ?? [...defaultStatuses],
+    othersKnownAt: str(q.others) ?? 'young',
     wordTypes: (str(q.types) ?? '').split(',').filter(Boolean),
     script: str(q.script) ?? 'any',
     requireEnglish: q.en === '1',
@@ -112,6 +127,8 @@
       ranked: f.hideUnranked ? '1' : undefined,
       lmin: f.lengthMin?.toString(),
       lmax: f.lengthMax?.toString(),
+      status: [...f.statuses].sort().join(',') === [...defaultStatuses].sort().join(',') ? undefined : f.statuses.join(',') || undefined,
+      others: f.othersKnownAt === 'young' ? undefined : f.othersKnownAt,
       types: f.wordTypes.join(',') || undefined,
       script: f.script === 'any' ? undefined : f.script,
       en: f.requireEnglish ? '1' : undefined,
@@ -132,6 +149,8 @@
       hideUnranked: false,
       lengthMin: null,
       lengthMax: null,
+      statuses: [...defaultStatuses],
+      othersKnownAt: 'young',
       wordTypes: [],
       script: 'any',
       requireEnglish: false,
@@ -220,6 +239,7 @@
   const loading = ref(false);
   const failed = ref(false);
   const expanded = ref<Set<number>>(new Set());
+  const showsLearnedWords = computed(() => filters.statuses.some((s) => s === 'young' || s === 'mature'));
   let requestId = 0;
 
   async function search(reset = true) {
@@ -243,6 +263,8 @@
           lengthMax: filters.lengthMax,
           requireEnglish: filters.requireEnglish,
           requireAudio: filters.requireAudio,
+          statuses: filters.statuses,
+          othersKnownAt: filters.othersKnownAt,
           wordTypes: filters.wordTypes,
           script: filters.script === 'any' ? null : filters.script,
           excludeTerms: filters.hideInAnki ? (ankiWords.value ?? []) : [],
@@ -277,7 +299,8 @@
   // ---- Mining: same flow as a title's Sentences page ----
   const cardSettingsVisible = ref(false);
   const { mine, choice: mineChoice, answer: answerMine } = useMineSentence();
-  const cardState = ref<Record<number, 'adding' | 'added'>>({});
+  // By word and sentence: with young or mature targets one sentence can be listed for several words.
+  const cardState = ref<Record<string, 'adding' | 'added'>>({});
   const minedWords = ref<Set<string>>(new Set());
   const audioLoading = ref<number | null>(null);
   const audioUrls = new Map<number, string>();
@@ -321,19 +344,24 @@
     player.play();
   }
 
+  function cardKey(word: WordSummary, sentence: ExampleSentence) {
+    return `${wordKey(word)}:${sentence.sentenceId}`;
+  }
+
   async function mineSentence(word: WordSummary, sentence: ExampleSentence) {
     if (!cardsConfigured.value) {
       cardSettingsVisible.value = true;
       return;
     }
-    cardState.value = { ...cardState.value, [sentence.sentenceId]: 'adding' };
+    const key = cardKey(word, sentence);
+    cardState.value = { ...cardState.value, [key]: 'adding' };
     const outcome = await mine(word, sentence);
     if (outcome) {
-      cardState.value = { ...cardState.value, [sentence.sentenceId]: 'added' };
+      cardState.value = { ...cardState.value, [key]: 'added' };
       minedWords.value = new Set(minedWords.value).add(wordKey(word));
       ankiWords.value?.push(word.reading);
     } else {
-      const { [sentence.sentenceId]: _, ...rest } = cardState.value;
+      const { [key]: _, ...rest } = cardState.value;
       cardState.value = rest;
     }
   }
@@ -410,7 +438,7 @@
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
         <h1 class="text-2xl font-bold">Mine</h1>
-        <p class="text-sm text-gray-600 dark:text-gray-300">Sentences where the target word is the only one you don't know yet, across your titles.</p>
+        <p class="text-sm text-gray-600 dark:text-gray-300">Sentences where you know every word but the target well enough, across your titles.</p>
       </div>
       <Button label="Card settings" icon="pi pi-cog" size="small" severity="secondary" outlined @click="cardSettingsVisible = true" />
     </div>
@@ -492,6 +520,25 @@
               </div>
             </div>
             <label class="flex flex-col gap-1">
+              <span class="text-sm font-medium">Target word status</span>
+              <MultiSelect
+                v-model="filters.statuses"
+                :options="statusOptions"
+                option-label="label"
+                option-value="value"
+                placeholder="New, Learning"
+                :max-selected-labels="4"
+                class="w-full"
+              />
+              <span v-if="showsLearnedWords && filters.hideInAnki" class="text-xs text-gray-500 dark:text-gray-400">
+                "Hide words already in Anki" may hide these.
+              </span>
+            </label>
+            <label class="flex flex-col gap-1">
+              <span class="text-sm font-medium">Other words must be</span>
+              <Select v-model="filters.othersKnownAt" :options="othersOptions" option-label="label" option-value="value" class="w-full" />
+            </label>
+            <label class="flex flex-col gap-1">
               <span class="text-sm font-medium">Word type</span>
               <MultiSelect
                 v-model="filters.wordTypes"
@@ -546,7 +593,7 @@
         <template #content>
           <div v-if="items.length === 0 && loading" class="h-24 rounded bg-surface-100 dark:bg-surface-800 animate-pulse" />
           <p v-else-if="failed && items.length === 0" class="text-gray-500 dark:text-gray-400">Couldn't load the sentences just now.</p>
-          <p v-else-if="items.length === 0 && summary" class="text-gray-500 dark:text-gray-400">No i+1 sentences match these filters.</p>
+          <p v-else-if="items.length === 0 && summary" class="text-gray-500 dark:text-gray-400">No sentences match these filters.</p>
           <template v-else>
             <p v-if="summary" class="text-sm text-gray-500 dark:text-gray-400 mb-2">
               {{ summary.totalWords.toLocaleString() }} words · {{ summary.totalSentences.toLocaleString() }} sentences · ranks from
@@ -566,6 +613,7 @@
                   </NuxtLink>
                   <span class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 tabular-nums whitespace-nowrap">
                     <i v-if="minedWords.has(wordKey(item.word))" v-tooltip.top="'Added to Anki'" class="pi pi-check text-green-600" />
+                    <Tag v-if="item.status !== 'new'" :value="item.status" severity="info" class="capitalize" />
                     <Tag :value="item.rank != null ? `#${item.rank.toLocaleString()}` : 'unranked'" severity="secondary" />
                     <span>{{ item.wordType }}</span>
                     <span>· {{ item.wordSentences.toLocaleString() }} {{ item.wordSentences === 1 ? 'sentence' : 'sentences' }}</span>
@@ -612,15 +660,15 @@
                       @click="playSentence(sentence.sentenceId, sentence.text)"
                     />
                     <Button
-                      v-tooltip.left="cardState[sentence.sentenceId] === 'added' ? 'Added to Anki' : 'Add to Anki'"
-                      :icon="cardState[sentence.sentenceId] === 'added' ? 'pi pi-check' : 'pi pi-plus'"
+                      v-tooltip.left="cardState[cardKey(item.word, sentence)] === 'added' ? 'Added to Anki' : 'Add to Anki'"
+                      :icon="cardState[cardKey(item.word, sentence)] === 'added' ? 'pi pi-check' : 'pi pi-plus'"
                       size="small"
-                      :severity="cardState[sentence.sentenceId] === 'added' ? 'success' : 'secondary'"
+                      :severity="cardState[cardKey(item.word, sentence)] === 'added' ? 'success' : 'secondary'"
                       text
                       rounded
-                      :aria-label="cardState[sentence.sentenceId] === 'added' ? 'Added to Anki' : 'Add to Anki'"
-                      :loading="cardState[sentence.sentenceId] === 'adding'"
-                      :disabled="!!cardState[sentence.sentenceId]"
+                      :aria-label="cardState[cardKey(item.word, sentence)] === 'added' ? 'Added to Anki' : 'Add to Anki'"
+                      :loading="cardState[cardKey(item.word, sentence)] === 'adding'"
+                      :disabled="!!cardState[cardKey(item.word, sentence)]"
                       @click="mineSentence(item.word, sentence)"
                     />
                   </div>
