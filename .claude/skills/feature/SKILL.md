@@ -99,11 +99,13 @@ Run, and record in the run notes what passed:
 2. Log in on both sites: `node scripts/login.mjs <base> <state.json>`. It reads `JITEN_USER` and `JITEN_PASSWORD` from the environment, else from `/worktrees/.tools/jiten-login.env` (mode 600, outside every repo). If neither has them, ask Cameron and write that file; never put credentials in the repo or vault.
 3. Seed the data the screens need on the **session database only**, through the API where possible. Record each seeded row in the run notes.
 4. Write a shots spec (see `scripts/shoot.mjs`) and run it against main (`before`) and the session (`after`). Look at every screenshot; fix selectors or the feature and retake if one is wrong.
+   - **Anki writes are real, on the `test` profile.** `shoot.mjs` sends the pages' AnkiConnect calls to the host's Anki and refuses every write unless the active profile is `test`. Never fake AnkiConnect to test a write. If Anki is on another profile, ask Cameron to switch. Steps a spec can't express go in a scratch script that does the same routing and profile check.
+   - Record the notes added (`shoot.mjs` prints their ids) in the run notes, with the seeded rows.
 5. Publish a side-by-side page from `compare-template.html`: a row per screen, a placeholder where main has no such screen, and a "Departures from the design" section from the run notes.
 
 ## 7. Commit gate
 
-Remove the seeded data, and confirm it's gone. Then gate with: what was built, test results, the comparison page link, departures, and anything not verified. On approval, commit on `session/<name>` with the attribution lines from the system reminder.
+Remove the seeded data and the notes added in Anki's `test` profile (`deleteNotes`, after checking `getActiveProfile`), and confirm they're gone. Then gate with: what was built, test results, the comparison page link, departures, and anything not verified. On approval, commit on `session/<name>` with the attribution lines from the system reminder.
 
 ## 8. Follow-ups
 
