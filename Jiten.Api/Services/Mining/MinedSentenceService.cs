@@ -55,6 +55,18 @@ public record MinedWordDto(long MinedWordId, int? WordId, byte? ReadingIndex, st
 public record AddSentenceRequest(long AnkiNoteId, long ExampleSentenceId, string Sentence, string? Furigana, string? English, string? EnglishOrigin,
                                  string? SourceTitle, string? AudioFilename, string? PictureFilename);
 
+/// <summary>
+/// A note the browser just created in Anki for one of Jiten's example sentences, its fields and media already written. The
+/// sentence is in the store's form, as <see cref="AddSentenceRequest"/> sends it, before the target template.
+/// </summary>
+public record CreatedNoteRequest(long AnkiNoteId, string ModelName, string DeckName, int? WordId, byte? ReadingIndex, string Expression, string Reading,
+                                 long ExampleSentenceId, string Sentence, string? Furigana, string? English, string? EnglishOrigin, string? SourceTitle,
+                                 string? AudioFilename, string? PictureFilename)
+{
+    public AddSentenceRequest AsSentence() =>
+        new(AnkiNoteId, ExampleSentenceId, Sentence, Furigana, English, EnglishOrigin, SourceTitle, AudioFilename, PictureFilename);
+}
+
 /// <param name="AnkiNoteId">The word's kept note (the oldest), which <paramref name="SentencesHtml"/> is for.</param>
 /// <param name="Added">False when the word already had the sentence; nothing changed.</param>
 /// <param name="Sentences">The word's sentences, counting this one.</param>
@@ -184,32 +196,107 @@ public class MinedSentenceService(
         var added = sentence == null;
         if (sentence == null)
         {
-            var english = PlainText(request.English ?? "").Length > 0 ? Truncate(request.English!.Trim(), 4000) : null;
-            sentence = new MinedSentence
-            {
-                MinedWordId = word.MinedWordId, UserId = userId,
-                Text = Truncate(request.Sentence.Trim(), 4000),
-                Furigana = PlainText(request.Furigana ?? "").Length > 0 ? Truncate(request.Furigana!.Trim(), 8000) : null,
-                English = english,
-                EnglishOrigin = english != null && request.EnglishOrigin is "subtitles" or "ai" ? request.EnglishOrigin : null,
-                Origin = MinedSentenceOrigin.Jiten, ExampleSentenceId = request.ExampleSentenceId,
-                SourceTitle = string.IsNullOrWhiteSpace(request.SourceTitle) ? null : Truncate(request.SourceTitle.Trim(), 300),
-                MinedAt = DateTime.UtcNow,
-                AnkiAudioFilename = string.IsNullOrWhiteSpace(request.AudioFilename) ? null : Truncate(request.AudioFilename, 500),
-                AnkiPictureFilename = string.IsNullOrWhiteSpace(request.PictureFilename) ? null : Truncate(request.PictureFilename, 500),
-                SortOrder = word.Sentences.Count == 0 ? 0 : word.Sentences.Max(s => s.SortOrder) + 1,
-            };
-            word.Sentences.Add(sentence);
-            word.UpdatedAt = DateTime.UtcNow;
-            await userContext.SaveChangesAsync(ct);
-
-            await using var jiten = await contextFactory.CreateDbContextAsync(ct);
-            await MinedLineStore.SetDeckSourceAsync(jiten, request.ExampleSentenceId, sentence.SourceTitle, ct);
+            sentence = NewJitenSentence(userId, word, request, null);
+            await SaveNewSentenceAsync(word, sentence, ct);
         }
 
         var write = added ? (await sync.NoteWritesAsync(userId, word.MinedWordId, ct)).FirstOrDefault() : null;
         var kept = write?.AnkiNoteId ?? word.Notes.Where(n => n.FoldingInto == null).Min(n => n.AnkiNoteId);
         return new AddSentenceResult(kept, sentence.MinedSentenceId, added, word.Sentences.Count, write);
+    }
+
+    /// <summary>
+    /// Records a note the browser just created for one of Jiten's example sentences, as an import of it would, but from the
+    /// sentence as Jiten built it rather than as read back from the note. Its main fields are recorded as written, so Sync
+    /// leaves them until the word's main sentence changes. A note already in the store is left as it is.
+    /// </summary>
+    public async Task<AddSentenceResult> RecordCreatedAsync(string userId, CreatedNoteRequest request, CancellationToken ct)
+    {
+        var text = PlainText(request.Sentence);
+        if (text.Length == 0) throw new ArgumentException("The sentence is empty.");
+        var expression = PlainText(request.Expression);
+        if (expression.Length == 0) throw new ArgumentException("The note has no word.");
+
+        var existing = await userContext.MinedNotes.AsNoTracking()
+                                        .FirstOrDefaultAsync(n => n.UserId == userId && n.AnkiNoteId == request.AnkiNoteId, ct);
+        if (existing != null)
+        {
+            // Recorded before (a retry), or imported by a Sync that ran in between.
+            var known = await userContext.MinedWords.AsNoTracking().AsSplitQuery().Include(w => w.Notes).Include(w => w.Sentences)
+                                         .FirstAsync(w => w.MinedWordId == existing.MinedWordId, ct);
+            var own = known.Sentences.FirstOrDefault(s => s.SourceAnkiNoteId == request.AnkiNoteId) ?? known.Sentences.MinBy(s => s.SortOrder);
+            var keptNote = known.Notes.Where(n => n.FoldingInto == null).Select(n => (long?)n.AnkiNoteId).Min() ?? request.AnkiNoteId;
+            return new AddSentenceResult(keptNote, own?.MinedSentenceId ?? 0, false, known.Sentences.Count, null);
+        }
+
+        var word = await FindOrCreateWordAsync(userId, expression, PlainText(request.Reading), request.WordId, request.ReadingIndex, ct);
+        await userContext.Entry(word).Collection(w => w.Notes).LoadAsync(ct);
+        await userContext.Entry(word).Collection(w => w.Sentences).LoadAsync(ct);
+        var note = new MinedNote
+        {
+            MinedWordId = word.MinedWordId, UserId = userId, AnkiNoteId = request.AnkiNoteId,
+            ModelName = Truncate(request.ModelName, 200), DeckName = Truncate(request.DeckName, 200)
+        };
+        word.Notes.Add(note);
+
+        // A word already in Anki may have this line already ("Create new" on it); the new note shows that sentence.
+        await sync.FillAsync(userId, word.Sentences, ct);
+        var sentence = word.Sentences.FirstOrDefault(s => s.ExampleSentenceId == request.ExampleSentenceId || PlainText(s.Shown) == text);
+        var added = sentence == null;
+        if (sentence == null)
+        {
+            sentence = NewJitenSentence(userId, word, request.AsSentence(), request.AnkiNoteId);
+            await SaveNewSentenceAsync(word, sentence, ct);
+        }
+        else await userContext.SaveChangesAsync(ct);
+
+        // The source title is the line's, not the row's: read it as Sync will, so the hash is the one Sync computes.
+        (sentence.SourceTitle, sentence.SourceUrl) = (null, null);
+        await sync.FillAsync(userId, [sentence], ct);
+        var main = MinedSyncService.MainFields(sentence, await sync.TargetTemplateAsync(userId, ct));
+        note.FieldsSentenceId = sentence.MinedSentenceId;
+        note.FieldsHash = main.Hash;
+        await userContext.SaveChangesAsync(ct);
+
+        var write = (await sync.NoteWritesAsync(userId, word.MinedWordId, ct)).FirstOrDefault();
+        var kept = write?.AnkiNoteId ?? word.Notes.Where(n => n.FoldingInto == null).Min(n => n.AnkiNoteId);
+        // Sync leaves the new note's main fields alone while they show the word's main sentence. Then they come along as
+        // Sync renders them, so the browser corrects any it wrote differently (the line may carry an earlier source title).
+        // When the main sentence is another one, the write already holds it, as Sync would write it.
+        if (kept == request.AnkiNoteId && write?.Main == null && await sync.UpdatesMainFieldsAsync(userId, note.ModelName, ct))
+            write = (write ?? new NoteWriteDto(request.AnkiNoteId, note.ModelName, null, null)) with { Main = main };
+        return new AddSentenceResult(kept, sentence.MinedSentenceId, added, word.Sentences.Count, write);
+    }
+
+    /// <summary>One of Jiten's example sentences for a word, last in its rotation, as both ways of mining it store it.</summary>
+    private static MinedSentence NewJitenSentence(string userId, MinedWord word, AddSentenceRequest request, long? sourceAnkiNoteId)
+    {
+        var english = PlainText(request.English ?? "").Length > 0 ? Truncate(request.English!.Trim(), 4000) : null;
+        return new MinedSentence
+        {
+            MinedWordId = word.MinedWordId, UserId = userId,
+            Text = Truncate(request.Sentence.Trim(), 4000),
+            Furigana = PlainText(request.Furigana ?? "").Length > 0 ? Truncate(request.Furigana!.Trim(), 8000) : null,
+            English = english,
+            EnglishOrigin = english != null && request.EnglishOrigin is "subtitles" or "ai" ? request.EnglishOrigin : null,
+            Origin = MinedSentenceOrigin.Jiten, ExampleSentenceId = request.ExampleSentenceId,
+            SourceTitle = string.IsNullOrWhiteSpace(request.SourceTitle) ? null : Truncate(request.SourceTitle.Trim(), 300),
+            MinedAt = DateTime.UtcNow,
+            AnkiAudioFilename = string.IsNullOrWhiteSpace(request.AudioFilename) ? null : Truncate(request.AudioFilename, 500),
+            AnkiPictureFilename = string.IsNullOrWhiteSpace(request.PictureFilename) ? null : Truncate(request.PictureFilename, 500),
+            SourceAnkiNoteId = sourceAnkiNoteId,
+            SortOrder = word.Sentences.Count == 0 ? 0 : word.Sentences.Max(s => s.SortOrder) + 1,
+        };
+    }
+
+    private async Task SaveNewSentenceAsync(MinedWord word, MinedSentence sentence, CancellationToken ct)
+    {
+        word.Sentences.Add(sentence);
+        word.UpdatedAt = DateTime.UtcNow;
+        await userContext.SaveChangesAsync(ct);
+
+        await using var jiten = await contextFactory.CreateDbContextAsync(ct);
+        if (sentence.ExampleSentenceId is { } line) await MinedLineStore.SetDeckSourceAsync(jiten, line, sentence.SourceTitle, ct);
     }
 
     /// <summary>The card's word fields for words picked out of a sentence: written form, furigana and first meaning.</summary>

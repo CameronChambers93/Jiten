@@ -1,8 +1,9 @@
 import { useToast } from 'primevue/usetoast';
 import type { ExampleSentence, WordSummary } from '~/types';
+import { MineDenied } from '~/utils/miningWarnings';
 
-/** What adding a sentence did: a new note, or the sentence joined the word's existing card. */
-export type MineOutcome = { kind: 'created' } | { kind: 'existing'; added: boolean; sentences: number };
+/** What adding a sentence did: a new note, or the sentence joined the word's existing card. `warnings` lists fields left empty. */
+export type MineOutcome = { kind: 'created'; warnings: string[] } | { kind: 'existing'; added: boolean; sentences: number; warnings: string[] };
 
 /** A word already in Anki, waiting for the user to choose between its existing card and a new note. */
 export interface MineChoice {
@@ -33,7 +34,24 @@ export function useMineSentence() {
     resolveChoice = null;
   }
 
+  /** The success line, or a warning that stays until closed when fields were left empty. */
+  function done(summary: string, warnings: string[], severity: 'success' | 'info' = 'success') {
+    if (warnings.length) toast.add({ severity: 'warn', summary, detail: warnings.join('\n'), group: 'bottom', styleClass: 'whitespace-pre-line' });
+    else toast.add({ severity, summary, life: severity === 'success' ? 2500 : 3000, group: 'bottom' });
+  }
+
   function failed(e: unknown, summary: string) {
+    if (e instanceof MineDenied) {
+      // Stays until closed, like a warning: it says what to fix.
+      toast.add({
+        severity: 'error',
+        summary,
+        detail: [...e.lines, 'Card settings decide which empty fields stop a card.'].join('\n'),
+        group: 'bottom',
+        styleClass: 'whitespace-pre-line',
+      });
+      return;
+    }
     const err = e as { data?: { message?: string }; message?: string } | null;
     const detail = e instanceof TypeError ? "Couldn't reach AnkiConnect at 127.0.0.1:8765. Is Anki open?" : (err?.data?.message ?? err?.message);
     toast.add({ severity: 'error', summary, detail, life: 6000, group: 'bottom' });
@@ -55,28 +73,27 @@ export function useMineSentence() {
     const pick = notes.length > 0 ? await ask(word, notes) : 'new';
     if (pick === 'new') {
       try {
-        await addCard({ word, sentence, wordSentences: 0 });
-        toast.add({ severity: 'success', summary: `Added ${word.reading} to Anki`, life: 2500, group: 'bottom' });
-        return { kind: 'created' };
+        const result = await addCard({ word, sentence, wordSentences: 0 });
+        done(`Added ${word.reading} to Anki`, result.warnings);
+        return { kind: 'created', warnings: result.warnings };
       } catch (e) {
-        failed(e, "Couldn't add the card");
+        failed(e, e instanceof MineDenied ? `Didn't add ${word.reading} to Anki` : "Couldn't add the card");
         return null;
       }
     }
     if (pick === 'existing') {
       try {
         const result = await addToExistingNote(sentence, notes);
-        toast.add({
-          severity: result.added ? 'success' : 'info',
-          summary: result.added
+        done(
+          result.added
             ? `Added to ${word.reading}, now ${result.sentences} sentences`
             : `${word.reading} already has this sentence (${result.sentences} sentences)`,
-          life: 3000,
-          group: 'bottom',
-        });
-        return { kind: 'existing', added: result.added, sentences: result.sentences };
+          result.warnings,
+          result.added ? 'success' : 'info'
+        );
+        return { kind: 'existing', added: result.added, sentences: result.sentences, warnings: result.warnings };
       } catch (e) {
-        failed(e, "Couldn't add the sentence to the card");
+        failed(e, e instanceof MineDenied ? `Didn't add the sentence to ${word.reading}` : "Couldn't add the sentence to the card");
         return null;
       }
     }

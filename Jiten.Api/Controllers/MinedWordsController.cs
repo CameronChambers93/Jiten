@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using Jiten.Api.Services;
 using Jiten.Api.Services.Mining;
 using Jiten.Core.Data.User;
@@ -124,6 +125,26 @@ public class MinedWordsController(MinedSentenceService mined, MinedSyncService s
         catch (ArgumentException e)
         {
             return BadRequest(new { message = e.Message });
+        }
+    }
+
+    [HttpPost("notes/created")]
+    [SwaggerOperation(Summary = "Records a note just created in Anki for an example sentence; returns what to write to the word's kept note")]
+    public async Task<IActionResult> NoteCreated([FromBody] CreatedNoteRequest request, CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        try
+        {
+            return Ok(await mined.RecordCreatedAsync(userId, request, ct));
+        }
+        catch (ArgumentException e)
+        {
+            return BadRequest(new { message = e.Message });
+        }
+        catch (DbUpdateException)
+        {
+            // Recorded at the same moment by another request or a Sync.
+            return Conflict(new { message = "The note was recorded at the same time by another request." });
         }
     }
 

@@ -1,8 +1,9 @@
 import type { DeckIPlusOneSentence, ExampleSentence, Word } from '~/types';
 import { ankiConnect } from '~/composables/useAnkiConnect';
 import { ankiPitchCategories, ankiPitchPositions } from '~/utils/pitchAccent';
-import { ankiSearchValue, fieldsFor, setupQuery, type AnkiNoteTypeSetup, type FieldRole } from '~/utils/ankiSetups';
-import { noteWriteFields, type NoteWrite } from '~/utils/ankiNoteWrite';
+import { ankiSearchValue, fieldFor, fieldsFor, setupQuery, type AnkiNoteTypeSetup, type FieldRole } from '~/utils/ankiSetups';
+import { mainFieldValues, noteWriteFields, type MainFields, type NoteWrite } from '~/utils/ankiNoteWrite';
+import { DEFAULT_EMPTY_FIELDS, emptyFieldWarnings, failureReason, MineDenied, rolesWith, type EmptyReasons } from '~/utils/miningWarnings';
 import type { AnkiNoteInfo } from '~/utils/minedImport';
 import {
   ankiSentenceFurigana,
@@ -57,6 +58,30 @@ export interface AddedSentence {
   write: NoteWrite | null;
 }
 
+/** What mining a sentence did, with a line for each field it left empty that the card settings warn about. */
+export interface MinedResult {
+  ankiNoteId: number;
+  /** False when the word already had the sentence. */
+  added: boolean;
+  sentences: number;
+  warnings: string[];
+}
+
+/** A sentence as both ways of mining send it to `api/mined`: the word in bold, before the target template. */
+interface BuiltSentence {
+  body: {
+    exampleSentenceId: number;
+    sentence: string;
+    furigana: string | null;
+    english: string | null;
+    englishOrigin: string | null;
+    sourceTitle: string | null;
+    audioFilename: string | null;
+    pictureFilename: string | null;
+  };
+  reasons: EmptyReasons;
+}
+
 /** The word's frequency rank for a sort field, or empty when Jiten has none. */
 function wordFrequency(details: Word | null, readingIndex: number): string {
   const rank = details && [details.mainReading, ...details.alternativeReadings].find((r) => r.readingIndex === readingIndex)?.frequencyRank;
@@ -72,7 +97,7 @@ async function blobToBase64(blob: Blob): Promise<string> {
 
 export function useMiningCards() {
   const { $api } = useNuxtApp();
-  const { forCard: englishForCard, forCardTranslation } = useSentenceTranslation();
+  const { forCardTranslation, loadOptions: loadTranslationOptions } = useSentenceTranslation();
   const { importNotes } = useMinedImport();
   const store = useJitenStore();
   const anki = useAnkiSetups();
@@ -99,29 +124,133 @@ export function useMiningCards() {
 
   /**
    * The sentence's audio and screenshot, cut from its episode. Without a linked video the audio is text-to-speech and
-   * there is no screenshot.
+   * there is no screenshot. A part that fails is left out, with the reason.
    */
-  async function cardMedia(sentenceId: number, wantAudio: boolean, wantPicture: boolean): Promise<{ audio: CardFile | null; picture: CardFile | null }> {
+  async function cardMedia(
+    sentenceId: number,
+    wantAudio: boolean,
+    wantPicture: boolean
+  ): Promise<{ audio: CardFile | null; picture: CardFile | null; reasons: EmptyReasons }> {
+    const reasons: EmptyReasons = {};
     const audio = async (): Promise<CardFile | null> => {
       try {
         return { blob: await fetchAudio(sentenceId), filename: `jiten_${sentenceId}.mp3` };
       } catch (e) {
-        if (!isNotFound(e)) throw e;
+        if (!isNotFound(e)) {
+          reasons.sentenceAudio = failureReason('Cutting the audio', e);
+          return null;
+        }
+      }
+      try {
         const voice = store.ttsVoice === 'random' ? 'female' : store.ttsVoice;
         const blob = await $api<Blob>(`tts/sentence/${sentenceId}`, { responseType: 'blob', query: { voice } });
         return { blob, filename: `jiten_${sentenceId}.ogg` };
+      } catch (e) {
+        reasons.sentenceAudio = failureReason('Text-to-speech', e);
+        return null;
       }
     };
     const picture = async (): Promise<CardFile | null> => {
       try {
         return { blob: await fetchPicture(sentenceId), filename: `jiten_${sentenceId}.jpg` };
       } catch (e) {
-        if (isNotFound(e)) return null;
-        throw e;
+        reasons.picture = isNotFound(e) ? 'this title has no linked video' : failureReason('Cutting the screenshot', e);
+        return null;
       }
     };
     const [a, p] = await Promise.all([wantAudio ? audio() : null, wantPicture ? picture() : null]);
-    return { audio: a, picture: p };
+    return { audio: a, picture: p, reasons };
+  }
+
+  /** The English a card gets, with why there's none: null and no reason when card English is off. */
+  async function cardEnglish(sentenceId: number): Promise<{ text: string | null; origin: string | null; reason?: string }> {
+    try {
+      const translation = await forCardTranslation(sentenceId);
+      if (translation?.text) return { text: escapeFieldText(translation.text), origin: translation.origin };
+      const mode = (await loadTranslationOptions())?.cardMode;
+      return mode === 'off' || !mode ? { text: null, origin: null } : { text: null, origin: null, reason: 'no subtitles or AI translation for this line' };
+    } catch (e) {
+      // A failed translation leaves the sentence without English rather than losing it.
+      return { text: null, origin: null, reason: failureReason('Translation', e) };
+    }
+  }
+
+  /**
+   * The sentence as both ways of mining store it, its media already in Anki's collection: one builder, so a new note
+   * and an existing one get the same text.
+   */
+  async function buildSentence(sentence: ExampleSentence, want: { audio: boolean; picture: boolean; english: boolean }): Promise<BuiltSentence> {
+    const [media, english] = await Promise.all([
+      cardMedia(sentence.sentenceId, want.audio, want.picture),
+      want.english
+        ? cardEnglish(sentence.sentenceId)
+        : Promise.resolve({ text: null, origin: null } as { text: string | null; origin: string | null; reason?: string }),
+    ]);
+    const reasons: EmptyReasons = { ...media.reasons };
+    if (english.reason) reasons.sentenceEnglish = english.reason;
+    for (const [role, file] of [
+      ['sentenceAudio', media.audio],
+      ['picture', media.picture],
+    ] as const) {
+      if (!file) continue;
+      try {
+        await ankiConnect('storeMediaFile', { filename: file.filename, data: await blobToBase64(file.blob) });
+      } catch (e) {
+        if (e instanceof TypeError) throw e;
+        reasons[role] = failureReason('Storing the file in Anki', e);
+        if (role === 'sentenceAudio') media.audio = null;
+        else media.picture = null;
+      }
+    }
+    return {
+      body: {
+        exampleSentenceId: sentence.sentenceId,
+        sentence: boldTarget(sentence),
+        furigana: sentence.furigana?.length ? ankiSentenceFurigana(sentence.text, sentence.furigana, sentence) : null,
+        english: english.text,
+        englishOrigin: english.origin,
+        sourceTitle: sourceLabel(sentence) || null,
+        audioFilename: media.audio?.filename ?? null,
+        pictureFilename: media.picture?.filename ?? null,
+      },
+      reasons,
+    };
+  }
+
+  /** The roles reported after the writes: those that warn, and those that deny but still ended up empty. */
+  function warnRoles(): readonly FieldRole[] {
+    return rolesWith(anki.cardTarget.value.emptyFields ?? DEFAULT_EMPTY_FIELDS, 'warn', 'deny');
+  }
+
+  /** The roles that stop mining when they would be empty. */
+  function denyRoles(): FieldRole[] {
+    return rolesWith(anki.cardTarget.value.emptyFields ?? DEFAULT_EMPTY_FIELDS, 'deny');
+  }
+
+  /** Whether the note type's setup writes a sentence list but has no field for it, or the note lacks that field. */
+  function listFieldMissing(modelName: string, fields?: Record<string, unknown>): boolean {
+    const setup = anki.setupFor(modelName);
+    if (!setup || setup.sentenceList === 'none') return false;
+    const field = fieldFor(setup.fieldRoles, 'sentenceList');
+    return !field || (fields != null && !(field in fields));
+  }
+
+  /** The note's fields as Anki has them now; empty when it can't be read. */
+  async function noteFields(ankiNoteId: number): Promise<Record<string, { value: string }> | null> {
+    try {
+      const [note] = await ankiConnect<(AnkiNoteInfo | Record<string, never>)[]>('notesInfo', { notes: [ankiNoteId] });
+      return note && 'noteId' in note ? note.fields : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** A missing sentence list field, as a warning: the note type's name and the field Sync writes to. */
+  function missingListWarning(modelName: string): string {
+    const field = fieldFor(anki.setupFor(modelName)?.fieldRoles ?? {}, 'sentenceList');
+    return field
+      ? `${field}: ${modelName} has no such field, so the sentence list wasn't written. Sync on Mined words can add it.`
+      : `Sentence list: ${modelName} has no field for it in Anki settings, so the sentence list wasn't written.`;
   }
 
   /** The setups whose notes count as the word being in Anki: those with sentence actions and a Word field. */
@@ -171,14 +300,15 @@ export function useMiningCards() {
 
   /**
    * Writes Sync's sentence list and main fields to a note through its note type's roles, skipping fields that already
-   * hold the value. Records main fields written, so they aren't written again.
+   * hold the value. Records main fields written, so they aren't written again. `fields` is the note's fields after the
+   * write; null when the note couldn't be read.
    */
   async function writeNote(
     write: NoteWrite,
     info?: AnkiNoteInfo,
     record = true
-  ): Promise<{ updated: boolean; missingList: boolean; mainWritten: MainWritten | null }> {
-    const none = { updated: false, missingList: false, mainWritten: null };
+  ): Promise<{ updated: boolean; missingList: boolean; mainWritten: MainWritten | null; fields: Record<string, { value: string }> | null }> {
+    const none = { updated: false, missingList: false, mainWritten: null, fields: null };
     const setup = anki.setupFor(write.modelName);
     if (!setup) return none;
     const note = info ?? (await ankiConnect<(AnkiNoteInfo | Record<string, never>)[]>('notesInfo', { notes: [write.ankiNoteId] }))[0];
@@ -187,7 +317,9 @@ export function useMiningCards() {
     if (Object.keys(fields).length) await ankiConnect('updateNoteFields', { note: { id: write.ankiNoteId, fields } });
     const mainWritten = write.main ? { ankiNoteId: write.ankiNoteId, minedSentenceId: write.main.minedSentenceId, hash: write.main.hash } : null;
     if (mainWritten && record) await recordMainWritten([mainWritten]);
-    return { updated: Object.keys(fields).length > 0, missingList, mainWritten };
+    const after = { ...note.fields };
+    for (const [name, value] of Object.entries(fields)) after[name] = { ...after[name], value };
+    return { updated: Object.keys(fields).length > 0, missingList, mainWritten, fields: after };
   }
 
   /** Records main fields written, so they aren't written again. */
@@ -200,7 +332,7 @@ export function useMiningCards() {
    * store, its media goes into Anki's collection, and the kept note's Sentences field is rewritten. Notes not in the
    * store yet (a Yomitan card never synced) are imported first, so their own sentence stays on the card.
    */
-  async function addToExistingNote(sentence: ExampleSentence, noteIds: number[]): Promise<AddedSentence> {
+  async function addToExistingNote(sentence: ExampleSentence, noteIds: number[]): Promise<MinedResult> {
     const { ankiNoteIds } = await $api<{ ankiNoteIds: number[] }>('mined/notes');
     const known = new Set(ankiNoteIds);
     const missing = noteIds.filter((id) => !known.has(id));
@@ -209,51 +341,91 @@ export function useMiningCards() {
       if (failed) throw new Error(failed.error ?? "Couldn't read the existing note");
     }
 
-    const [media, translation] = await Promise.all([
-      cardMedia(sentence.sentenceId, true, true),
-      // A failed translation leaves the sentence without English rather than losing it.
-      forCardTranslation(sentence.sentenceId).catch(() => null),
-    ]);
-    for (const file of [media.audio, media.picture]) {
-      if (file) await ankiConnect('storeMediaFile', { filename: file.filename, data: await blobToBase64(file.blob) });
+    const built = await buildSentence(sentence, { audio: true, picture: true, english: true });
+
+    // Denied parts stop the sentence before the store or the note changes.
+    const deny = denyRoles();
+    if (deny.length) {
+      const lines = emptyFieldWarnings({
+        fieldRoles: {},
+        fields: {},
+        warn: deny,
+        reasons: built.reasons,
+        parts: ['sentenceEnglish', 'sentenceAudio', 'picture'],
+      });
+      if (deny.includes('sentenceList')) {
+        const [kept] = await ankiConnect<(AnkiNoteInfo | Record<string, never>)[]>('notesInfo', { notes: [noteIds[0]] });
+        if (kept && 'noteId' in kept && listFieldMissing(kept.modelName, kept.fields)) lines.push(missingListWarning(kept.modelName));
+      }
+      if (lines.length) throw new MineDenied(lines);
     }
 
-    const result = await $api<AddedSentence>('mined/sentences', {
-      method: 'POST',
-      body: {
-        ankiNoteId: noteIds[0],
-        exampleSentenceId: sentence.sentenceId,
-        sentence: boldTarget(sentence),
-        furigana: sentence.furigana?.length ? ankiSentenceFurigana(sentence.text, sentence.furigana, sentence) : null,
-        english: translation?.text ? escapeFieldText(translation.text) : null,
-        englishOrigin: translation?.origin ?? null,
-        sourceTitle: sourceLabel(sentence) || null,
-        audioFilename: media.audio?.filename ?? null,
-        pictureFilename: media.picture?.filename ?? null,
-      },
-    });
-    if (result.write) await writeNote(result.write);
-    return result;
+    const result = await $api<AddedSentence>('mined/sentences', { method: 'POST', body: { ankiNoteId: noteIds[0], ...built.body } });
+    const warnings = result.added ? await writeAndCheck(result.write, built.reasons, ['sentenceEnglish', 'sentenceAudio', 'picture']) : [];
+    return { ankiNoteId: result.ankiNoteId, added: result.added, sentences: result.sentences, warnings };
   }
 
-  /** Creates the note in Anki through AnkiConnect; resolves to the new note id. */
-  async function addCard(item: DeckIPlusOneSentence): Promise<number> {
+  /**
+   * Writes the kept note and lists what was left empty: the list field, and the main fields when they were written. The
+   * added sentence's English, audio and picture (`parts`) are stored with it, so their failures are listed by reason.
+   */
+  async function writeAndCheck(write: NoteWrite | null, reasons: EmptyReasons, parts: FieldRole[]): Promise<string[]> {
+    const warn = warnRoles();
+    const partsOnly = () => emptyFieldWarnings({ fieldRoles: {}, fields: {}, warn, reasons, parts });
+    if (!write) return partsOnly();
+    let done: Awaited<ReturnType<typeof writeNote>>;
+    try {
+      done = await writeNote(write);
+    } catch (e) {
+      // The sentence is in the store; the next Sync writes the card.
+      return [`${failureReason('Writing the card', e)}; the next Sync will write it.`, ...partsOnly()];
+    }
+    const warnings: string[] = [];
+    if (done.missingList && warn.includes('sentenceList')) warnings.push(missingListWarning(write.modelName));
+    const roles: FieldRole[] = [];
+    if (write.sentencesHtml != null && !done.missingList) roles.push('sentenceList');
+    if (write.main) roles.push('sentence', 'sentencePlain', 'sentenceFurigana', 'sentenceEnglish', 'sentenceAudio', 'picture', 'source');
+    const fieldRoles = anki.setupFor(write.modelName)?.fieldRoles ?? {};
+    warnings.push(...emptyFieldWarnings({ fieldRoles, fields: done.fields, warn, reasons, roles, parts }));
+    return warnings;
+  }
+
+  /**
+   * Creates the note in Anki through AnkiConnect, then records it in the sentence store at once. Its sentence fields are
+   * the main fields Sync would write, from the same sentence the store keeps.
+   */
+  async function addCard(item: DeckIPlusOneSentence): Promise<MinedResult> {
     const { sentence, word } = item;
     await anki.load();
     const mapping = settings.value.fieldRoles;
     const wanted = new Set(Object.values(mapping));
-    const fieldsWith = (role: FieldRole) => fieldsFor(mapping, role);
+    const reasons: EmptyReasons = {};
 
-    const [details, media, english, { targetWordTemplate }] = await Promise.all([
+    const [details, built, { targetWordTemplate }] = await Promise.all([
       (['definitions', 'mainDefinition', 'pitchPosition', 'pitchCategories', 'frequency'] as const).some((f) => wanted.has(f))
-        ? $api<Word>(`vocabulary/${word.wordId}/${word.readingIndex}`)
+        ? $api<Word>(`vocabulary/${word.wordId}/${word.readingIndex}`).catch((e) => {
+            for (const role of ['definitions', 'mainDefinition', 'pitchPosition', 'pitchCategories', 'frequency'] as const)
+              reasons[role] = failureReason('Reading the word', e);
+            return null;
+          })
         : null,
-      cardMedia(sentence.sentenceId, wanted.has('sentenceAudio'), wanted.has('picture')),
-      // A failed translation leaves the field empty rather than losing the card.
-      wanted.has('sentenceEnglish') ? englishForCard(sentence.sentenceId).catch(() => '') : '',
+      buildSentence(sentence, { audio: wanted.has('sentenceAudio'), picture: wanted.has('picture'), english: wanted.has('sentenceEnglish') }),
       $api<{ targetWordTemplate: string }>('mined/settings'),
     ]);
+    Object.assign(reasons, built.reasons);
 
+    const b = built.body;
+    const main: MainFields = {
+      minedSentenceId: 0,
+      hash: '',
+      sentence: applyTargetTemplate(b.sentence, targetWordTemplate),
+      sentencePlain: sentence.text,
+      furigana: b.furigana == null ? null : applyTargetTemplate(b.furigana, targetWordTemplate),
+      english: b.english,
+      audioFilename: b.audioFilename,
+      pictureFilename: b.pictureFilename,
+      source: b.sourceTitle,
+    };
     const values: Partial<Record<FieldRole, string>> = {
       word: escapeFieldText(word.reading),
       wordReading: escapeFieldText(kanaReading(word.readingFurigana || word.reading)),
@@ -262,31 +434,82 @@ export function useMiningCards() {
       pitchCategories: ankiPitchCategories(word.readingFurigana || word.reading, details?.pitchAccents, details?.partsOfSpeech ?? []),
       definitions: details ? definitionsHtml(details.definitions, word.readingIndex) : '',
       mainDefinition: escapeFieldText((details && firstSense(details.definitions, word.readingIndex)) || word.mainDefinition || ''),
-      sentence: applyTargetTemplate(boldTarget(sentence), targetWordTemplate),
-      sentencePlain: escapeFieldText(sentence.text),
-      sentenceFurigana: applyTargetTemplate(ankiSentenceFurigana(sentence.text, sentence.furigana ?? [], sentence), targetWordTemplate),
-      sentenceEnglish: escapeFieldText(english),
-      source: escapeFieldText(sourceLabel(sentence)),
       frequency: wordFrequency(details, word.readingIndex),
     };
-
     const fields: Record<string, string> = {};
-    for (const [name, source] of Object.entries(mapping)) {
-      const value = values[source];
+    for (const [name, role] of Object.entries(mapping)) {
+      const value = values[role];
       if (value !== undefined) fields[name] = value;
     }
+    Object.assign(fields, mainFieldValues(main, mapping));
 
-    const note: Record<string, unknown> = {
-      deckName: settings.value.deckName,
-      modelName: settings.value.modelName,
-      fields,
-      tags: settings.value.tags.split(/\s+/).filter(Boolean),
-      options: { allowDuplicate: false, duplicateScope: 'deck' },
-    };
-    if (media.audio) note.audio = [{ data: await blobToBase64(media.audio.blob), filename: media.audio.filename, fields: fieldsWith('sentenceAudio') }];
-    if (media.picture) note.picture = [{ data: await blobToBase64(media.picture.blob), filename: media.picture.filename, fields: fieldsWith('picture') }];
+    // Every field is known now, so a denied role that would be empty stops the card before Anki has it.
+    const deny = denyRoles();
+    if (deny.length) {
+      const planned = Object.fromEntries(Object.keys(mapping).map((name) => [name, { value: fields[name] ?? '' }]));
+      const lines = emptyFieldWarnings({
+        fieldRoles: mapping,
+        fields: planned,
+        warn: deny,
+        reasons,
+        roles: [...new Set(Object.values(mapping))].filter((r) => r !== 'sentenceList'),
+      });
+      if (deny.includes('sentenceList') && listFieldMissing(settings.value.modelName)) lines.push(missingListWarning(settings.value.modelName));
+      if (lines.length) throw new MineDenied(lines);
+    }
 
-    return ankiConnect<number>('addNote', { note });
+    const ankiNoteId = await ankiConnect<number>('addNote', {
+      note: {
+        deckName: settings.value.deckName,
+        modelName: settings.value.modelName,
+        fields,
+        tags: settings.value.tags.split(/\s+/).filter(Boolean),
+        options: { allowDuplicate: false, duplicateScope: 'deck' },
+      },
+    });
+
+    let recorded: AddedSentence | null = null;
+    let recordWarning: string | null = null;
+    try {
+      recorded = await $api<AddedSentence>('mined/notes/created', {
+        method: 'POST',
+        body: {
+          ankiNoteId,
+          modelName: settings.value.modelName,
+          deckName: settings.value.deckName,
+          wordId: word.wordId,
+          readingIndex: word.readingIndex,
+          expression: plainFieldText(fields[fieldFor(mapping, 'word') ?? ''] ?? '') || word.reading,
+          reading: kanaReading(word.readingFurigana || word.reading),
+          ...b,
+        },
+      });
+    } catch (e) {
+      recordWarning = `${failureReason('Recording the card in Jiten', e)}; the next Sync will pick it up.`;
+    }
+
+    const warnings: string[] = [];
+    if (recordWarning) warnings.push(recordWarning);
+    // The list field is only this note's to fill when it's the word's kept note; an older note gets the list instead.
+    let listWritten = false;
+    let current: Record<string, { value: string }> | null = null;
+    if (recorded?.write) {
+      const write = recorded.write;
+      try {
+        // The server has recorded the main fields already.
+        const done = await writeNote(write, undefined, false);
+        if (done.missingList && warnRoles().includes('sentenceList')) warnings.push(missingListWarning(write.modelName));
+        listWritten = write.ankiNoteId === ankiNoteId && write.sentencesHtml != null && !done.missingList;
+        if (write.ankiNoteId === ankiNoteId) current = done.fields;
+      } catch (e) {
+        // The card exists in Anki and in the store; the next Sync writes what's missing.
+        warnings.push(`${failureReason('Writing the sentence list', e)}; the next Sync will write it.`);
+      }
+    }
+    current ??= await noteFields(ankiNoteId);
+    const roles = [...new Set(Object.values(mapping))].filter((r) => r !== 'sentenceList' || listWritten);
+    warnings.push(...emptyFieldWarnings({ fieldRoles: mapping, fields: current, warn: warnRoles(), reasons, roles }));
+    return { ankiNoteId, added: true, sentences: recorded?.sentences ?? 1, warnings };
   }
 
   return { settings, configured, fetchAudio, fetchPicture, addCard, existingNotes, wordsInAnki, writeNote, recordMainWritten, addToExistingNote };

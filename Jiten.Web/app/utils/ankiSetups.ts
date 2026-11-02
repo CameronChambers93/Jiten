@@ -29,6 +29,10 @@ export interface AnkiNoteTypeSetup {
   scriptVersion: number | null;
 }
 
+/** When mining would leave a field empty: add the card and say so, or don't add it. */
+export type EmptyFieldPolicy = 'warn' | 'deny';
+export type EmptyFieldPolicies = Partial<Record<FieldRole, EmptyFieldPolicy>>;
+
 /** Where new mined cards go (`api/anki-sync/card-target`). */
 export interface AnkiCardTarget {
   deckName: string;
@@ -36,6 +40,8 @@ export interface AnkiCardTarget {
   tags: string;
   padStartMs: number;
   padEndMs: number;
+  /** What mining does when it would leave a role empty; null or missing for `DEFAULT_EMPTY_FIELDS`. */
+  emptyFields?: EmptyFieldPolicies | null;
 }
 
 export const ROLE_LABELS: Record<FieldRole, string> = {
