@@ -61,6 +61,7 @@ public class UserDbContext : IdentityDbContext<User>
     public DbSet<MinedNote> MinedNotes { get; set; }
     public DbSet<MinedSentence> MinedSentences { get; set; }
     public DbSet<SentenceFlag> SentenceFlags { get; set; }
+    public DbSet<AnkiNoteTypeSetup> AnkiNoteTypeSetups { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -195,6 +196,7 @@ public class UserDbContext : IdentityDbContext<User>
                 entity.Property(us => us.DisplayProfilesJson).HasColumnType("jsonb").HasDefaultValue("{}");
                 entity.Property(us => us.DismissedNoticesJson).HasColumnType("jsonb").HasDefaultValue("[]");
                 entity.Property(us => us.GrantedNoticesJson).HasColumnType("jsonb").HasDefaultValue("[]");
+                entity.Property(us => us.AnkiCardTargetJson).HasColumnType("jsonb").HasDefaultValue("{}");
             }
             else
             {
@@ -203,6 +205,7 @@ public class UserDbContext : IdentityDbContext<User>
                 entity.Property(us => us.DisplayProfilesJson).HasDefaultValue("{}");
                 entity.Property(us => us.DismissedNoticesJson).HasDefaultValue("[]");
                 entity.Property(us => us.GrantedNoticesJson).HasDefaultValue("[]");
+                entity.Property(us => us.AnkiCardTargetJson).HasDefaultValue("{}");
             }
 
             entity.HasOne<User>()
@@ -751,6 +754,7 @@ public class UserDbContext : IdentityDbContext<User>
                 entity.Property(n => n.UserId).HasConversion(guidToString).HasColumnType("uuid").IsRequired();
             entity.Property(n => n.ModelName).HasMaxLength(200).IsRequired();
             entity.Property(n => n.DeckName).HasMaxLength(200).IsRequired();
+            entity.Property(n => n.FieldsHash).HasMaxLength(64);
 
             entity.HasIndex(n => new { n.UserId, n.AnkiNoteId }).IsUnique();
         });
@@ -779,6 +783,28 @@ public class UserDbContext : IdentityDbContext<User>
 
             entity.HasIndex(s => new { s.MinedWordId, s.SortOrder });
             entity.HasIndex(s => new { s.UserId, s.SourceAnkiNoteId });
+        });
+
+        modelBuilder.Entity<AnkiNoteTypeSetup>(entity =>
+        {
+            entity.HasKey(s => s.AnkiNoteTypeSetupId);
+            if (isNpgsql)
+            {
+                entity.Property(s => s.UserId).HasConversion(guidToString).HasColumnType("uuid").IsRequired();
+                entity.Property(s => s.FieldRolesJson).HasColumnType("jsonb").HasDefaultValue("{}");
+            }
+            else
+                entity.Property(s => s.FieldRolesJson).HasDefaultValue("{}");
+
+            entity.Property(s => s.ModelName).HasMaxLength(200).IsRequired();
+            entity.Property(s => s.Filter).HasMaxLength(1000);
+            entity.Property(s => s.Preset).HasMaxLength(50);
+            entity.Property(s => s.KnownWords).HasMaxLength(20);
+            entity.Property(s => s.SentenceList).HasMaxLength(20).IsRequired();
+            entity.Ignore(s => s.HasSentenceActions);
+
+            entity.HasOne<User>().WithMany().HasForeignKey(s => s.UserId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(s => new { s.UserId, s.ModelName }).IsUnique();
         });
 
         modelBuilder.Entity<SentenceFlag>(entity =>

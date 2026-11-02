@@ -25,6 +25,14 @@ public class MinedAddSentenceTests(JitenWebApplicationFactory factory)
         userDb.MinedSentences.RemoveRange(userDb.MinedSentences);
         userDb.MinedNotes.RemoveRange(userDb.MinedNotes);
         userDb.MinedWords.RemoveRange(userDb.MinedWords);
+        userDb.AnkiNoteTypeSetups.RemoveRange(userDb.AnkiNoteTypeSetups);
+        await userDb.SaveChangesAsync();
+        // Sync writes the rotation script's list to Lapis+ notes.
+        userDb.AnkiNoteTypeSetups.Add(new AnkiNoteTypeSetup
+        {
+            UserId = TestUsers.UserA, ModelName = "Lapis+", FieldRolesJson = """{"Expression":"word","Sentence":"sentence","Sentences":"sentenceList"}""",
+            ImportSentences = true, TakeFlags = true, FoldDuplicates = true, SentenceList = AnkiSentenceListFormat.Script
+        });
         await userDb.SaveChangesAsync();
     }
 
@@ -83,10 +91,10 @@ public class MinedAddSentenceTests(JitenWebApplicationFactory factory)
         result.GetProperty("ankiNoteId").GetInt64().Should().Be(FirstNote);
         result.GetProperty("added").GetBoolean().Should().BeTrue();
         result.GetProperty("sentences").GetInt32().Should().Be(3);
-        var html = result.GetProperty("sentencesHtml").GetString()!;
+        var html = result.GetProperty("write").GetProperty("sentencesHtml").GetString()!;
         html.Should().StartWith($"<div class=\"jiten-sentences\" data-note=\"{FirstNote}\">");
         html.Should().Contain("<div class=\"jiten-sentence-text\"><b>運命</b>を感じた</div>");
-        html.Should().Contain("data-source=\"オッドタクシー Episode 4\"");
+        // The source title is read from the line, as Sync renders it; this test has no line rows, so there's none.
         html.Should().Contain("<audio class=\"jiten-sentence-audio\" src=\"jiten_9693.ogg\"");
         html.IndexOf("を感じた", StringComparison.Ordinal).Should().BeGreaterThan(html.IndexOf("ざんす", StringComparison.Ordinal));
     }

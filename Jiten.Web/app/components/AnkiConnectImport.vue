@@ -6,7 +6,7 @@
   import { extractSentenceFromField } from '~/utils/ankiSentenceExtract';
   import { base64ToBytes, extractAudioRef, extractImageRef } from '~/utils/ankiMediaExtract';
   import type { MediaConflictMode, MediaKind } from '~/composables/useAnkiMediaImport';
-  import { FsrsState } from '~/types/enums';
+  import { ankiCardPayload, furiganaToReading, isValidDate, keptReviews, stripRuby, type CardReviews } from '~/utils/ankiCardImport';
 
   const props = withDefaults(defineProps<{ mediaOnly?: boolean }>(), { mediaOnly: false });
 
@@ -97,11 +97,6 @@
     clearMediaPreview('audio');
   });
 
-  type KeptReview = { Rating: number; ReviewDateTime: Date; ReviewDuration: number; State?: FsrsState };
-
-  // Anki revlog types 0-2; filtered-deck, manual and rescheduled entries stay unknown.
-  const ANKI_REVLOG_STATE: Record<number, FsrsState> = { 0: FsrsState.Learning, 1: FsrsState.Review, 2: FsrsState.Relearning };
-  type CardReviews = { kept: KeptReview[]; lastReview: Date | null };
   let selectedFieldName = '';
   let selectedReadingFieldName = '';
   let selectedSentenceFieldName = '';
@@ -114,27 +109,6 @@
   let supportsGetReviewsOfCards = false;
 
   const cardsInfoFields = ['cardId', 'due', 'queue', 'type', 'interval', 'factor', 'reps', 'lapses', 'mod', 'flags', 'fields', 'modelName', 'deckName'];
-
-  // Max review-log entries kept per card. Captures the full history of essentially every normal card
-  // (a card maturing over years rarely exceeds ~25 reviews); only clips persistent leeches.
-  const MAX_REVIEWS_PER_CARD = 100;
-
-  const stripRuby = (text: string) => text.replace(/\[.*?\]/g, '');
-
-  // Converts an Anki furigana field to its full kana reading. For `下[くだ]さる` the base text
-  // before each bracket is dropped and the bracket content kept, leaving plain kana untouched:
-  // `下[くだ]さる` → `くださる`. A field that is already full kana is returned as-is (spaces stripped).
-  const furiganaToReading = (text: string) =>
-    text
-      .replace(/&nbsp;/g, ' ')
-      .replace(/([^[\]\s]+)\[([^[\]]*)\]/g, '$2')
-      .replace(/\s+/g, '')
-      .trim();
-
-  // A Date built from corrupt/out-of-range Anki fields can be Invalid (NaN time),
-  // and calling toISOString() on it throws and aborts the whole import. Guard every
-  // date we serialise so a single malformed card can't take down the batch.
-  const isValidDate = (d: Date | null | undefined): d is Date => !!d && !Number.isNaN(d.getTime());
 
   async function ankiInvoke(action: string, params: Record<string, any> = {}): Promise<any> {
     const body: Record<string, any> = { action, version: 6, params };
@@ -174,22 +148,13 @@
     // results by the integer cid from the DB but then re-looks them up by the exact values we passed,
     // so passing strings makes every lookup miss and returns empty reviews for every card. We call via
     // the raw ankiInvoke because yanki-connect's typings declare string[] (which triggers that bug).
-    const chunkReviews = (await ankiInvoke('getReviewsOfCards', { cards: chunkCardIds })) as Record<string, Array<{ ease: number; id: number; time: number; type: number }>>;
+    const chunkReviews = (await ankiInvoke('getReviewsOfCards', { cards: chunkCardIds })) as Record<
+      string,
+      Array<{ ease: number; id: number; time: number; type: number }>
+    >;
     for (const [cardIdStr, reviews] of Object.entries(chunkReviews)) {
-      if (!reviews || reviews.length === 0) continue;
-      const mapped: KeptReview[] = reviews.map((r) => ({
-        Rating: r.ease,
-        ReviewDateTime: new Date(r.id),
-        ReviewDuration: r.time,
-        State: ANKI_REVLOG_STATE[r.type],
-      }));
-      mapped.sort((a, b) => a.ReviewDateTime.getTime() - b.ReviewDateTime.getTime());
-      // The window MUST start at the card's first review: the optimiser builds its first training entry at
-      // deltaT 0 and the SRS replay starts from a New card, so a head-truncated history cannot be replayed.
-      map.set(Number(cardIdStr), {
-        kept: mapped.length > MAX_REVIEWS_PER_CARD ? mapped.slice(0, MAX_REVIEWS_PER_CARD) : mapped,
-        lastReview: mapped[mapped.length - 1]!.ReviewDateTime,
-      });
+      const kept = keptReviews(reviews);
+      if (kept) map.set(Number(cardIdStr), kept);
     }
     return map;
   }
@@ -624,62 +589,7 @@
     // not imported should not quietly contribute a sentence or a file either.
     collectExtras(card, word, reading);
 
-    const cardReviews = reviewsByCard.get(card.cardId);
-    const reviews = cardReviews?.kept ?? [];
-
-    // Convert Anki state to FSRS state
-    let state: number;
-    if (card.queue === 1 || card.queue === 3)
-      state = 1; // Learning
-    else state = 2; // Review
-
-    const stability = card.interval > 0 ? card.interval : 0;
-    const difficulty = Math.max(1, Math.min(10, 10 - (card.factor - 1300) / 170.0));
-
-    // Taken from the untruncated history, not the kept window, so a clipped leech is not scheduled from a
-    // stale last review with an already-past due date. When review history isn't imported (or a studied
-    // card has no logs), fall back to Anki's card modification time so the card still carries a
-    // LastReview and stays schedulable, instead of being dropped server-side for having none.
-    const mostRecentReview = cardReviews?.lastReview ?? null;
-    const modReview = card.mod ? new Date(card.mod * 1000) : null;
-    const lastReview = isValidDate(mostRecentReview) ? mostRecentReview : isValidDate(modReview) ? modReview : null;
-
-    let due: Date | null;
-    // Only intraday learning (queue 1) stores `due` as a Unix timestamp. Review (2) and
-    // interday day-learning (3) store it as a day-number relative to collection creation,
-    // which we can't convert here — so reconstruct their due from lastReview/mod + interval.
-    if (card.queue === 1) {
-      due = new Date(card.due * 1000);
-    } else if (lastReview) {
-      due = new Date(lastReview.getTime() + card.interval * 86400000);
-    } else {
-      due = new Date(card.mod * 1000 + card.interval * 86400000);
-    }
-    // Due is required server-side; if corrupt fields produced an invalid instant,
-    // fall back to the last review, then to now, rather than throwing.
-    if (!isValidDate(due)) due = lastReview ?? new Date();
-
-    return {
-      Card: {
-        Word: word,
-        Reading: reading || undefined,
-        Stability: stability,
-        Difficulty: difficulty,
-        Reps: card.reps,
-        Lapses: card.lapses,
-        Due: due.toISOString(),
-        State: state,
-        LastReview: lastReview?.toISOString(),
-      },
-      ReviewLogs: reviews
-        .filter((r) => isValidDate(r.ReviewDateTime))
-        .map((r) => ({
-          Rating: r.Rating,
-          ReviewDateTime: r.ReviewDateTime.toISOString(),
-          ReviewDuration: r.ReviewDuration,
-          State: r.State,
-        })),
-    };
+    return ankiCardPayload(card, word, reading, reviewsByCard.get(card.cardId));
   };
 
   /** Sentence and media import without the vocabulary import, for decks whose words are already in Jiten. */
@@ -1113,8 +1023,8 @@
       </div>
       <Message v-if="cardLookupUnsupported" severity="error" class="mb-4">
         This version of AnkiConnect cannot read cards and can't be used for importing. AnkiConnect Android isn't supported. Use desktop Anki with the
-        <a href="https://ankiweb.net/shared/info/2055492159" rel="nofollow" target="_blank">Anki Connect plugin</a>, or export your deck as a .txt file and
-        use the Anki File import.
+        <a href="https://ankiweb.net/shared/info/2055492159" rel="nofollow" target="_blank">Anki Connect plugin</a>, or export your deck as a .txt file and use
+        the Anki File import.
       </Message>
       <div v-if="currentStep == 0">
         <p v-if="mediaOnly">
@@ -1441,9 +1351,9 @@
       <div v-if="skippedWordsReadingMismatch.length > 0" class="flex flex-col gap-3">
         <Message severity="warn" :closable="false">
           {{ skippedWordsReadingMismatch.length }} word{{ skippedWordsReadingMismatch.length === 1 ? '' : 's' }}
-          {{ skippedWordsReadingMismatch.length === 1 ? 'was' : 'were' }} found in the dictionary, but the reading on the card did not match any
-          of its readings. Words are skipped rather than guessed so the wrong entry is not imported. Check the reading field you selected, or fix
-          the reading on the card.
+          {{ skippedWordsReadingMismatch.length === 1 ? 'was' : 'were' }} found in the dictionary, but the reading on the card did not match any of its
+          readings. Words are skipped rather than guessed so the wrong entry is not imported. Check the reading field you selected, or fix the reading on the
+          card.
         </Message>
         <div class="max-h-[40vh] overflow-y-auto rounded border border-surface-200 dark:border-surface-700 p-3">
           <ul class="flex flex-col gap-1">

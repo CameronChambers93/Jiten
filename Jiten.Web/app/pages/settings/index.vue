@@ -77,6 +77,12 @@
           description="Customise your study preferences, daily limits, card display and FSRS scheduling parameters."
         />
         <SettingsTile icon="pi pi-th-large" title="Cards" to="/settings/cards" description="Browse and bulk-edit your known words." />
+        <SettingsTile
+          icon="pi pi-sync"
+          title="Anki"
+          to="/settings/anki"
+          description="Which note types Sync reads and writes, their field roles, known words from Anki and the card rotation script."
+        />
         <SettingsTile icon="pi pi-image" title="Card Media" to="/settings/card-media" description="Manage images and audio on your cards." plus />
       </div>
     </section>

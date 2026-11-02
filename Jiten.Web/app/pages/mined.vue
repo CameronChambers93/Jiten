@@ -6,9 +6,10 @@
   import Paginator from 'primevue/paginator';
   import Tag from 'primevue/tag';
   import { useToast } from 'primevue/usetoast';
-  import { ankiConnect } from '~/composables/useMiningCards';
+  import { ankiConnect } from '~/composables/useAnkiConnect';
   import type { MinedImportResult } from '~/composables/useMinedImport';
   import { sanitiseHtml } from '~/utils/sanitiseHtml';
+  import { setupQuery } from '~/utils/ankiSetups';
 
   useHead({ title: 'Mined words - Jiten' });
 
@@ -67,7 +68,17 @@
   const flagList = ref<{ load: () => Promise<void> } | null>(null);
 
   // Import
-  const query = ref('"note:Lapis+"');
+  const query = ref('');
+  const { setups: ankiSetups, load: loadSetups } = useAnkiSetups();
+  // The notes Sync imports, as a starting search.
+  onMounted(async () => {
+    await loadSetups().catch(() => {});
+    if (!query.value)
+      query.value = ankiSetups.value
+        .filter((s) => s.importSentences)
+        .map((s) => `(${setupQuery(s)})`)
+        .join(' OR ');
+  });
   const found = ref<number[] | null>(null);
   const finding = ref(false);
   const importing = ref(false);
@@ -116,12 +127,6 @@
     } finally {
       importing.value = false;
     }
-  }
-
-  /** Sync's first step: import whatever the search finds that isn't in the store yet. */
-  async function importNew() {
-    await find();
-    await runImport();
   }
 
   /** Flags change the word list's counts, and any word that's open. */
@@ -222,8 +227,9 @@
       <template #title>Import from Anki</template>
       <template #content>
         <p class="text-sm text-gray-600 dark:text-gray-300 mb-3">
-          Reads your mining notes through AnkiConnect (on this PC) and stores each note's sentence under its word. GSM's audio and screenshots are copied into
-          Jiten; Jiten cards keep cutting theirs from the episode. Notes imported before are skipped.
+          Reads notes through AnkiConnect (on this PC) and their note type's field roles, and stores each note's sentence under its word. Sync does this for
+          you; this imports from any search. GSM's audio and screenshots are copied into Jiten; Jiten cards keep cutting theirs from the episode. Notes imported
+          before are skipped.
         </p>
         <div class="flex flex-col sm:flex-row gap-2">
           <InputText v-model="query" class="flex-1 font-mono text-xs" aria-label="Anki search" />
@@ -250,7 +256,7 @@
       </template>
     </Card>
 
-    <MinedAnkiSync :import-new="importNew" @changed="refresh" />
+    <MinedAnkiSync @changed="refresh" />
 
     <SentenceFlagList ref="flagList" @changed="refresh" />
 
@@ -341,12 +347,6 @@
       "
     />
 
-    <SentenceFlagDialog
-      v-if="flagging"
-      :sentence-id="flagging.exampleSentenceId!"
-      :text="flagging.text"
-      @close="flagging = null"
-      @saved="refresh"
-    />
+    <SentenceFlagDialog v-if="flagging" :sentence-id="flagging.exampleSentenceId!" :text="flagging.text" @close="flagging = null" @saved="refresh" />
   </div>
 </template>

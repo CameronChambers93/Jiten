@@ -1,4 +1,5 @@
 import { extractAudioRef, extractImageRef } from '~/utils/ankiMediaExtract';
+import { fieldFor, type FieldRole } from '~/utils/ankiSetups';
 
 /** An Anki note as AnkiConnect's notesInfo returns it. */
 export interface AnkiNoteInfo {
@@ -29,56 +30,56 @@ export interface ImportNote {
   pictureBase64: string | null;
 }
 
-/** Lapis+ field names the import reads. */
-export const LAPIS_FIELDS = {
-  expression: 'Expression',
-  reading: 'ExpressionReading',
-  sentence: 'Sentence',
-  sentenceFurigana: 'SentenceFurigana',
-  english: 'SentenceEnglish',
-  previousLine: 'PreviousLine',
-  url: 'URL',
-  miscInfo: 'MiscInfo',
-  sentenceAudio: 'SentenceAudio',
-  picture: 'Picture',
-  /** The full sentence list Sync writes for the card's script. */
-  sentences: 'Sentences',
-} as const;
-
 const JITEN_MEDIA = /^jiten_\d+\./;
 
-function field(note: AnkiNoteInfo, name: string): string {
-  return note.fields[name]?.value ?? '';
+/** The first field with the role, read as the note's value for it. */
+function roleValue(note: AnkiNoteInfo, roles: Record<string, FieldRole | ''>, role: FieldRole): string {
+  const name = fieldFor(roles, role, Object.keys(note.fields));
+  return name ? (note.fields[name]?.value ?? '') : '';
 }
 
 /**
  * The sentence media a note references, by Anki file name. Jiten's own media (`jiten_<sentenceId>.*`) is named but not
  * fetched: the API cuts it again from the episode.
  */
-export function noteMedia(note: AnkiNoteInfo): { audio: string | null; picture: string | null; fetch: string[] } {
-  const audio = extractAudioRef(field(note, LAPIS_FIELDS.sentenceAudio))?.filename ?? null;
-  const picture = extractImageRef(field(note, LAPIS_FIELDS.picture))?.filename ?? null;
+export function noteMedia(note: AnkiNoteInfo, roles: Record<string, FieldRole | ''>): { audio: string | null; picture: string | null; fetch: string[] } {
+  const audio = extractAudioRef(roleValue(note, roles, 'sentenceAudio'))?.filename ?? null;
+  const picture = extractImageRef(roleValue(note, roles, 'picture'))?.filename ?? null;
   const jiten = [audio, picture].some((f) => f && JITEN_MEDIA.test(f));
   return { audio, picture, fetch: jiten ? [] : [audio, picture].filter((f): f is string => !!f) };
 }
 
-/** The import payload for a note, given its deck and the base64 of each media file fetched. */
-export function toImportNote(note: AnkiNoteInfo, deckName: string, media: Record<string, string>): ImportNote {
-  const { audio, picture } = noteMedia(note);
-  const optional = (name: string) => field(note, name) || null;
+/** Kana from a furigana field: 漢字[かんじ] and <ruby>漢字<rt>かんじ</rt></ruby> both become かんじ. */
+export function furiganaToKana(html: string): string {
+  return html
+    .replace(/<ruby>(?:<rb>)?[^<]*(?:<\/rb>)?<rt>([^<]*)<\/rt><\/ruby>/g, '$1')
+    .replace(/<[^>]*>/g, '')
+    .replace(/([^[\]\s]+)\[([^[\]]*)\]/g, '$2')
+    .replace(/&nbsp;|\s/g, '');
+}
+
+/**
+ * The import payload for a note through its note type's roles, given its deck and the base64 of each media file
+ * fetched. The word's reading comes from the kana field, else from the word with furigana; the sentence from the bold
+ * sentence, else the plain one, else the one with furigana.
+ */
+export function toImportNote(note: AnkiNoteInfo, deckName: string, media: Record<string, string>, roles: Record<string, FieldRole | ''>): ImportNote {
+  const { audio, picture } = noteMedia(note, roles);
+  const value = (role: FieldRole) => roleValue(note, roles, role);
+  const optional = (role: FieldRole) => value(role) || null;
   return {
     ankiNoteId: note.noteId,
     modelName: note.modelName,
     deckName,
     tags: note.tags,
-    expression: field(note, LAPIS_FIELDS.expression),
-    reading: field(note, LAPIS_FIELDS.reading),
-    sentence: field(note, LAPIS_FIELDS.sentence),
-    furigana: optional(LAPIS_FIELDS.sentenceFurigana),
-    english: optional(LAPIS_FIELDS.english),
-    previousLine: optional(LAPIS_FIELDS.previousLine),
-    url: optional(LAPIS_FIELDS.url),
-    miscInfo: optional(LAPIS_FIELDS.miscInfo),
+    expression: value('word'),
+    reading: value('wordReading') || furiganaToKana(value('wordFurigana')),
+    sentence: value('sentence') || value('sentencePlain') || value('sentenceFurigana'),
+    furigana: optional('sentenceFurigana'),
+    english: optional('sentenceEnglish'),
+    previousLine: optional('previousLine'),
+    url: optional('url'),
+    miscInfo: optional('source'),
     audioFilename: audio,
     audioBase64: (audio && media[audio]) || null,
     pictureFilename: picture,
@@ -99,12 +100,27 @@ export type FlagReason = (typeof FLAG_REASONS)[number]['value'];
 /** The tag a card's flag button adds: `sentence-fix::<minedSentenceId>`. */
 export const FLAG_TAG_PREFIX = 'sentence-fix::';
 
-/** The sentence flags on notes, read from their tags. */
-export function noteFlags(notes: Pick<AnkiNoteInfo, 'noteId' | 'tags'>[]): { ankiNoteId: number; minedSentenceId: number; tag: string }[] {
+/** A tag added by hand, for cards without the flag button: flags the sentence in the note's main fields. */
+export const PLAIN_FLAG_TAG = 'jiten-flag';
+
+/** The Anki search for flagged notes. */
+export const FLAG_QUERY = `("tag:${FLAG_TAG_PREFIX}*" OR "tag:${PLAIN_FLAG_TAG}")`;
+
+/** The sentence flags on notes, read from their tags; the plain tag has no sentence id. */
+export interface NoteFlag {
+  ankiNoteId: number;
+  minedSentenceId: number | null;
+  tag: string;
+}
+
+export function noteFlags(notes: Pick<AnkiNoteInfo, 'noteId' | 'tags'>[]): NoteFlag[] {
   return notes.flatMap((n) =>
-    n.tags
-      .filter((t) => t.toLowerCase().startsWith(FLAG_TAG_PREFIX))
-      .map((tag) => ({ ankiNoteId: n.noteId, minedSentenceId: Number(tag.slice(FLAG_TAG_PREFIX.length)), tag }))
-      .filter((f) => Number.isSafeInteger(f.minedSentenceId) && f.minedSentenceId > 0)
+    n.tags.flatMap((tag): NoteFlag[] => {
+      const lower = tag.toLowerCase();
+      if (lower === PLAIN_FLAG_TAG) return [{ ankiNoteId: n.noteId, minedSentenceId: null, tag }];
+      if (!lower.startsWith(FLAG_TAG_PREFIX)) return [];
+      const id = Number(tag.slice(FLAG_TAG_PREFIX.length));
+      return Number.isSafeInteger(id) && id > 0 ? [{ ankiNoteId: n.noteId, minedSentenceId: id, tag }] : [];
+    })
   );
 }
