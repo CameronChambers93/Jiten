@@ -14,6 +14,7 @@ namespace Jiten.Api.Controllers;
 public class SentenceMediaController(ISentenceMediaService sentenceMedia) : ControllerBase
 {
     private const int MaxPadMs = 5000;
+    private const string PictureCacheControl = "private, max-age=86400";
 
     [HttpGet("{sentenceId:long}/audio")]
     [SwaggerOperation(Summary = "MP3 of the sentence's subtitle cues, padded on both sides")]
@@ -33,6 +34,9 @@ public class SentenceMediaController(ISentenceMediaService sentenceMedia) : Cont
         var clip = await sentenceMedia.ResolveAsync(sentenceId, ct);
         if (clip == null) return Results.NotFound(new { error = "No linked video for this sentence" });
 
-        return Results.File(await sentenceMedia.GrabPictureAsync(clip, ct), "image/jpeg");
+        // Lists show these as thumbnails, so a repeat view shouldn't start ffmpeg again
+        var picture = await sentenceMedia.GrabPictureAsync(clip, ct);
+        Response.Headers.CacheControl = PictureCacheControl;
+        return Results.File(picture, "image/jpeg");
     }
 }

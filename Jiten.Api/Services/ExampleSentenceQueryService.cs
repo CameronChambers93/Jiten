@@ -348,6 +348,8 @@ public class ExampleSentenceQueryService(JitenDbContext context, ISentenceTokenS
                                  })
                                  .ToDictionaryAsync(d => d.DeckId);
 
+        var withVideo = (await context.DeckVideoSources.AsNoTracking().Where(v => deckIds.Contains(v.DeckId)).Select(v => v.DeckId).ToListAsync()).ToHashSet();
+
         var furigana = await sentenceTokens.BuildFuriganaDtosAsync(picked.Select(p => (p.SentenceId, p.Text, (byte[]?)p.Tokens)));
 
         return picked.Select(p =>
@@ -368,6 +370,7 @@ public class ExampleSentenceQueryService(JitenDbContext context, ISentenceTokenS
                 SourceDeck = sourceDeck,
                 SourceDeckParent = parentDeck,
                 FromStudyDeck = p.FromStudyDeck,
+                HasVideo = withVideo.Contains(p.DeckId),
                 Furigana = furigana.GetValueOrDefault(p.SentenceId)?.Furigana,
                 Words = furigana.GetValueOrDefault(p.SentenceId)?.Words
             };

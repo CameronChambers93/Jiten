@@ -678,6 +678,8 @@ export interface ExampleSentence {
   unknownSpans?: { position: number; length: number; wordId: number; readingIndex: number }[] | null;
   furigana?: SentenceFurigana[] | null;
   words?: SentenceWord[] | null;
+  /** The sentence's deck has a linked video, so it may have a screenshot and audio. */
+  hasVideo?: boolean;
 }
 
 export type ReadableSentenceSort = 'Random' | 'EasiestFirst' | 'HardestFirst';

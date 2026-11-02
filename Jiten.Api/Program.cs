@@ -486,6 +486,7 @@ builder.Services.AddScoped<IReadableSentenceSearch, ReadableSentenceSearch>();
 builder.Services.AddSingleton<SentenceStatsCache>();
 builder.Services.AddScoped<ISentenceStatsService, SentenceStatsService>();
 builder.Services.AddScoped<SentenceCueLookup>();
+builder.Services.AddScoped<SentenceDetailService>();
 builder.Services.AddScoped<ISentenceMediaService, SentenceMediaService>();
 builder.Services.AddScoped<Jiten.Api.Services.Translation.TranslationSettingsStore>();
 builder.Services.AddScoped<Jiten.Api.Services.Translation.SentenceTranslationService>();

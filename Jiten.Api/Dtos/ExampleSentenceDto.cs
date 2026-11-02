@@ -31,6 +31,18 @@ public class ExampleSentenceDto
 
     /// <summary>Every word with the caller's states, for colouring; null when signed out or parsed before token spans existed.</summary>
     public List<SentenceWordDto>? Words { get; set; }
+
+    /// <summary>The sentence's deck has a linked video, so it may have a screenshot and audio.</summary>
+    public bool HasVideo { get; set; }
+
+    /// <summary>A copy with this word marked.</summary>
+    public ExampleSentenceDto ForWord(int position, int length)
+    {
+        var copy = (ExampleSentenceDto)MemberwiseClone();
+        copy.WordPosition = position;
+        copy.WordLength = length;
+        return copy;
+    }
 }
 
 public class SentenceSpanDto

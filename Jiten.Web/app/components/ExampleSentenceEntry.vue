@@ -27,8 +27,11 @@
       showTts?: boolean;
       /** Add to Anki; off where the page has its own. */
       showMine?: boolean;
+      /** Thumbnail from the linked video, and a link to the sentence's own page; off on that page. */
+      showPicture?: boolean;
+      showPageLink?: boolean;
     }>(),
-    { showActions: true, showTts: true, showMine: true }
+    { showActions: true, showTts: true, showMine: true, showPicture: true, showPageLink: true }
   );
 
   const emit = defineEmits<{
@@ -95,6 +98,12 @@
     }
   };
 
+  const pictureVisible = computed(() => props.showPicture && authStore.isAuthenticated && !!props.exampleSentence.hasVideo && (!isNsfw || isRevealed.value));
+  const pageLink = computed(() => {
+    const query = props.wordId != null ? `?wordId=${props.wordId}&readingIndex=${props.readingIndex ?? 0}` : '';
+    return `/sentences/${props.exampleSentence.sentenceId}${query}`;
+  });
+
   const canEdit = computed(() => authStore.isAuthenticated && props.wordId != null && props.readingIndex != null);
   const editing = ref(false);
 
@@ -155,64 +164,82 @@
       @cancel="editing = false"
     />
     <template v-else>
-      <blockquote class="relative inline-block border-l-4 border-primary-500 pl-5 pr-3 py-3 bg-gray-50 dark:bg-gray-900 rounded-r shadow-sm overflow-hidden">
-        <div class="float-right ml-2 mt-0.5 flex items-center gap-2">
-          <span v-if="exampleSentence.isIPlusOne || exampleSentence.unknownCount != null" class="h-5 inline-flex items-center">
-            <IPlusOneBadge :unknown="exampleSentence.unknownCount ?? 0" :target-known="targetKnown" />
-          </span>
-          <TtsButton v-if="actionsVisible && showTts" :text="exampleSentence.text" :sentence-id="exampleSentence.sentenceId" type="sentence" size="sm" />
-          <MineSentenceButton
-            v-if="actionsVisible && showMine && authStore.isAuthenticated"
-            :sentence="exampleSentence"
-            :word-id="wordId"
-            :reading-index="readingIndex"
-          />
-          <button
-            v-if="canEdit && actionsVisible"
-            class="inline-flex items-center justify-center transition-colors"
-            :class="
-              favourited ? 'text-yellow-500' : atLimit ? 'text-surface-300 dark:text-surface-400 cursor-not-allowed' : 'text-surface-400 hover:text-yellow-500'
-            "
-            :disabled="favourited || atLimit"
-            :title="atLimit ? sentenceLimitMessage : 'Save as custom sentence'"
-            @click="favouriteSentence"
-          >
-            <i class="pi text-sm" :class="favourited ? 'pi-star-fill' : 'pi-star'" />
-          </button>
-          <button
-            v-if="canEdit && actionsVisible"
-            class="inline-flex items-center justify-center transition-colors"
-            :class="atLimit ? 'text-surface-300 dark:text-surface-400 cursor-not-allowed' : 'text-surface-400 hover:text-primary-500 cursor-pointer'"
-            :disabled="atLimit"
-            :title="atLimit ? sentenceLimitMessage : 'Edit sentence'"
-            @click="editing = true"
-          >
-            <i class="pi pi-pencil text-sm" />
-          </button>
-          <SentenceDetailsToggle v-if="canReveal" v-model="detailsRevealed" />
-        </div>
-        <div
-          class="transition-filter duration-200"
-          lang="ja"
-          :class="[sentenceSizeClass(store.sentenceSize), { 'blur-sm': isNsfw && !isRevealed }]"
-          @click="handleReveal"
-          v-html="formattedText"
-        />
-        <div
-          v-if="isNsfw && !isRevealed"
-          class="absolute top-0 left-0 w-full h-full flex items-center justify-center cursor-pointer z-10"
-          role="button"
-          tabindex="0"
-          aria-label="Reveal potentially not safe for work text"
-          @click="handleReveal"
-          @keydown.enter="handleReveal"
-          @keydown.space.prevent="handleReveal"
+      <div class="flex items-start gap-2">
+        <blockquote
+          class="relative min-w-0 flex-1 border-l-4 border-primary-500 pl-5 pr-3 py-3 bg-gray-50 dark:bg-gray-900 rounded-r shadow-sm overflow-hidden"
         >
-          <div class="text-center px-3 py-2 bg-white/80 backdrop-blur-md border border-red-300 text-red-600 text-sm font-semibold rounded shadow">
-            This text is potentially not safe for work. Click to reveal.
+          <div class="float-right ml-2 mt-0.5 flex items-center gap-2">
+            <span v-if="exampleSentence.isIPlusOne || exampleSentence.unknownCount != null" class="h-5 inline-flex items-center">
+              <IPlusOneBadge :unknown="exampleSentence.unknownCount ?? 0" :target-known="targetKnown" />
+            </span>
+            <TtsButton v-if="actionsVisible && showTts" :text="exampleSentence.text" :sentence-id="exampleSentence.sentenceId" type="sentence" size="sm" />
+            <MineSentenceButton
+              v-if="actionsVisible && showMine && authStore.isAuthenticated"
+              :sentence="exampleSentence"
+              :word-id="wordId"
+              :reading-index="readingIndex"
+            />
+            <button
+              v-if="canEdit && actionsVisible"
+              class="inline-flex items-center justify-center transition-colors"
+              :class="
+                favourited
+                  ? 'text-yellow-500'
+                  : atLimit
+                    ? 'text-surface-300 dark:text-surface-400 cursor-not-allowed'
+                    : 'text-surface-400 hover:text-yellow-500'
+              "
+              :disabled="favourited || atLimit"
+              :title="atLimit ? sentenceLimitMessage : 'Save as custom sentence'"
+              @click="favouriteSentence"
+            >
+              <i class="pi text-sm" :class="favourited ? 'pi-star-fill' : 'pi-star'" />
+            </button>
+            <button
+              v-if="canEdit && actionsVisible"
+              class="inline-flex items-center justify-center transition-colors"
+              :class="atLimit ? 'text-surface-300 dark:text-surface-400 cursor-not-allowed' : 'text-surface-400 hover:text-primary-500 cursor-pointer'"
+              :disabled="atLimit"
+              :title="atLimit ? sentenceLimitMessage : 'Edit sentence'"
+              @click="editing = true"
+            >
+              <i class="pi pi-pencil text-sm" />
+            </button>
+            <NuxtLink
+              v-if="showPageLink && actionsVisible && authStore.isAuthenticated && exampleSentence.sentenceId > 0"
+              :to="pageLink"
+              class="inline-flex items-center justify-center text-surface-400 hover:text-primary-500 transition-colors"
+              title="Open this sentence"
+              aria-label="Open this sentence"
+            >
+              <i class="pi pi-arrow-up-right text-sm" />
+            </NuxtLink>
+            <SentenceDetailsToggle v-if="canReveal" v-model="detailsRevealed" />
           </div>
-        </div>
-      </blockquote>
+          <div
+            class="transition-filter duration-200"
+            lang="ja"
+            :class="[sentenceSizeClass(store.sentenceSize), { 'blur-sm': isNsfw && !isRevealed }]"
+            @click="handleReveal"
+            v-html="formattedText"
+          />
+          <div
+            v-if="isNsfw && !isRevealed"
+            class="absolute top-0 left-0 w-full h-full flex items-center justify-center cursor-pointer z-10"
+            role="button"
+            tabindex="0"
+            aria-label="Reveal potentially not safe for work text"
+            @click="handleReveal"
+            @keydown.enter="handleReveal"
+            @keydown.space.prevent="handleReveal"
+          >
+            <div class="text-center px-3 py-2 bg-white/80 backdrop-blur-md border border-red-300 text-red-600 text-sm font-semibold rounded shadow">
+              This text is potentially not safe for work. Click to reveal.
+            </div>
+          </div>
+        </blockquote>
+        <SentenceThumbnail v-if="pictureVisible" :key="exampleSentence.sentenceId" :sentence-id="exampleSentence.sentenceId" class="w-24 sm:w-32 shrink-0" />
+      </div>
       <div v-if="sourceVisible && hasSource" class="flex items-center mb-2">
         <span class="text-xs italic mr-2 ml-4">Source:</span>
         <div class="inline-flex items-center text-xs flex-wrap">
