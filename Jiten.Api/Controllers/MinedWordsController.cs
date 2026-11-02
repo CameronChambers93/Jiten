@@ -38,19 +38,38 @@ public class MinedWordsController(MinedSentenceService mined, MinedSyncService s
     }
 
     [HttpGet("sync/folds")]
-    [SwaggerOperation(Summary = "Words on more than one Anki note, with the note to keep and the ones to fold into it")]
+    [SwaggerOperation(Summary = "Words on more than one Anki note to fold, and folds recorded but not yet confirmed")]
     public async Task<IActionResult> Folds(CancellationToken ct)
     {
         if (userService.UserId is not { } userId) return Unauthorized();
-        return Ok(new { candidates = await sync.FoldCandidatesAsync(userId, ct) });
+        return Ok(await sync.FoldsAsync(userId, ct));
     }
 
     [HttpPost("sync/fold")]
-    [SwaggerOperation(Summary = "Records a confirmed fold, after the browser deleted the folded notes in Anki")]
+    [SwaggerOperation(Summary = "Records a fold the user confirmed, before the browser deletes the folded notes in Anki")]
     public async Task<IActionResult> Fold([FromBody] FoldRequest request, CancellationToken ct)
     {
         if (userService.UserId is not { } userId) return Unauthorized();
-        return await sync.FoldAsync(userId, request, ct) ? NoContent() : BadRequest(new { message = "Those notes aren't this word's." });
+        return await sync.BeginFoldAsync(userId, request, ct)
+            ? NoContent()
+            : BadRequest(new { message = "Those notes aren't this word's, or a fold of this word is still unfinished: Sync first." });
+    }
+
+    [HttpPost("sync/fold/{minedWordId:long}/confirm")]
+    [SwaggerOperation(Summary = "Completes a fold once its notes are deleted in Anki (or only the ones named gone); returns what to write to the kept note")]
+    public async Task<IActionResult> ConfirmFold(long minedWordId, [FromBody] ConfirmFoldRequest? request, CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        var (confirmed, write) = await sync.ConfirmFoldAsync(userId, minedWordId, request?.GoneAnkiNoteIds, ct);
+        return confirmed ? Ok(new { write }) : NotFound();
+    }
+
+    [HttpDelete("sync/fold/{minedWordId:long}")]
+    [SwaggerOperation(Summary = "Drops a pending fold whose notes are still in Anki")]
+    public async Task<IActionResult> CancelFold(long minedWordId, CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        return await sync.CancelFoldAsync(userId, minedWordId, ct) ? NoContent() : NotFound();
     }
 
     [HttpPost("sync/flags")]
@@ -62,12 +81,22 @@ public class MinedWordsController(MinedSentenceService mined, MinedSyncService s
         return Ok(new { applied = await sync.ApplyFlagsAsync(userId, request.Flags, ct) });
     }
 
-    [HttpGet("sync/sentences")]
-    [SwaggerOperation(Summary = "The Sentences field to write to each word's Anki note")]
-    public async Task<IActionResult> NoteSentences(CancellationToken ct)
+    [HttpGet("sync/notes")]
+    [SwaggerOperation(Summary = "What to write to each word's kept Anki note: its sentence list and, when they changed, its main fields")]
+    public async Task<IActionResult> NoteWrites(CancellationToken ct)
     {
         if (userService.UserId is not { } userId) return Unauthorized();
-        return Ok(new { notes = await sync.NoteSentencesAsync(userId, ct) });
+        return Ok(new { notes = await sync.NoteWritesAsync(userId, null, ct) });
+    }
+
+    [HttpPost("sync/main-written")]
+    [SwaggerOperation(Summary = "Records the main fields the browser wrote to notes")]
+    public async Task<IActionResult> MainWritten([FromBody] MainWrittenRequest request, CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        if (request.Notes.Count > MaxFlags) return BadRequest(new { message = $"At most {MaxFlags} notes per request." });
+        await sync.MainWrittenAsync(userId, request.Notes, ct);
+        return NoContent();
     }
 
     [HttpPost("import")]
@@ -83,7 +112,7 @@ public class MinedWordsController(MinedSentenceService mined, MinedSyncService s
     }
 
     [HttpPost("sentences")]
-    [SwaggerOperation(Summary = "Adds an example sentence to the word of an Anki note already in the store; returns the Sentences field to write to its kept note")]
+    [SwaggerOperation(Summary = "Adds an example sentence to the word of an Anki note already in the store; returns what to write to its kept note")]
     public async Task<IActionResult> AddSentence([FromBody] AddSentenceRequest request, CancellationToken ct)
     {
         if (userService.UserId is not { } userId) return Unauthorized();

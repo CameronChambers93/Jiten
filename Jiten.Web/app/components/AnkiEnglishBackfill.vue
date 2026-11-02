@@ -4,7 +4,7 @@
   import InputText from 'primevue/inputtext';
   import Message from 'primevue/message';
   import { useToast } from 'primevue/usetoast';
-  import { ankiConnect } from '~/composables/useMiningCards';
+  import { ankiConnect } from '~/composables/useAnkiConnect';
   import { noteContext, noteSource, skipReason, type BackfillNote } from '~/utils/ankiEnglishBackfill';
   import { escapeFieldText } from '~/utils/miningCardFields';
   import { sanitiseHtml } from '~/utils/sanitiseHtml';
@@ -31,8 +31,6 @@
 
   const { $api } = useNuxtApp();
   const toast = useToast();
-  // Loads the saved AnkiConnect key that ankiConnect() sends.
-  useMiningCards();
 
   const query = ref('"note:Lapis+" -tag:lapisplus-example "Sentence:_*" "SentenceEnglish:"');
   const sentenceField = ref('Sentence');

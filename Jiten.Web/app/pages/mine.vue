@@ -1,7 +1,6 @@
 <script setup lang="ts">
   import type { ExampleSentence, WordSummary } from '~/types';
   import { useAuthStore } from '~/stores/authStore';
-  import { ankiConnect } from '~/composables/useMiningCards';
 
   definePageMeta({ middleware: ['auth'] });
   useHead({ title: 'Mine - Jiten' });
@@ -52,7 +51,12 @@
   const q = route.query;
   const str = (v: unknown) => (typeof v === 'string' && v.length > 0 ? v : undefined);
   const num = (v: unknown) => (str(v) != null && !Number.isNaN(Number(v)) ? Number(v) : null);
-  const ids = (v: unknown) => (str(v) ?? '').split(',').filter(Boolean).map(Number).filter((n) => !Number.isNaN(n));
+  const ids = (v: unknown) =>
+    (str(v) ?? '')
+      .split(',')
+      .filter(Boolean)
+      .map(Number)
+      .filter((n) => !Number.isNaN(n));
 
   const sortOptions = [
     { label: 'Frequency', value: 'frequency' },
@@ -190,42 +194,24 @@
   }
 
   // ---- Words already in Anki (read through the user's AnkiConnect) ----
-  const { settings: cardSettings, configured: cardsConfigured, fetchAudio } = useMiningCards();
+  const { configured: cardsConfigured, fetchAudio, wordsInAnki } = useMiningCards();
+  const { miningSetups, load: loadSetups } = useAnkiSetups();
   const ankiWords = ref<string[] | null>(null);
   const ankiLoading = ref(false);
 
-  function plainText(html: string) {
-    return html
-      .replace(/<[^>]*>/g, '')
-      .replace(/\[[^\]]*\]/g, '')
-      .replace(/&nbsp;/g, ' ')
-      .trim();
-  }
-
   async function loadAnkiWords(force = false) {
     if ((ankiWords.value && !force) || ankiLoading.value) return;
-    const model = cardSettings.value.modelName;
-    if (!model) {
-      toast.add({ severity: 'info', summary: 'Pick your note type in Card settings first.', life: 4000, group: 'bottom' });
+    await loadSetups().catch(() => {});
+    if (!miningSetups.value.length) {
+      toast.add({ severity: 'info', summary: 'Set up your mining note types in Anki settings first.', life: 4000, group: 'bottom' });
       filters.hideInAnki = false;
       return;
     }
-    const mapping = cardSettings.value.fieldsByModel[model] ?? {};
-    const wordField = Object.entries(mapping).find(([, source]) => source === 'word')?.[0] ?? 'Expression';
     ankiLoading.value = true;
     try {
-      const noteIds = await ankiConnect<number[]>('findNotes', { query: `"note:${model}"` });
-      const words = new Set<string>();
-      for (let i = 0; i < noteIds.length; i += 1000) {
-        const notes = await ankiConnect<{ fields: Record<string, { value: string }> }[]>('notesInfo', { notes: noteIds.slice(i, i + 1000) });
-        for (const note of notes) {
-          const word = plainText(note.fields[wordField]?.value ?? '');
-          if (word) words.add(word);
-        }
-      }
-      ankiWords.value = [...words];
+      ankiWords.value = await wordsInAnki();
     } catch {
-      toast.add({ severity: 'warn', summary: "Couldn't reach AnkiConnect at 127.0.0.1:8765, so words in Anki aren't hidden.", life: 5000, group: 'bottom' });
+      toast.add({ severity: 'warn', summary: "Couldn't reach AnkiConnect, so words in Anki aren't hidden.", life: 5000, group: 'bottom' });
       filters.hideInAnki = false;
     } finally {
       ankiLoading.value = false;
@@ -565,7 +551,13 @@
               </label>
               <label class="flex items-center gap-2 text-sm">
                 <Checkbox v-model="filters.hideInAnki" binary />
-                <span v-tooltip.top="cardSettings.modelName ? `Words in your ${cardSettings.modelName} notes` : 'Uses the note type from Card settings'">
+                <span
+                  v-tooltip.top="
+                    miningSetups.length
+                      ? `Words in your ${miningSetups.map((s) => s.modelName).join(', ')} notes`
+                      : 'Uses the note types set up in Anki settings'
+                  "
+                >
                   Hide words already in Anki
                 </span>
                 <i v-if="ankiLoading" class="pi pi-spin pi-spinner text-xs" />
@@ -625,7 +617,14 @@
                   class="flex items-start gap-2"
                 >
                   <div class="min-w-0 flex-1">
-                    <ExampleSentenceEntry :example-sentence="sentence" :word-id="item.word.wordId" :reading-index="item.word.readingIndex" show-source :show-tts="false" :show-mine="false" />
+                    <ExampleSentenceEntry
+                      :example-sentence="sentence"
+                      :word-id="item.word.wordId"
+                      :reading-index="item.word.readingIndex"
+                      show-source
+                      :show-tts="false"
+                      :show-mine="false"
+                    />
                     <p
                       v-if="pageMode !== 'off' && translations[sentence.sentenceId]"
                       class="text-sm text-gray-600 dark:text-gray-300 mt-1"
@@ -675,7 +674,9 @@
                 </div>
                 <Button
                   v-if="filters.layout === 'word' && item.sentences.length > 1"
-                  :label="expanded.has(index) ? 'Fewer sentences' : `${item.sentences.length - 1} more ${item.sentences.length === 2 ? 'sentence' : 'sentences'}`"
+                  :label="
+                    expanded.has(index) ? 'Fewer sentences' : `${item.sentences.length - 1} more ${item.sentences.length === 2 ? 'sentence' : 'sentences'}`
+                  "
                   size="small"
                   text
                   class="self-start"

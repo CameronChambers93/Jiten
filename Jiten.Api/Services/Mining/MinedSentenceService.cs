@@ -58,7 +58,8 @@ public record AddSentenceRequest(long AnkiNoteId, long ExampleSentenceId, string
 /// <param name="AnkiNoteId">The word's kept note (the oldest), which <paramref name="SentencesHtml"/> is for.</param>
 /// <param name="Added">False when the word already had the sentence; nothing changed.</param>
 /// <param name="Sentences">The word's sentences, counting this one.</param>
-public record AddSentenceResult(long AnkiNoteId, long MinedSentenceId, bool Added, int Sentences, string SentencesHtml);
+/// <param name="Write">What to write to the kept note now; null when its note type has no setup or nothing to write.</param>
+public record AddSentenceResult(long AnkiNoteId, long MinedSentenceId, bool Added, int Sentences, NoteWriteDto? Write);
 
 /// <summary>Where an imported note's sentence came from, read from its tags, media file names and URL.</summary>
 public record DetectedOrigin(string Origin, long? ExampleSentenceId, string? SourceTitle, string? SourceUrl)
@@ -206,10 +207,9 @@ public class MinedSentenceService(
             await MinedLineStore.SetDeckSourceAsync(jiten, request.ExampleSentenceId, sentence.SourceTitle, ct);
         }
 
-        var kept = word.Notes.Min(n => n.AnkiNoteId);
-        var rotation = MinedSyncService.InRotation(word.Sentences, await sentenceFlags.OpenSentenceIdsAsync(userId, ct));
-        return new AddSentenceResult(kept, sentence.MinedSentenceId, added, word.Sentences.Count,
-                                     MinedSyncService.RenderSentences(kept, rotation, await sync.TargetTemplateAsync(userId, ct)));
+        var write = added ? (await sync.NoteWritesAsync(userId, word.MinedWordId, ct)).FirstOrDefault() : null;
+        var kept = write?.AnkiNoteId ?? word.Notes.Where(n => n.FoldingInto == null).Min(n => n.AnkiNoteId);
+        return new AddSentenceResult(kept, sentence.MinedSentenceId, added, word.Sentences.Count, write);
     }
 
     /// <summary>The card's word fields for words picked out of a sentence: written form, furigana and first meaning.</summary>

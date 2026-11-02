@@ -19,4 +19,10 @@ public class UserSettings
 
     /// <summary>How cards mark the target word, see <see cref="User.TargetWordMarkup"/>; null for the default.</summary>
     public string? TargetWordTemplate { get; set; }
+
+    /// <summary>Where new mined cards go: deck, note type, tags and audio padding (JSON, see the Anki sync card target).</summary>
+    public string AnkiCardTargetJson { get; set; } = "{}";
+
+    /// <summary>When Sync last sent known words; cards unchanged since aren't sent again. Cleared when a setup's known words change.</summary>
+    public DateTime? AnkiKnownWordsSyncedAt { get; set; }
 }

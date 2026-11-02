@@ -37,6 +37,15 @@ public class MinedNote
     public string ModelName { get; set; } = "";
     public string DeckName { get; set; } = "";
     public DateTime ImportedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>Set while a fold is under way: the note being kept. The note is deleted in Anki, then the fold is confirmed.</summary>
+    public long? FoldingInto { get; set; }
+
+    /// <summary>The sentence Sync last wrote to the note's main fields; null while they hold the note's own sentence.</summary>
+    public long? FieldsSentenceId { get; set; }
+
+    /// <summary>A hash of what Sync last wrote to the main fields, so a changed sentence is written again.</summary>
+    public string? FieldsHash { get; set; }
 }
 
 public static class MinedSentenceOrigin

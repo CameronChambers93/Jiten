@@ -1,7 +1,9 @@
 import type { DeckIPlusOneSentence, ExampleSentence, Word } from '~/types';
-import type { MiningFieldSource } from '~/utils/miningCardFields';
-import { LAPIS_FIELDS } from '~/utils/minedImport';
+import { ankiConnect } from '~/composables/useAnkiConnect';
 import { ankiPitchCategories, ankiPitchPositions } from '~/utils/pitchAccent';
+import { ankiSearchValue, fieldsFor, setupQuery, type AnkiNoteTypeSetup, type FieldRole } from '~/utils/ankiSetups';
+import { noteWriteFields, type NoteWrite } from '~/utils/ankiNoteWrite';
+import type { AnkiNoteInfo } from '~/utils/minedImport';
 import {
   ankiSentenceFurigana,
   ankiWordFurigana,
@@ -9,71 +11,32 @@ import {
   definitionsHtml,
   escapeFieldText,
   firstSense,
-  guessFieldSource,
   kanaReading,
   sourceLabel,
   applyTargetTemplate,
 } from '~/utils/miningCardFields';
 
-/** Which Anki deck and note type mined sentences go to, and what fills each field. Kept per browser. */
-export interface MiningCardSettings {
-  version: 1;
-  deckName: string;
-  modelName: string;
-  /** Field mapping per note type, so switching note types and back keeps each one's mapping. */
-  fieldsByModel: Record<string, Record<string, MiningFieldSource>>;
-  tags: string;
-  padStartMs: number;
-  padEndMs: number;
-  /** AnkiConnect's optional apiKey. */
-  ankiKey: string;
-}
-
-const STORAGE_KEY = 'jiten-mining-cards';
-const ANKI_CONNECT_URL = 'http://127.0.0.1:8765';
-
-const defaults = (): MiningCardSettings => ({
-  version: 1,
-  deckName: '',
-  modelName: '',
-  fieldsByModel: {},
-  tags: 'jiten',
-  padStartMs: 250,
-  padEndMs: 250,
-  ankiKey: '',
-});
-
-// Shared by the settings dialog and every page that mines.
-const settings = ref<MiningCardSettings>(defaults());
-let loaded = false;
-
-function loadSettings() {
-  if (loaded || !import.meta.client) return;
-  loaded = true;
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    const blob = raw ? (JSON.parse(raw) as MiningCardSettings) : null;
-    if (blob?.version === 1) settings.value = { ...defaults(), ...blob };
-  } catch {}
-}
-
-export async function ankiConnect<T = unknown>(action: string, params: Record<string, unknown> = {}, key = settings.value.ankiKey): Promise<T> {
-  const body: Record<string, unknown> = { action, version: 6, params };
-  if (key) body.key = key;
-  const res = await fetch(ANKI_CONNECT_URL, { method: 'POST', body: JSON.stringify(body) });
-  const json = await res.json();
-  if (json.error) throw new Error(json.error);
-  return json.result as T;
-}
-
-/** A value for an Anki search term inside double quotes: quotes and backslashes escaped, wildcards taken literally. */
-function ankiSearchValue(value: string): string {
-  return value.replace(/[\\"*_]/g, (c) => `\\${c}`);
-}
-
 function isNotFound(e: unknown): boolean {
   const err = e as { statusCode?: number; response?: { status?: number } } | null;
   return err?.statusCode === 404 || err?.response?.status === 404;
+}
+
+/** Plain text of a word field: tags, furigana brackets and spaces gone. */
+export function plainFieldText(html: string): string {
+  return html
+    .replace(/<rt>.*?<\/rt>/g, '')
+    .replace(/<[^>]*>/g, '')
+    .replace(/\[[^\]]*\]/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, '')
+    .trim();
+}
+
+/** Main fields a note was given, as `api/mined/sync/main-written` records them. */
+export interface MainWritten {
+  ankiNoteId: number;
+  minedSentenceId: number;
+  hash: string;
 }
 
 /** A media file for a card, named after the example sentence so the sentence store recognises Jiten's media. */
@@ -90,7 +53,14 @@ export interface AddedSentence {
   added: boolean;
   /** The word's sentences, counting this one. */
   sentences: number;
-  sentencesHtml: string;
+  /** What to write to the kept note now; null when its note type has nothing to write. */
+  write: NoteWrite | null;
+}
+
+/** The word's frequency rank for a sort field, or empty when Jiten has none. */
+function wordFrequency(details: Word | null, readingIndex: number): string {
+  const rank = details && [details.mainReading, ...details.alternativeReadings].find((r) => r.readingIndex === readingIndex)?.frequencyRank;
+  return rank && rank > 0 ? String(rank) : '';
 }
 
 async function blobToBase64(blob: Blob): Promise<string> {
@@ -101,26 +71,20 @@ async function blobToBase64(blob: Blob): Promise<string> {
 }
 
 export function useMiningCards() {
-  loadSettings();
   const { $api } = useNuxtApp();
   const { forCard: englishForCard, forCardTranslation } = useSentenceTranslation();
   const { importNotes } = useMinedImport();
   const store = useJitenStore();
+  const anki = useAnkiSetups();
+  if (import.meta.client) anki.load().catch(() => {});
 
-  const configured = computed(() => !!settings.value.deckName && !!settings.value.modelName && !!settings.value.fieldsByModel[settings.value.modelName]);
+  /** The new-card target, with the target note type's roles. */
+  const settings = computed(() => {
+    const target = anki.cardTarget.value;
+    return { ...target, fieldRoles: (anki.setupFor(target.modelName)?.fieldRoles ?? {}) as Record<string, FieldRole> };
+  });
 
-  function saveSettings(next: MiningCardSettings) {
-    settings.value = next;
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    } catch {}
-  }
-
-  /** The note type's fields with their saved mapping, or a guess from the field names. */
-  function mappingFor(modelName: string, fieldNames: string[]): Record<string, MiningFieldSource> {
-    const saved = settings.value.fieldsByModel[modelName] ?? {};
-    return Object.fromEntries(fieldNames.map((name) => [name, name in saved ? saved[name]! : guessFieldSource(name)]));
-  }
+  const configured = computed(() => !!settings.value.deckName && !!settings.value.modelName && Object.keys(settings.value.fieldRoles).length > 0);
 
   function fetchAudio(sentenceId: number): Promise<Blob> {
     return $api<Blob>(`sentence-media/${sentenceId}/audio`, {
@@ -160,18 +124,75 @@ export function useMiningCards() {
     return { audio: a, picture: p };
   }
 
+  /** The setups whose notes count as the word being in Anki: those with sentence actions and a Word field. */
+  function wordSetups(): AnkiNoteTypeSetup[] {
+    return anki.miningSetups.value.filter((s) => fieldsFor(s.fieldRoles, 'word').length > 0);
+  }
+
   /**
-   * The word's notes in Anki, oldest first: notes of the card settings' note type whose word field holds it (the check
-   * "Hide words already in Anki" makes). Empty when no field is mapped to the word.
+   * The word's notes in Anki, oldest first: notes of every note type with sentence actions (within its filter) whose
+   * Word field holds it, the check "Hide words already in Anki" makes.
    */
   async function existingNotes(word: string): Promise<number[]> {
-    const { modelName } = settings.value;
-    const mapping = settings.value.fieldsByModel[modelName] ?? {};
-    const wordFields = Object.keys(mapping).filter((name) => mapping[name] === 'word');
-    if (!modelName || wordFields.length === 0 || !word) return [];
-    const fields = wordFields.map((f) => `"${ankiSearchValue(f)}:${ankiSearchValue(word)}"`).join(' OR ');
-    const ids = await ankiConnect<number[]>('findNotes', { query: `"note:${ankiSearchValue(modelName)}" (${fields})` });
+    await anki.load();
+    const setups = wordSetups();
+    if (!setups.length || !word) return [];
+    const query = setups
+      .map((s) => {
+        const fields = fieldsFor(s.fieldRoles, 'word')
+          .map((f) => `"${ankiSearchValue(f)}:${ankiSearchValue(word)}"`)
+          .join(' OR ');
+        return `(${setupQuery(s, `(${fields})`)})`;
+      })
+      .join(' OR ');
+    const ids = await ankiConnect<number[]>('findNotes', { query });
     return ids.sort((a, b) => a - b);
+  }
+
+  /** Every word on the notes of note types with sentence actions, as plain text. */
+  async function wordsInAnki(): Promise<string[]> {
+    await anki.load();
+    const words = new Set<string>();
+    for (const setup of wordSetups()) {
+      const wordFields = fieldsFor(setup.fieldRoles, 'word');
+      const noteIds = await ankiConnect<number[]>('findNotes', { query: setupQuery(setup) });
+      for (let i = 0; i < noteIds.length; i += 1000) {
+        const notes = await ankiConnect<{ fields: Record<string, { value: string }> }[]>('notesInfo', { notes: noteIds.slice(i, i + 1000) });
+        for (const note of notes) {
+          for (const f of wordFields) {
+            const w = plainFieldText(note.fields[f]?.value ?? '');
+            if (w) words.add(w);
+          }
+        }
+      }
+    }
+    return [...words];
+  }
+
+  /**
+   * Writes Sync's sentence list and main fields to a note through its note type's roles, skipping fields that already
+   * hold the value. Records main fields written, so they aren't written again.
+   */
+  async function writeNote(
+    write: NoteWrite,
+    info?: AnkiNoteInfo,
+    record = true
+  ): Promise<{ updated: boolean; missingList: boolean; mainWritten: MainWritten | null }> {
+    const none = { updated: false, missingList: false, mainWritten: null };
+    const setup = anki.setupFor(write.modelName);
+    if (!setup) return none;
+    const note = info ?? (await ankiConnect<(AnkiNoteInfo | Record<string, never>)[]>('notesInfo', { notes: [write.ankiNoteId] }))[0];
+    if (!note || !('noteId' in note)) return none;
+    const { fields, missingList } = noteWriteFields(write, setup.fieldRoles, note.fields);
+    if (Object.keys(fields).length) await ankiConnect('updateNoteFields', { note: { id: write.ankiNoteId, fields } });
+    const mainWritten = write.main ? { ankiNoteId: write.ankiNoteId, minedSentenceId: write.main.minedSentenceId, hash: write.main.hash } : null;
+    if (mainWritten && record) await recordMainWritten([mainWritten]);
+    return { updated: Object.keys(fields).length > 0, missingList, mainWritten };
+  }
+
+  /** Records main fields written, so they aren't written again. */
+  async function recordMainWritten(notes: MainWritten[]) {
+    if (notes.length) await $api('mined/sync/main-written', { method: 'POST', body: { notes } });
   }
 
   /**
@@ -211,28 +232,29 @@ export function useMiningCards() {
         pictureFilename: media.picture?.filename ?? null,
       },
     });
-    if (result.added) {
-      await ankiConnect('updateNoteFields', { note: { id: result.ankiNoteId, fields: { [LAPIS_FIELDS.sentences]: result.sentencesHtml } } });
-    }
+    if (result.write) await writeNote(result.write);
     return result;
   }
 
   /** Creates the note in Anki through AnkiConnect; resolves to the new note id. */
   async function addCard(item: DeckIPlusOneSentence): Promise<number> {
     const { sentence, word } = item;
-    const mapping = settings.value.fieldsByModel[settings.value.modelName] ?? {};
+    await anki.load();
+    const mapping = settings.value.fieldRoles;
     const wanted = new Set(Object.values(mapping));
-    const fieldsFor = (source: MiningFieldSource) => Object.keys(mapping).filter((name) => mapping[name] === source);
+    const fieldsWith = (role: FieldRole) => fieldsFor(mapping, role);
 
     const [details, media, english, { targetWordTemplate }] = await Promise.all([
-      (['definitions', 'mainDefinition', 'pitchPosition', 'pitchCategories'] as const).some((f) => wanted.has(f)) ? $api<Word>(`vocabulary/${word.wordId}/${word.readingIndex}`) : null,
+      (['definitions', 'mainDefinition', 'pitchPosition', 'pitchCategories', 'frequency'] as const).some((f) => wanted.has(f))
+        ? $api<Word>(`vocabulary/${word.wordId}/${word.readingIndex}`)
+        : null,
       cardMedia(sentence.sentenceId, wanted.has('sentenceAudio'), wanted.has('picture')),
       // A failed translation leaves the field empty rather than losing the card.
       wanted.has('sentenceEnglish') ? englishForCard(sentence.sentenceId).catch(() => '') : '',
       $api<{ targetWordTemplate: string }>('mined/settings'),
     ]);
 
-    const values: Record<Exclude<MiningFieldSource, '' | 'sentenceAudio' | 'picture'>, string> = {
+    const values: Partial<Record<FieldRole, string>> = {
       word: escapeFieldText(word.reading),
       wordReading: escapeFieldText(kanaReading(word.readingFurigana || word.reading)),
       wordFurigana: escapeFieldText(ankiWordFurigana(word.readingFurigana || word.reading)),
@@ -245,11 +267,13 @@ export function useMiningCards() {
       sentenceFurigana: applyTargetTemplate(ankiSentenceFurigana(sentence.text, sentence.furigana ?? [], sentence), targetWordTemplate),
       sentenceEnglish: escapeFieldText(english),
       source: escapeFieldText(sourceLabel(sentence)),
+      frequency: wordFrequency(details, word.readingIndex),
     };
 
     const fields: Record<string, string> = {};
     for (const [name, source] of Object.entries(mapping)) {
-      if (source && source in values) fields[name] = values[source as keyof typeof values];
+      const value = values[source];
+      if (value !== undefined) fields[name] = value;
     }
 
     const note: Record<string, unknown> = {
@@ -259,11 +283,11 @@ export function useMiningCards() {
       tags: settings.value.tags.split(/\s+/).filter(Boolean),
       options: { allowDuplicate: false, duplicateScope: 'deck' },
     };
-    if (media.audio) note.audio = [{ data: await blobToBase64(media.audio.blob), filename: media.audio.filename, fields: fieldsFor('sentenceAudio') }];
-    if (media.picture) note.picture = [{ data: await blobToBase64(media.picture.blob), filename: media.picture.filename, fields: fieldsFor('picture') }];
+    if (media.audio) note.audio = [{ data: await blobToBase64(media.audio.blob), filename: media.audio.filename, fields: fieldsWith('sentenceAudio') }];
+    if (media.picture) note.picture = [{ data: await blobToBase64(media.picture.blob), filename: media.picture.filename, fields: fieldsWith('picture') }];
 
     return ankiConnect<number>('addNote', { note });
   }
 
-  return { settings: readonly(settings), configured, saveSettings, mappingFor, fetchAudio, fetchPicture, addCard, existingNotes, addToExistingNote };
+  return { settings, configured, fetchAudio, fetchPicture, addCard, existingNotes, wordsInAnki, writeNote, recordMainWritten, addToExistingNote };
 }

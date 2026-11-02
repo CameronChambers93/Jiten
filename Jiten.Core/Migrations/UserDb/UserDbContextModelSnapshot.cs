@@ -721,6 +721,74 @@ namespace Jiten.Core.Migrations.UserDb
                     b.ToTable("UserReviewDailies", "user");
                 });
 
+            modelBuilder.Entity("Jiten.Core.Data.User.AnkiNoteTypeSetup", b =>
+                {
+                    b.Property<long>("AnkiNoteTypeSetupId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("AnkiNoteTypeSetupId"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("FieldRolesJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasDefaultValue("{}");
+
+                    b.Property<string>("Filter")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<bool>("FoldDuplicates")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("ImportSentences")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("KnownWords")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("ModelName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Preset")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<int?>("ScriptVersion")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("SentenceList")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<bool>("TakeFlags")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("UpdateMainFields")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("AnkiNoteTypeSetupId");
+
+                    b.HasIndex("UserId", "ModelName")
+                        .IsUnique();
+
+                    b.ToTable("AnkiNoteTypeSetups", "user");
+                });
+
             modelBuilder.Entity("Jiten.Core.Data.User.MinedNote", b =>
                 {
                     b.Property<long>("MinedNoteId")
@@ -736,6 +804,16 @@ namespace Jiten.Core.Migrations.UserDb
                         .IsRequired()
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
+
+                    b.Property<string>("FieldsHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<long?>("FieldsSentenceId")
+                        .HasColumnType("bigint");
+
+                    b.Property<long?>("FoldingInto")
+                        .HasColumnType("bigint");
 
                     b.Property<DateTime>("ImportedAt")
                         .HasColumnType("timestamp with time zone");
@@ -905,12 +983,12 @@ namespace Jiten.Core.Migrations.UserDb
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");
 
-                    b.Property<DateTime?>("ResolvedAt")
-                        .HasColumnType("timestamp with time zone");
-
                     b.Property<string>("Resolution")
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");
+
+                    b.Property<DateTime?>("ResolvedAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
@@ -1558,6 +1636,15 @@ namespace Jiten.Core.Migrations.UserDb
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("AnkiCardTargetJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasDefaultValue("{}");
+
+                    b.Property<DateTime?>("AnkiKnownWordsSyncedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("DismissedNoticesJson")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
@@ -1842,6 +1929,15 @@ namespace Jiten.Core.Migrations.UserDb
                 });
 
             modelBuilder.Entity("Jiten.Core.Data.FSRS.UserReviewDaily", b =>
+                {
+                    b.HasOne("Jiten.Core.Data.Authentication.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Jiten.Core.Data.User.AnkiNoteTypeSetup", b =>
                 {
                     b.HasOne("Jiten.Core.Data.Authentication.User", null)
                         .WithMany()

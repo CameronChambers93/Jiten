@@ -1,13 +1,13 @@
 <script setup lang="ts">
-  import type { MiningFieldSource } from '~/utils/miningCardFields';
-  import { MINING_FIELD_SOURCES } from '~/utils/miningCardFields';
-  import { ankiConnect, useMiningCards } from '~/composables/useMiningCards';
+  import { ankiConnect } from '~/composables/useAnkiConnect';
+  import { ankiSearchValue, hasSentenceActions, newSetup, ROLE_OPTIONS, setupQuery, withRoles, type FieldRole } from '~/utils/ankiSetups';
 
   const visible = defineModel<boolean>('visible', { required: true });
   const emit = defineEmits<{ saved: [] }>();
 
   const { $api } = useNuxtApp();
-  const { settings, saveSettings, mappingFor } = useMiningCards();
+  const anki = useAnkiSetups();
+  const { device, setKey } = useAnkiDevice();
 
   const deckName = ref('');
   const modelName = ref('');
@@ -17,11 +17,17 @@
   const ankiKey = ref('');
   const targetWordTemplate = ref('');
   const templateError = ref<string | null>(null);
-  const fields = ref<Record<string, MiningFieldSource>>({});
+  const saveError = ref<string | null>(null);
+  /** The note type's fields in Anki's order, with their roles. */
+  const fieldOrder = ref<string[]>([]);
+  const roles = ref<Record<string, FieldRole | ''>>({});
+  /** Set when new cards of this note type and deck won't be synced. */
+  const syncWarning = ref<string | null>(null);
 
   const decks = ref<string[]>([]);
   const models = ref<string[]>([]);
   const loading = ref(false);
+  const saving = ref(false);
   const ankiError = ref<string | null>(null);
 
   async function connect() {
@@ -42,59 +48,95 @@
     }
   }
 
+  /** The note type's fields, with its setup's roles or, without a setup, suggested ones. */
   async function loadFields(model: string) {
     const names = await ankiConnect<string[]>('modelFieldNames', { modelName: model }, ankiKey.value);
-    fields.value = mappingFor(model, names);
+    fieldOrder.value = names;
+    const setup = anki.setupFor(model);
+    const source = setup?.fieldRoles ?? newSetup(model, names).fieldRoles;
+    roles.value = Object.fromEntries(names.map((n) => [n, source[n] ?? '']));
+    await checkSync();
+  }
+
+  /** Warns when the note type isn't synced, or its filter leaves out the deck. */
+  async function checkSync() {
+    syncWarning.value = null;
+    const setup = anki.setupFor(modelName.value);
+    if (!modelName.value) return;
+    if (!setup || !hasSentenceActions(setup)) {
+      syncWarning.value = `${modelName.value} has no sentence actions in Anki settings, so new cards won't sync.`;
+      return;
+    }
+    if (!setup.filter || !deckName.value) return;
+    try {
+      const deck = `"deck:${ankiSearchValue(deckName.value)}"`;
+      const [all, kept] = await Promise.all([
+        ankiConnect<number[]>('findNotes', { query: setupQuery({ modelName: modelName.value, filter: null }, deck) }, ankiKey.value),
+        ankiConnect<number[]>('findNotes', { query: setupQuery(setup, deck) }, ankiKey.value),
+      ]);
+      if (all.length > 0 && kept.length === 0) syncWarning.value = `The ${modelName.value} filter leaves out ${deckName.value}, so new cards won't sync.`;
+    } catch {}
   }
 
   watch(modelName, (model, previous) => {
-    if (model && previous !== undefined && model !== previous && models.value.length) loadFields(model).catch(() => (fields.value = {}));
+    if (model && previous !== undefined && model !== previous && models.value.length) loadFields(model).catch(() => (roles.value = {}));
   });
+  watch(deckName, () => checkSync());
 
   watch(
     visible,
-    (open) => {
+    async (open) => {
       if (!open) return;
-      const s = settings.value;
-      deckName.value = s.deckName;
-      modelName.value = s.modelName;
-      tags.value = s.tags;
-      padStartMs.value = s.padStartMs;
-      padEndMs.value = s.padEndMs;
-      ankiKey.value = s.ankiKey;
-      fields.value = { ...(s.fieldsByModel[s.modelName] ?? {}) };
+      await anki.load().catch(() => {});
+      const t = anki.cardTarget.value;
+      deckName.value = t.deckName;
+      modelName.value = t.modelName;
+      tags.value = t.tags;
+      padStartMs.value = t.padStartMs;
+      padEndMs.value = t.padEndMs;
+      ankiKey.value = device.value.key;
+      roles.value = {};
+      fieldOrder.value = [];
       templateError.value = null;
+      saveError.value = null;
       $api<{ targetWordTemplate: string }>('mined/settings').then((r) => (targetWordTemplate.value = r.targetWordTemplate));
       connect();
     },
     { immediate: true }
   );
 
-  const fieldNames = computed(() => Object.keys(fields.value));
-  const canSave = computed(() => !!deckName.value && !!modelName.value && fieldNames.value.length > 0 && templateValid.value);
+  const canSave = computed(() => !!deckName.value && !!modelName.value && fieldOrder.value.length > 0 && templateValid.value);
 
   const templateValid = computed(() => targetWordTemplate.value.split('{word}').length === 2);
 
   async function save() {
+    saving.value = true;
+    saveError.value = null;
     try {
-      await $api('mined/settings', { method: 'PUT', body: { targetWordTemplate: targetWordTemplate.value } });
+      try {
+        await $api('mined/settings', { method: 'PUT', body: { targetWordTemplate: targetWordTemplate.value } });
+      } catch (e) {
+        templateError.value = String((e as Error).message ?? e);
+        return;
+      }
+      const fieldRoles = Object.fromEntries(Object.entries(roles.value).filter(([, r]) => !!r)) as Record<string, FieldRole>;
+      const setup = anki.setupFor(modelName.value) ?? newSetup(modelName.value, fieldOrder.value);
+      await anki.save(withRoles(setup, fieldRoles));
+      await anki.saveCardTarget({
+        deckName: deckName.value,
+        modelName: modelName.value,
+        tags: tags.value,
+        padStartMs: padStartMs.value,
+        padEndMs: padEndMs.value,
+      });
+      setKey(ankiKey.value);
+      visible.value = false;
+      emit('saved');
     } catch (e) {
-      templateError.value = String((e as Error).message ?? e);
-      return;
+      saveError.value = extractApiError(e, "Couldn't save the card settings");
+    } finally {
+      saving.value = false;
     }
-    const s = settings.value;
-    saveSettings({
-      ...s,
-      fieldsByModel: { ...s.fieldsByModel, [modelName.value]: { ...fields.value } },
-      deckName: deckName.value,
-      modelName: modelName.value,
-      tags: tags.value,
-      padStartMs: padStartMs.value,
-      padEndMs: padEndMs.value,
-      ankiKey: ankiKey.value,
-    });
-    visible.value = false;
-    emit('saved');
   }
 
   const origin = import.meta.client ? window.location.origin : '';
@@ -104,7 +146,8 @@
   <Dialog v-model:visible="visible" modal header="Anki card settings" :style="{ width: '40rem', maxWidth: '95vw' }">
     <div class="flex flex-col gap-4">
       <p class="text-sm text-gray-600 dark:text-gray-300">
-        Mined sentences are added to Anki through AnkiConnect on this computer, with the sentence audio and a screenshot cut from the episode.
+        Mined sentences are added to Anki through AnkiConnect on this computer, with the sentence audio and a screenshot cut from the episode. These settings
+        are saved to your account, except the API key.
       </p>
 
       <Message v-if="ankiError" severity="warn" :closable="false">
@@ -129,18 +172,16 @@
         </div>
       </div>
 
-      <div v-if="fieldNames.length" class="flex flex-col gap-2">
+      <Message v-if="syncWarning" severity="warn" size="small" :closable="false">
+        {{ syncWarning }} <NuxtLink to="/settings/anki" class="underline" @click="visible = false">Anki settings</NuxtLink>
+      </Message>
+
+      <div v-if="fieldOrder.length" class="flex flex-col gap-2">
         <div class="text-sm font-semibold">Fields</div>
-        <div v-for="name in fieldNames" :key="name" class="grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] items-center gap-3">
+        <p class="text-xs text-gray-500 dark:text-gray-400">These are the note type's field roles, which import and Sync read too.</p>
+        <div v-for="name in fieldOrder" :key="name" class="grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] items-center gap-3">
           <label :for="`mining-field-${name}`" class="text-sm truncate">{{ name }}</label>
-          <Select
-            v-model="fields[name]"
-            :input-id="`mining-field-${name}`"
-            :options="MINING_FIELD_SOURCES"
-            option-label="label"
-            option-value="value"
-            size="small"
-          />
+          <Select v-model="roles[name]" :input-id="`mining-field-${name}`" :options="ROLE_OPTIONS" option-label="label" option-value="value" size="small" />
         </div>
       </div>
 
@@ -170,13 +211,15 @@
       </div>
 
       <div class="flex flex-col gap-1">
-        <label for="mining-key" class="text-sm text-gray-500 dark:text-gray-400">AnkiConnect API key (only if you set one)</label>
+        <label for="mining-key" class="text-sm text-gray-500 dark:text-gray-400">AnkiConnect API key on this device (only if you set one)</label>
         <InputText id="mining-key" v-model="ankiKey" type="password" autocomplete="off" />
       </div>
 
+      <small v-if="saveError" class="text-red-500">{{ saveError }}</small>
+
       <div class="flex justify-end gap-2 pt-2">
         <Button label="Cancel" severity="secondary" @click="visible = false" />
-        <Button label="Save" icon="pi pi-check" :disabled="!canSave" @click="save" />
+        <Button label="Save" icon="pi pi-check" :disabled="!canSave" :loading="saving" @click="save" />
       </div>
     </div>
   </Dialog>

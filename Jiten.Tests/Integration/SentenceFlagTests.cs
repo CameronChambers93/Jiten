@@ -28,6 +28,14 @@ public class SentenceFlagTests(JitenWebApplicationFactory factory)
         userDb.MinedSentences.RemoveRange(userDb.MinedSentences);
         userDb.MinedNotes.RemoveRange(userDb.MinedNotes);
         userDb.MinedWords.RemoveRange(userDb.MinedWords);
+        userDb.AnkiNoteTypeSetups.RemoveRange(userDb.AnkiNoteTypeSetups);
+        await userDb.SaveChangesAsync();
+        // Sync writes the rotation script's list to Lapis+ notes.
+        userDb.AnkiNoteTypeSetups.Add(new AnkiNoteTypeSetup
+        {
+            UserId = TestUsers.UserA, ModelName = "Lapis+", FieldRolesJson = """{"Expression":"word","Sentence":"sentence","Sentences":"sentenceList"}""",
+            ImportSentences = true, TakeFlags = true, FoldDuplicates = true, SentenceList = AnkiSentenceListFormat.Script
+        });
         await userDb.SaveChangesAsync();
 
         var jiten = scope.ServiceProvider.GetRequiredService<IDbContextFactory<JitenDbContext>>().CreateDbContext();
@@ -85,7 +93,7 @@ public class SentenceFlagTests(JitenWebApplicationFactory factory)
 
     private async Task<string> CardField()
     {
-        var response = await _client.SendAsync(new HttpRequestMessage(HttpMethod.Get, "/api/mined/sync/sentences").WithUser(TestUsers.UserA));
+        var response = await _client.SendAsync(new HttpRequestMessage(HttpMethod.Get, "/api/mined/sync/notes").WithUser(TestUsers.UserA));
         var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         return json.RootElement.GetProperty("notes")[0].GetProperty("sentencesHtml").GetString()!;
     }
