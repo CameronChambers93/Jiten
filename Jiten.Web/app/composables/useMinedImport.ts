@@ -3,7 +3,8 @@ import { noteMedia, toImportNote, type AnkiNoteInfo, type ImportNote } from '~/u
 
 export interface MinedImportResult {
   ankiNoteId: number;
-  status: 'imported' | 'already' | 'failed';
+  /** `sentence`: the note was in the store already, without a sentence of its own, and now has it. */
+  status: 'imported' | 'already' | 'sentence' | 'failed';
   minedWordId: number | null;
   matched: boolean;
   origin: string | null;

@@ -45,6 +45,26 @@ const writes = [];
 const refused = [];
 const added = [];
 
+// AnkiConnect refuses connections under a burst (the settings page counts every note type at once), so calls go one at
+// a time, and a refused connection is retried.
+let ankiQueue = Promise.resolve();
+function ankiFetch(body) {
+  const run = async () => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const res = await fetch(ANKI, { method: 'POST', body });
+        return await res.text();
+      } catch (e) {
+        if (attempt >= 5) throw e;
+        await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+      }
+    }
+  };
+  const next = ankiQueue.then(run, run);
+  ankiQueue = next.catch(() => {});
+  return next;
+}
+
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1400, height: Number(process.env.VH || 1000) }, storageState: statePath });
 const page = await ctx.newPage();
@@ -61,8 +81,12 @@ await page.route('http://127.0.0.1:8765/**', async (route) => {
     }
     writes.push(body.action);
   }
-  const res = await fetch(ANKI, { method: 'POST', body: req.postData() });
-  const text = await res.text();
+  let text;
+  try {
+    text = await ankiFetch(req.postData());
+  } catch (e) {
+    return route.fulfill({ status: 200, headers, body: JSON.stringify({ result: null, error: `AnkiConnect unreachable: ${e.message}` }) });
+  }
   if (body.action === 'addNote') {
     const id = JSON.parse(text).result;
     if (id) added.push(id);

@@ -35,6 +35,12 @@ public class AnkiNoteTypeSetup
     /// <summary>The rotation script version inserted into the note type's templates; null when none is.</summary>
     public int? ScriptVersion { get; set; }
 
+    /// <summary>
+    /// JSON of how mining treats this note type: adding to a word's existing card, the parts it builds, and the empty-field
+    /// policies (see <c>AnkiMiningSettingsDto</c>); null for the defaults.
+    /// </summary>
+    public string? MiningJson { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
@@ -54,6 +60,17 @@ public static class AnkiKnownWordsState
     public const string Mature = "mature";
 
     public static readonly string[] All = [Seen, Review, Mature];
+}
+
+public static class AnkiMiningExisting
+{
+    /// <summary>Add the sentence to the word's card without asking.</summary>
+    public const string Auto = "auto";
+
+    /// <summary>Ask whether to add it or create a new note.</summary>
+    public const string Ask = "ask";
+
+    public static readonly string[] All = [Auto, Ask];
 }
 
 public static class AnkiSentenceListFormat

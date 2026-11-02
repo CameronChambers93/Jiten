@@ -1,8 +1,15 @@
 import type { MiningFieldSource } from '~/utils/miningCardFields';
 import { ankiConnect } from '~/composables/useAnkiConnect';
-import { hasSentenceActions, newSetup, rolesFromMapping, suggestRoles, withRoles, type AnkiCardTarget, type AnkiNoteTypeSetup } from '~/utils/ankiSetups';
-
-const DEFAULT_TARGET: AnkiCardTarget = { deckName: '', modelName: '', tags: 'jiten', padStartMs: 250, padEndMs: 250 };
+import {
+  DEFAULT_CARD_TARGETS,
+  hasSentenceActions,
+  newSetup,
+  rolesFromMapping,
+  suggestRoles,
+  withRoles,
+  type AnkiNoteTypeSetup,
+  type CardTargets,
+} from '~/utils/ankiSetups';
 
 /** The per-browser card settings before they moved to the server; read once to upload them. */
 const LEGACY_KEY = 'jiten-mining-cards';
@@ -20,7 +27,7 @@ interface LegacySettings {
 
 // Shared by every page that mines or syncs.
 const setups = ref<AnkiNoteTypeSetup[]>([]);
-const cardTarget = ref<AnkiCardTarget>({ ...DEFAULT_TARGET });
+const cardTargets = ref<CardTargets>(structuredClone(DEFAULT_CARD_TARGETS));
 const knownWordsSyncedAt = ref<string | null>(null);
 const loaded = ref(false);
 let loading: Promise<void> | null = null;
@@ -40,13 +47,12 @@ export function useAnkiSetups() {
   const { $api } = useNuxtApp();
 
   async function fetchAll() {
-    const [list, target] = await Promise.all([
-      $api<{ setups: AnkiNoteTypeSetup[]; knownWordsSyncedAt: string | null }>('anki-sync/setups'),
-      $api<AnkiCardTarget>('anki-sync/card-target'),
-    ]);
+    // The targets first: reading an old target moves its empty-field policies to a setup, which the list must include.
+    const target = await $api<CardTargets>('anki-sync/card-target');
+    const list = await $api<{ setups: AnkiNoteTypeSetup[]; knownWordsSyncedAt: string | null }>('anki-sync/setups');
     setups.value = list.setups;
     knownWordsSyncedAt.value = list.knownWordsSyncedAt;
-    cardTarget.value = { ...DEFAULT_TARGET, ...target };
+    cardTargets.value = target?.targets?.length ? target : structuredClone(DEFAULT_CARD_TARGETS);
   }
 
   /**
@@ -57,9 +63,10 @@ export function useAnkiSetups() {
     if (!import.meta.client) return;
     const legacy = readLegacy();
     if (!legacy) return;
-    if (!cardTarget.value.deckName && legacy.deckName) {
+    const configured = cardTargets.value.targets.some((t) => t.deckName);
+    if (!configured && legacy.deckName) {
       const { deckName, modelName, tags, padStartMs, padEndMs } = legacy;
-      await saveCardTarget({ deckName, modelName, tags, padStartMs, padEndMs });
+      await saveCardTargets({ targets: [{ deckName, modelName, tags, when: null }], padStartMs, padEndMs });
     }
     let failed = false;
     for (const [modelName, mapping] of Object.entries(legacy.fieldsByModel ?? {})) {
@@ -118,9 +125,10 @@ export function useAnkiSetups() {
     setups.value = setups.value.filter((s) => s.modelName !== modelName);
   }
 
-  async function saveCardTarget(target: AnkiCardTarget) {
-    await $api('anki-sync/card-target', { method: 'PUT', body: target });
-    cardTarget.value = { ...target };
+  async function saveCardTargets(targets: CardTargets) {
+    await $api('anki-sync/card-target', { method: 'PUT', body: targets });
+    // The last target takes everything else, so it has no rule.
+    cardTargets.value = { ...targets, targets: targets.targets.map((t, i, all) => (i === all.length - 1 ? { ...t, when: null } : t)) };
   }
 
   /**
@@ -145,14 +153,14 @@ export function useAnkiSetups() {
 
   return {
     setups: readonly(setups),
-    cardTarget: readonly(cardTarget),
+    cardTargets: readonly(cardTargets),
     knownWordsSyncedAt: readonly(knownWordsSyncedAt),
     loaded: readonly(loaded),
     miningSetups,
     load,
     save,
     remove,
-    saveCardTarget,
+    saveCardTargets,
     setKnownWordsSynced,
     setupFor,
   };

@@ -1,6 +1,8 @@
 <script setup lang="ts">
   import { ankiConnect, ankiConnectMulti, DEFAULT_ANKI_CONNECT_URL } from '~/composables/useAnkiConnect';
   import { ankiSearchValue, newSetup } from '~/utils/ankiSetups';
+  import type { MediaType } from '~/types/enums';
+  import { getMediaTypeText } from '~/utils/mediaTypeMapper';
   import { useToast } from 'primevue/usetoast';
 
   definePageMeta({ middleware: ['auth'] });
@@ -63,7 +65,16 @@
     () => loadOthers()
   );
 
-  const target = computed(() => anki.cardTarget.value);
+  const targets = computed(() => anki.cardTargets.value.targets);
+  const configured = computed(() => targets.value.some((t) => t.deckName));
+  /** Note types whose cards get mined sentences without asking. */
+  const autoTypes = computed(() => anki.miningSetups.value.filter((s) => s.mining?.existing === 'auto').map((s) => s.modelName));
+
+  /** What a target's rule takes, in words: "Anime, Drama or ゆるキャン△". */
+  function ruleText(t: (typeof targets.value)[number]): string {
+    const names = [...(t.when?.mediaTypes ?? []).map((m) => getMediaTypeText(m as MediaType)), ...(t.when?.titles ?? []).map((x) => x.title)];
+    return names.length > 1 ? `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}` : (names[0] ?? '');
+  }
   const origin = import.meta.client ? window.location.origin : '';
 </script>
 
@@ -86,10 +97,16 @@
       <template #title>New cards</template>
       <template #content>
         <div class="flex flex-wrap items-center justify-between gap-3 text-sm">
-          <div v-if="target.deckName">
-            Mined sentences go to <b>{{ target.deckName }}</b> as <b>{{ target.modelName }}</b> notes<template v-if="target.tags"
-              >, tagged {{ target.tags }}</template
-            >.
+          <div v-if="configured" class="flex flex-col gap-1 min-w-0" data-testid="card-targets">
+            <div v-for="(t, i) in targets" :key="i">
+              <template v-if="i < targets.length - 1">Lines from {{ ruleText(t) }} go</template>
+              <template v-else-if="targets.length > 1">Everything else goes</template>
+              <template v-else>Mined sentences go</template>
+              to <b>{{ t.deckName }}</b> as <b>{{ t.modelName }}</b> notes<template v-if="t.tags">, tagged {{ t.tags }}</template>.
+            </div>
+            <div v-if="autoTypes.length" class="text-gray-500 dark:text-gray-400">
+              Words already on a <b>{{ autoTypes.join(' or ') }}</b> card get the sentence added to it.
+            </div>
           </div>
           <div v-else class="text-gray-500 dark:text-gray-400">No deck or note type chosen yet.</div>
           <Button label="Card settings" icon="pi pi-cog" size="small" severity="secondary" outlined @click="cardSettingsVisible = true" />

@@ -792,6 +792,7 @@ public class UserDbContext : IdentityDbContext<User>
             {
                 entity.Property(s => s.UserId).HasConversion(guidToString).HasColumnType("uuid").IsRequired();
                 entity.Property(s => s.FieldRolesJson).HasColumnType("jsonb").HasDefaultValue("{}");
+                entity.Property(s => s.MiningJson).HasColumnType("jsonb");
             }
             else
                 entity.Property(s => s.FieldRolesJson).HasDefaultValue("{}");
