@@ -86,6 +86,16 @@ export function toImportNote(note: AnkiNoteInfo, deckName: string, media: Record
   };
 }
 
+/** Why a sentence was flagged, as `api/sentence-flags` stores it. */
+export const FLAG_REASONS = [
+  { value: 'japanese', label: 'Japanese text' },
+  { value: 'english', label: 'English' },
+  { value: 'media', label: 'Audio or screenshot' },
+  { value: 'parsing', label: 'Parsing' },
+] as const;
+
+export type FlagReason = (typeof FLAG_REASONS)[number]['value'];
+
 /** The tag a card's flag button adds: `sentence-fix::<minedSentenceId>`. */
 export const FLAG_TAG_PREFIX = 'sentence-fix::';
 

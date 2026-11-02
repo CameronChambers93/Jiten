@@ -569,10 +569,13 @@ public partial class AdminController(
         if (becameParent)
         {
             var sentenceIds = await dbContext.ExampleSentences.Where(s => s.DeckId == deck.DeckId).Select(s => s.SentenceId).ToListAsync();
-            var mined = await userContext.MinedSentences.Where(s => s.ExampleSentenceId != null && sentenceIds.Contains(s.ExampleSentenceId.Value))
-                                         .Select(s => s.ExampleSentenceId!.Value).Distinct().ToListAsync();
-            await dbContext.ExampleSentences.Where(s => s.DeckId == deck.DeckId && !mined.Contains(s.SentenceId)).ExecuteDeleteAsync();
-            await dbContext.ExampleSentences.Where(s => mined.Contains(s.SentenceId))
+            var kept = await userContext.MinedSentences.Where(s => s.ExampleSentenceId != null && sentenceIds.Contains(s.ExampleSentenceId.Value))
+                                        .Select(s => s.ExampleSentenceId!.Value)
+                                        .Union(userContext.SentenceFlags.Where(f => f.ResolvedAt == null && sentenceIds.Contains(f.ExampleSentenceId))
+                                                          .Select(f => f.ExampleSentenceId))
+                                        .ToListAsync();
+            await dbContext.ExampleSentences.Where(s => s.DeckId == deck.DeckId && !kept.Contains(s.SentenceId)).ExecuteDeleteAsync();
+            await dbContext.ExampleSentences.Where(s => kept.Contains(s.SentenceId))
                            .ExecuteUpdateAsync(u => u.SetProperty(s => s.RemovedFromDeck, true).SetProperty(s => s.WordKeys, Array.Empty<int>()));
         }
         if (parentTextHeir != null)

@@ -44,7 +44,7 @@
     pictureUrl: string | null;
     isMain: boolean;
     sortOrder: number;
-    flaggedAt: string | null;
+    flagged: boolean;
   }
 
   interface MinedWord {
@@ -64,6 +64,7 @@
   const toast = useToast();
   const { fetchAudio, fetchPicture } = useMiningCards();
   const { importNotes } = useMinedImport();
+  const flagList = ref<{ load: () => Promise<void> } | null>(null);
 
   // Import
   const query = ref('"note:Lapis+"');
@@ -122,6 +123,14 @@
     await find();
     await runImport();
   }
+
+  /** Flags change the word list's counts, and any word that's open. */
+  async function refresh() {
+    open.value = {};
+    await Promise.all([loadWords(), flagList.value?.load()]);
+  }
+
+  const flagging = ref<MinedSentence | null>(null);
 
   // Words
   const search = ref('');
@@ -241,7 +250,9 @@
       </template>
     </Card>
 
-    <MinedAnkiSync :import-new="importNew" @changed="loadWords" />
+    <MinedAnkiSync :import-new="importNew" @changed="refresh" />
+
+    <SentenceFlagList ref="flagList" @changed="refresh" />
 
     <div class="flex items-center gap-3 mb-3">
       <InputText v-model="search" placeholder="Search words" class="w-full sm:w-72" lang="ja" />
@@ -295,7 +306,8 @@
                   <div class="flex flex-wrap items-center gap-2 mt-1 text-xs text-gray-500">
                     <Tag :value="ORIGIN_LABELS[s.origin]" severity="secondary" />
                     <Tag v-if="s.isMain" value="Main" severity="info" />
-                    <Tag v-if="s.flaggedAt" value="Flagged" severity="danger" />
+                    <Tag v-if="s.flagged" value="Flagged" severity="danger" />
+                    <button v-else-if="s.exampleSentenceId" class="underline hover:text-red-500" @click="flagging = s">Flag</button>
                     <a v-if="s.sourceUrl && s.origin === 'web'" :href="s.sourceUrl" target="_blank" rel="noopener" class="underline">{{ s.sourceTitle }}</a>
                     <span v-else-if="s.sourceTitle">{{ s.sourceTitle }}</span>
                     <span v-if="s.minedAt">{{ new Date(s.minedAt).toLocaleDateString() }}</span>
@@ -327,6 +339,14 @@
           loadWords();
         }
       "
+    />
+
+    <SentenceFlagDialog
+      v-if="flagging"
+      :sentence-id="flagging.exampleSentenceId!"
+      :text="flagging.text"
+      @close="flagging = null"
+      @saved="refresh"
     />
   </div>
 </template>

@@ -155,7 +155,7 @@
     <template #title>Sync with Anki</template>
     <template #content>
       <p class="text-sm text-gray-600 dark:text-gray-300 mb-3">
-        Imports new notes, takes in sentences flagged from cards, writes each word's sentences to its note's {{ LAPIS_FIELDS.sentences }} field, and lists words
+        Imports new notes, takes in sentences flagged from cards, writes each word's unflagged sentences to its note's {{ LAPIS_FIELDS.sentences }} field, and lists words
         on more than one note to fold into one. Nothing is deleted without your confirmation.
       </p>
       <Button label="Sync" icon="pi pi-sync" size="small" :loading="running" @click="sync" />

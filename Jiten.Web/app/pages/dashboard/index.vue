@@ -129,6 +129,16 @@
       </Card>
 
       <Card class="shadow-md">
+        <template #title>Flagged Sentences</template>
+        <template #content>
+          <p class="mb-4">Lines users flagged as wrong; mark them fixed once corrected</p>
+          <div class="flex justify-center">
+            <Button label="Review Flags" icon="pi pi-flag" class="p-button-primary" @click="navigateTo('/dashboard/sentence-flags')" />
+          </div>
+        </template>
+      </Card>
+
+      <Card class="shadow-md">
         <template #title>Series & Franchises</template>
         <template #content>
           <p class="mb-4">Manage series and settings, and open the franchise builder</p>

@@ -57,7 +57,8 @@ public class MiningSentenceService(
     JitenDbContext context,
     ISentenceStatsService sentenceStats,
     IExampleSentenceQueryService exampleSentences,
-    FrequencyDictionaryService dictionaries)
+    FrequencyDictionaryService dictionaries,
+    SentenceFlagService sentenceFlags)
 {
     public const int WordPageSize = 20;
     public const int SentencePageSize = 30;
@@ -86,9 +87,12 @@ public class MiningSentenceService(
             await dictionaries.ListAsync(ct));
     }
 
-    public async Task<MineResponse> SearchAsync(MineRequest request, CancellationToken ct)
+    public async Task<MineResponse> SearchAsync(string userId, MineRequest request, CancellationToken ct)
     {
         var (hits, checkedCount) = await CollectHits(request.DeckIds, RuleOf(request), ct);
+
+        var flagged = await sentenceFlags.OpenSentenceIdsAsync(userId, ct);
+        hits = hits.Where(h => !flagged.Contains(h.SentenceId)).ToList();
 
         var deckIds = hits.Select(h => h.DeckId).Distinct().ToList();
         if (request.RequireAudio)

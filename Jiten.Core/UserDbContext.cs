@@ -60,6 +60,7 @@ public class UserDbContext : IdentityDbContext<User>
     public DbSet<MinedWord> MinedWords { get; set; }
     public DbSet<MinedNote> MinedNotes { get; set; }
     public DbSet<MinedSentence> MinedSentences { get; set; }
+    public DbSet<SentenceFlag> SentenceFlags { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -778,6 +779,21 @@ public class UserDbContext : IdentityDbContext<User>
 
             entity.HasIndex(s => new { s.MinedWordId, s.SortOrder });
             entity.HasIndex(s => new { s.UserId, s.SourceAnkiNoteId });
+        });
+
+        modelBuilder.Entity<SentenceFlag>(entity =>
+        {
+            entity.HasKey(f => f.SentenceFlagId);
+            if (isNpgsql)
+                entity.Property(f => f.UserId).HasConversion(guidToString).HasColumnType("uuid").IsRequired();
+            entity.Property(f => f.Reason).HasMaxLength(20);
+            entity.Property(f => f.Note).HasMaxLength(1000);
+            entity.Property(f => f.Resolution).HasMaxLength(20);
+
+            entity.HasOne<User>().WithMany().HasForeignKey(f => f.UserId).OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasIndex(f => new { f.UserId, f.ExampleSentenceId }).IsUnique().HasFilter("\"ResolvedAt\" IS NULL");
+            entity.HasIndex(f => f.ExampleSentenceId);
         });
 
 

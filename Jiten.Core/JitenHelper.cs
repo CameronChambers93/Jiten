@@ -316,7 +316,7 @@ public static class JitenHelper
 
     /// <summary>
     /// Makes a deck's occurrences match this parse in one transaction: a line that's still there keeps its row, id and
-    /// translation, a new one is added, and a dropped one is deleted, or kept and hidden if a user mined it.
+    /// translation, a new one is added, and a dropped one is deleted, or kept and hidden if a user mined it or has it flagged.
     /// </summary>
     public static async Task SaveExampleSentences(IDbContextFactory<JitenDbContext> contextFactory, ICollection<ExampleSentence> exampleSentences, int deckId)
     {
@@ -385,7 +385,8 @@ public static class JitenHelper
                 await ExecuteAsync(conn, @"
                     DELETE FROM jiten.""ExampleSentences"" es
                     WHERE es.""SentenceId"" = ANY(@ids)
-                      AND NOT EXISTS (SELECT 1 FROM ""user"".""MinedSentences"" m WHERE m.""ExampleSentenceId"" = es.""SentenceId"")",
+                      AND NOT EXISTS (SELECT 1 FROM ""user"".""MinedSentences"" m WHERE m.""ExampleSentenceId"" = es.""SentenceId"")
+                      AND NOT EXISTS (SELECT 1 FROM ""user"".""SentenceFlags"" f WHERE f.""ExampleSentenceId"" = es.""SentenceId"" AND f.""ResolvedAt"" IS NULL)",
                     new NpgsqlParameter("ids", dropped));
                 await ExecuteAsync(conn, @"
                     UPDATE jiten.""ExampleSentences"" SET ""RemovedFromDeck"" = TRUE, ""WordKeys"" = '{}'

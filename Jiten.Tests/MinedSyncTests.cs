@@ -33,6 +33,23 @@ public class MinedSyncTests
     }
 
     [Fact]
+    public void InRotationLeavesOutFlaggedSentences()
+    {
+        var kept = new MinedSentence { MinedSentenceId = 2, ExampleSentenceId = 20, SortOrder = 1 };
+        var noOccurrence = new MinedSentence { MinedSentenceId = 3, SortOrder = 2 };
+        MinedSyncService.InRotation([new MinedSentence { MinedSentenceId = 1, ExampleSentenceId = 10 }, kept, noOccurrence], new HashSet<long> { 10 })
+                        .Should().Equal(kept, noOccurrence);
+    }
+
+    [Fact]
+    public void InRotationKeepsTheMainSentenceWhenAllAreFlagged()
+    {
+        var main = new MinedSentence { ExampleSentenceId = 10, SortOrder = 0 };
+        MinedSyncService.InRotation([new MinedSentence { ExampleSentenceId = 20, SortOrder = 1 }, main], new HashSet<long> { 10, 20 })
+                        .Should().Equal(main);
+    }
+
+    [Fact]
     public void RenderSentencesMarksTheWordWithTheTemplate()
     {
         var html = MinedSyncService.RenderSentences(1, [
