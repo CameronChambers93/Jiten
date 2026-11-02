@@ -117,9 +117,6 @@ public class MinedSentence
     /// <summary>The first sentence of a word is its main one, shown in the note's main Sentence fields.</summary>
     public int SortOrder { get; set; }
 
-    /// <summary>Set when the user flags the sentence from a card as needing an edit.</summary>
-    public DateTime? FlaggedAt { get; set; }
-
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

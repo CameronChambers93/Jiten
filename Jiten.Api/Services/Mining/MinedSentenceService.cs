@@ -43,7 +43,7 @@ public record MinedNoteDto(long AnkiNoteId, string ModelName, string DeckName, D
 /// <param name="AudioUrl">The stored copy's URL; null for Jiten sentences (cut from the episode on demand) and sentences without audio.</param>
 public record MinedSentenceDto(long MinedSentenceId, string Text, string? English, string? EnglishOrigin, string Origin, long? ExampleSentenceId,
                                string? SourceTitle, string? SourceUrl, string? PreviousLine, DateTime? MinedAt, string? AudioUrl, string? PictureUrl,
-                               bool IsMain, int SortOrder, DateTime? FlaggedAt);
+                               bool IsMain, int SortOrder, bool Flagged);
 
 public record MinedWordDto(long MinedWordId, int? WordId, byte? ReadingIndex, string Expression, string Reading, List<MinedNoteDto> Notes,
                            List<MinedSentenceDto> Sentences);
@@ -95,6 +95,7 @@ public record DetectedOrigin(string Origin, long? ExampleSentenceId, string? Sou
 public class MinedSentenceService(
     UserDbContext userContext,
     MinedSyncService sync,
+    SentenceFlagService sentenceFlags,
     IDbContextFactory<JitenDbContext> contextFactory,
     ICdnService cdn,
     IBackgroundJobClient backgroundJobs,
@@ -206,8 +207,9 @@ public class MinedSentenceService(
         }
 
         var kept = word.Notes.Min(n => n.AnkiNoteId);
+        var rotation = MinedSyncService.InRotation(word.Sentences, await sentenceFlags.OpenSentenceIdsAsync(userId, ct));
         return new AddSentenceResult(kept, sentence.MinedSentenceId, added, word.Sentences.Count,
-                                     MinedSyncService.RenderSentences(kept, word.Sentences, await sync.TargetTemplateAsync(userId, ct)));
+                                     MinedSyncService.RenderSentences(kept, rotation, await sync.TargetTemplateAsync(userId, ct)));
     }
 
     /// <summary>The card's word fields for words picked out of a sentence: written form, furigana and first meaning.</summary>
@@ -248,7 +250,9 @@ public class MinedSentenceService(
                                .Skip(Math.Max(page, 0) * PageSize).Take(PageSize)
                                .Select(w => new MinedWordSummaryDto(
                                    w.MinedWordId, w.WordId, w.ReadingIndex, w.Expression, w.Reading,
-                                   w.Sentences.Count, w.Notes.Count, w.Sentences.Count(s => s.FlaggedAt != null),
+                                   w.Sentences.Count, w.Notes.Count,
+                                   w.Sentences.Count(s => userContext.SentenceFlags.Any(f => f.UserId == userId && f.ResolvedAt == null
+                                                                                             && f.ExampleSentenceId == s.ExampleSentenceId)),
                                    null, w.UpdatedAt))
                                .ToListAsync(ct);
 
@@ -267,6 +271,7 @@ public class MinedSentenceService(
         if (word == null) return null;
         await sync.FillAsync(userId, word.Sentences, ct);
         var main = word.Sentences.MinBy(s => s.SortOrder);
+        var flagged = await sentenceFlags.OpenSentenceIdsAsync(userId, ct);
 
         return new MinedWordDto(
             word.MinedWordId, word.WordId, word.ReadingIndex, word.Expression, word.Reading,
@@ -274,7 +279,8 @@ public class MinedSentenceService(
             word.Sentences.OrderBy(s => s.SortOrder).Select(s => new MinedSentenceDto(
                 s.MinedSentenceId, s.Shown, s.English, s.EnglishOrigin, s.Origin, s.ExampleSentenceId, s.SourceTitle, s.SourceUrl, s.PreviousLine,
                 s.MinedAt, s.AudioPath == null ? null : cdn.GetSignedUrl(s.AudioPath, MediaUrlTtl),
-                s.PicturePath == null ? null : cdn.GetSignedUrl(s.PicturePath, MediaUrlTtl), s == main, s.SortOrder, s.FlaggedAt)).ToList());
+                s.PicturePath == null ? null : cdn.GetSignedUrl(s.PicturePath, MediaUrlTtl), s == main, s.SortOrder,
+                s.ExampleSentenceId is { } id && flagged.Contains(id))).ToList());
     }
 
     private async Task<MinedWord> FindOrCreateWordAsync(string userId, string expression, string reading, int? wordId, byte? readingIndex,

@@ -116,6 +116,12 @@
     return `${before}**${word}**${after}`;
   });
 
+  const flagging = ref(false);
+  const sentenceFlags = useSentenceFlags();
+  const flag = computed(() => sentenceFlags.flagFor(props.exampleSentence.sentenceId));
+  const flagged = computed(() => flag.value != null);
+  onMounted(sentenceFlags.ensureLoaded);
+
   const favourited = computed(() => savedLocally.value || (props.savedTexts?.includes(markedText.value) ?? false));
 
   const sentenceSource = computed(() => {
@@ -205,6 +211,16 @@
             >
               <i class="pi pi-pencil text-sm" />
             </button>
+            <button
+              v-if="actionsVisible && authStore.isAuthenticated && exampleSentence.sentenceId > 0"
+              class="inline-flex items-center justify-center transition-colors"
+              :class="flagged ? 'text-red-500' : 'text-surface-400 hover:text-red-500'"
+              :title="flagged ? 'Flagged: hidden from Mine and your cards' : 'Flag this sentence'"
+              :aria-label="flagged ? 'Edit this flag' : 'Flag this sentence'"
+              @click="flagging = true"
+            >
+              <i class="pi text-sm" :class="flagged ? 'pi-flag-fill' : 'pi-flag'" />
+            </button>
             <NuxtLink
               v-if="showPageLink && actionsVisible && authStore.isAuthenticated && exampleSentence.sentenceId > 0"
               :to="pageLink"
@@ -264,6 +280,14 @@
         </div>
       </div>
     </template>
+    <SentenceFlagDialog
+      v-if="flagging"
+      :sentence-id="exampleSentence.sentenceId"
+      :text="exampleSentence.text"
+      :reason="flag?.reason"
+      :note="flag?.note"
+      @close="flagging = false"
+    />
   </div>
 </template>
 

@@ -29,7 +29,7 @@ public record NoteSentencesDto(long AnkiNoteId, string SentencesHtml);
 /// Sync between the sentence store and Anki. The browser does the AnkiConnect half (reading tags, deleting folded notes,
 /// writing fields); this decides what to do and records it.
 /// </summary>
-public class MinedSyncService(UserDbContext userContext, IDbContextFactory<JitenDbContext> contextFactory)
+public class MinedSyncService(UserDbContext userContext, IDbContextFactory<JitenDbContext> contextFactory, SentenceFlagService sentenceFlags)
 {
     public const string FlagTagPrefix = "sentence-fix::";
 
@@ -88,22 +88,25 @@ public class MinedSyncService(UserDbContext userContext, IDbContextFactory<Jiten
         return true;
     }
 
-    /// <summary>Marks flagged sentences; returns the flags that named a sentence on that note's word, so their tags can be removed.</summary>
+    /// <summary>
+    /// Opens a flag, with no reason yet, on each flagged sentence's occurrence; returns the flags that named a sentence on
+    /// that note's word, so their tags can be removed.
+    /// </summary>
     public async Task<List<SentenceFlagDto>> ApplyFlagsAsync(string userId, IReadOnlyList<SentenceFlagDto> flags, CancellationToken ct)
     {
         var noteIds = flags.Select(f => f.AnkiNoteId).Distinct().ToList();
         var wordByNote = await userContext.MinedNotes.AsNoTracking().Where(n => n.UserId == userId && noteIds.Contains(n.AnkiNoteId))
                                           .ToDictionaryAsync(n => n.AnkiNoteId, n => n.MinedWordId, ct);
         var sentenceIds = flags.Select(f => f.MinedSentenceId).Distinct().ToList();
-        var sentences = await userContext.MinedSentences.Where(s => s.UserId == userId && sentenceIds.Contains(s.MinedSentenceId)).ToListAsync(ct);
+        var sentences = await userContext.MinedSentences.AsNoTracking().Where(s => s.UserId == userId && sentenceIds.Contains(s.MinedSentenceId)).ToListAsync(ct);
+        var open = await sentenceFlags.OpenSentenceIdsAsync(userId, ct);
 
         var applied = new List<SentenceFlagDto>();
         foreach (var flag in flags)
         {
             var sentence = sentences.FirstOrDefault(s => s.MinedSentenceId == flag.MinedSentenceId);
-            if (sentence == null || wordByNote.GetValueOrDefault(flag.AnkiNoteId) != sentence.MinedWordId) continue;
-            sentence.FlaggedAt ??= DateTime.UtcNow;
-            sentence.UpdatedAt = DateTime.UtcNow;
+            if (sentence?.ExampleSentenceId is not { } occurrence || wordByNote.GetValueOrDefault(flag.AnkiNoteId) != sentence.MinedWordId) continue;
+            if (open.Add(occurrence)) userContext.SentenceFlags.Add(new SentenceFlag { UserId = userId, ExampleSentenceId = occurrence });
             applied.Add(flag);
         }
 
@@ -120,11 +123,19 @@ public class MinedSyncService(UserDbContext userContext, IDbContextFactory<Jiten
                                      .Include(w => w.Notes).Include(w => w.Sentences)
                                      .ToListAsync(ct);
         await FillAsync(userId, words.SelectMany(w => w.Sentences).ToList(), ct);
+        var flagged = await sentenceFlags.OpenSentenceIdsAsync(userId, ct);
         return words.Select(w =>
         {
             var note = w.Notes.Min(n => n.AnkiNoteId);
-            return new NoteSentencesDto(note, RenderSentences(note, w.Sentences, template));
+            return new NoteSentencesDto(note, RenderSentences(note, InRotation(w.Sentences, flagged), template));
         }).ToList();
+    }
+
+    /// <summary>The sentences a card may show: the unflagged ones, or the main one if all are flagged, so the card still works.</summary>
+    public static List<MinedSentence> InRotation(IReadOnlyCollection<MinedSentence> sentences, IReadOnlySet<long> flagged)
+    {
+        var kept = sentences.Where(s => s.ExampleSentenceId is not { } id || !flagged.Contains(id)).ToList();
+        return kept.Count > 0 ? kept : sentences.OrderBy(s => s.SortOrder).Take(1).ToList();
     }
 
     public async Task FillAsync(string userId, IReadOnlyCollection<MinedSentence> sentences, CancellationToken ct)

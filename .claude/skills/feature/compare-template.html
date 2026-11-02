@@ -1,0 +1,102 @@
+<!-- Template for step 6. Copy it to the scratchpad, fill the {{...}} parts, add one <section> per screen,
+     and publish with the screenshots as files under shots/ (the Artifact tool's `files` and `root`). -->
+<title>{{Feature name}} Before/After</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+  /* Layout: a narrow intro, then one row per screen with main and the branch side by side, stacking on phones. */
+  :root {
+    --bg: #f7f6fb;
+    --surface: #ffffff;
+    --fg: #1d1b26;
+    --muted: #5f5b70;
+    --line: #e2deee;
+    --accent: #6d3fd8;
+    --before: #8a8597;
+    --after: #1f8a5b;
+    --body: "Noto Sans JP", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #15131c; --surface: #1e1b27; --fg: #ece9f5; --muted: #a49fb5; --line: #332f40;
+      --accent: #a98bff; --before: #9a95a8; --after: #4fc58d; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #15131c; --surface: #1e1b27; --fg: #ece9f5; --muted: #a49fb5; --line: #332f40;
+    --accent: #a98bff; --before: #9a95a8; --after: #4fc58d; color-scheme: dark;
+  }
+  body {
+    background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; line-height: 1.6;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 40px 64px;
+  }
+  .wrap { max-width: 1320px; margin: 0 auto; display: flex; flex-direction: column; gap: 48px; }
+  header { max-width: 68ch; display: flex; flex-direction: column; gap: 10px; }
+  h1 { font-size: 1.9rem; line-height: 1.2; margin: 0; text-wrap: balance; }
+  header p { margin: 0; color: var(--muted); }
+  code { font-family: var(--mono); font-size: 0.85em; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 20px; font-family: var(--mono); font-size: 0.8rem; color: var(--muted); }
+  .legend b { font-weight: 500; }
+  section { display: flex; flex-direction: column; gap: 14px; }
+  section h2 { font-size: 1.15rem; margin: 0; display: flex; align-items: baseline; gap: 10px; text-wrap: balance; }
+  section h2 .n { font-family: var(--mono); font-size: 0.8rem; color: var(--accent); }
+  section > p { margin: 0; color: var(--muted); max-width: 75ch; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .pair { grid-template-columns: 1fr; } }
+  figure { margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+  figcaption {
+    font-family: var(--mono); font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase;
+    display: flex; align-items: center; gap: 8px;
+  }
+  figcaption::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .before figcaption { color: var(--before); }
+  .after figcaption { color: var(--after); }
+  .shot { display: block; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface); }
+  .shot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .shot img { display: block; width: 100%; height: auto; }
+  .departures { border: 1px solid var(--line); border-radius: 6px; background: var(--surface); padding: 16px 20px; max-width: 75ch; }
+  .departures ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+  .empty {
+    border: 1px dashed var(--line); border-radius: 6px; background: var(--surface); color: var(--muted);
+    display: flex; align-items: center; justify-content: center; text-align: center; padding: 32px 16px; min-height: 160px;
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>{{Feature name}}: main compared with the branch</h1>
+    <p>Each row shows one screen in the Jiten running from main and in the <code>session/{{name}}</code> worktree, logged in as the same account. {{Say what data was seeded for the screenshots.}} Select a screenshot to open it full size.</p>
+    <div class="legend"><span style="color: var(--before)"><b>● Before</b> main, localhost:3000</span><span style="color: var(--after)"><b>● After</b> branch, localhost:{{port}}</span></div>
+  </header>
+
+  <!-- One section per screen. Where main has no such screen, use the .empty placeholder for "before". -->
+  <section>
+    <h2><span class="n">{{/path}}</span> {{Screen name}}</h2>
+    <p>{{One line on what changed.}}</p>
+    <div class="pair">
+      <figure class="before"><figcaption>Before</figcaption><a class="shot" href="shots/{{1-name}}-before.png" target="_blank" rel="noopener"><img src="shots/{{1-name}}-before.png" alt="{{What main shows}}" loading="lazy"></a></figure>
+      <figure class="after"><figcaption>After</figcaption><a class="shot" href="shots/{{1-name}}-after.png" target="_blank" rel="noopener"><img src="shots/{{1-name}}-after.png" alt="{{What the branch shows}}" loading="lazy"></a></figure>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">{{dialog}}</span> {{A screen main doesn't have}}</h2>
+    <p>{{One line on what it does.}}</p>
+    <div class="pair">
+      <figure class="before"><figcaption>Before</figcaption><div class="empty">{{Main has no such screen.}}</div></figure>
+      <figure class="after"><figcaption>After</figcaption><a class="shot" href="shots/{{2-name}}-after.png" target="_blank" rel="noopener"><img src="shots/{{2-name}}-after.png" alt="{{What the branch shows}}" loading="lazy"></a></figure>
+    </div>
+  </section>
+
+  <!-- From the run notes. Leave the section out when the build followed the design exactly. -->
+  <section>
+    <h2>Departures from the design</h2>
+    <div class="departures">
+      <ul>
+        <li>{{What changed from the design, and why.}}</li>
+      </ul>
+    </div>
+  </section>
+</div>

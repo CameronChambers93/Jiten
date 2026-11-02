@@ -1,4 +1,5 @@
 using Jiten.Api.Authorization;
+using Jiten.Api.Services;
 using Jiten.Api.Services.Mining;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -13,7 +14,7 @@ namespace Jiten.Api.Controllers;
 [Authorize]
 [JitenPlus(Feature = "sentence-stats")]
 [EnableRateLimiting("fixed")]
-public class MiningController(MiningSentenceService mining) : ControllerBase
+public class MiningController(MiningSentenceService mining, ICurrentUserService userService) : ControllerBase
 {
     [HttpGet("options")]
     [SwaggerOperation(Summary = "Titles (with episodes) that have sentences, and the imported frequency dictionaries")]
@@ -23,7 +24,8 @@ public class MiningController(MiningSentenceService mining) : ControllerBase
     [SwaggerOperation(Summary = "A page of i+1 sentences across the chosen titles, grouped by word or one per row")]
     public async Task<ActionResult<MineResponse>> Search([FromBody] MineRequest request, CancellationToken ct)
     {
+        if (userService.UserId is not { } userId) return Unauthorized();
         if (request.ExcludeTerms is { Count: > 100_000 }) return BadRequest(new { message = "Too many words to exclude." });
-        return Ok(await mining.SearchAsync(request, ct));
+        return Ok(await mining.SearchAsync(userId, request, ct));
     }
 }
