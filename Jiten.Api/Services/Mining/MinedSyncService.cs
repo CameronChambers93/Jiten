@@ -234,6 +234,10 @@ public class MinedSyncService(UserDbContext userContext, IDbContextFactory<Jiten
         return writes;
     }
 
+    /// <summary>Whether Sync updates the main fields of the note type's notes.</summary>
+    public async Task<bool> UpdatesMainFieldsAsync(string userId, string modelName, CancellationToken ct) =>
+        (await setups.SetupsAsync(userId, ct)).Any(s => s.ModelName == modelName && s.UpdateMainFields);
+
     /// <summary>
     /// The note Sync writes a word's sentences to: the oldest note of a note type that has a setup, leaving out notes
     /// being folded away. Null when none of the word's notes is synced.

@@ -22,8 +22,13 @@ public record AnkiNoteTypeSetupDto(
 
 public record AnkiSetupsDto(List<AnkiNoteTypeSetupDto> Setups, DateTime? KnownWordsSyncedAt);
 
-/// <summary>Where new mined cards go. The field mapping is the note type's setup.</summary>
-public record AnkiCardTargetDto(string DeckName, string ModelName, string Tags, int PadStartMs, int PadEndMs)
+/// <summary>
+/// Where new mined cards go. The field mapping is the note type's setup. <c>EmptyFields</c> maps field roles to what
+/// mining does when it would leave them empty: "warn" (add, and say so) or "deny" (don't add); null for the browser's
+/// defaults.
+/// </summary>
+public record AnkiCardTargetDto(string DeckName, string ModelName, string Tags, int PadStartMs, int PadEndMs,
+                                Dictionary<string, string>? EmptyFields = null)
 {
     public static readonly AnkiCardTargetDto Default = new("", "", "jiten", 250, 250);
 }
@@ -129,7 +134,9 @@ public class AnkiSyncSetupService(UserDbContext userContext)
     public async Task SaveCardTargetAsync(string userId, AnkiCardTargetDto target, CancellationToken ct)
     {
         var clean = new AnkiCardTargetDto(Truncate(target.DeckName.Trim(), 200), Truncate(target.ModelName.Trim(), 200), Truncate(target.Tags.Trim(), 500),
-                                          Math.Clamp(target.PadStartMs, 0, MaxPadMs), Math.Clamp(target.PadEndMs, 0, MaxPadMs));
+                                          Math.Clamp(target.PadStartMs, 0, MaxPadMs), Math.Clamp(target.PadEndMs, 0, MaxPadMs),
+                                          target.EmptyFields?.Where(p => p.Key.Length is > 0 and <= 40 && p.Value is "warn" or "deny").Take(40)
+                                                .ToDictionary(p => p.Key, p => p.Value));
         var settings = await SettingsAsync(userId, ct);
         settings.AnkiCardTargetJson = JsonSerializer.Serialize(clean, Json);
         await userContext.SaveChangesAsync(ct);

@@ -160,7 +160,20 @@ public class AnkiSyncTests(JitenWebApplicationFactory factory)
         var target = await Get("/api/anki-sync/card-target");
         target.GetProperty("deckName").GetString().Should().Be("Mining");
         target.GetProperty("padStartMs").GetInt32().Should().Be(5000);
+        target.GetProperty("emptyFields").ValueKind.Should().Be(JsonValueKind.Null, "the browser's defaults apply until policies are chosen");
         (await Get("/api/anki-sync/card-target", TestUsers.UserB)).GetProperty("deckName").GetString().Should().Be("");
+    }
+
+    [Fact]
+    public async Task TheCardTargetKeepsWhatToDoWithEmptyFields()
+    {
+        var put = await _client.SendAsync(new HttpRequestMessage(HttpMethod.Put, "/api/anki-sync/card-target").WithUser(TestUsers.UserA)
+            .WithJsonContent(new { deckName = "Mining", modelName = "Lapis+", tags = "", padStartMs = 0, padEndMs = 0,
+                                   emptyFields = new Dictionary<string, string> { ["sentenceEnglish"] = "warn", ["picture"] = "deny", ["source"] = "maybe" } }));
+        put.StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        var policies = (await Get("/api/anki-sync/card-target")).GetProperty("emptyFields");
+        policies.EnumerateObject().Select(p => $"{p.Name}={p.Value.GetString()}").Should().BeEquivalentTo("sentenceEnglish=warn", "picture=deny");
     }
 
     [Fact]

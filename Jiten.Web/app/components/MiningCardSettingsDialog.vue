@@ -1,6 +1,17 @@
 <script setup lang="ts">
   import { ankiConnect } from '~/composables/useAnkiConnect';
-  import { ankiSearchValue, hasSentenceActions, newSetup, ROLE_OPTIONS, setupQuery, withRoles, type FieldRole } from '~/utils/ankiSetups';
+  import {
+    ankiSearchValue,
+    hasSentenceActions,
+    newSetup,
+    ROLE_OPTIONS,
+    setupQuery,
+    withRoles,
+    type EmptyFieldPolicies,
+    type EmptyFieldPolicy,
+    type FieldRole,
+  } from '~/utils/ankiSetups';
+  import { DEFAULT_EMPTY_FIELDS, UNWRITTEN_ROLES } from '~/utils/miningWarnings';
 
   const visible = defineModel<boolean>('visible', { required: true });
   const emit = defineEmits<{ saved: [] }>();
@@ -14,6 +25,14 @@
   const tags = ref('');
   const padStartMs = ref(250);
   const padEndMs = ref(250);
+  /** What mining does when it would leave a role empty. */
+  const emptyFields = ref<EmptyFieldPolicies>({ ...DEFAULT_EMPTY_FIELDS });
+
+  const POLICY_OPTIONS: { value: EmptyFieldPolicy | 'off'; label: string }[] = [
+    { value: 'off', label: 'Off' },
+    { value: 'warn', label: 'Warn' },
+    { value: 'deny', label: 'Deny' },
+  ];
   const ankiKey = ref('');
   const targetWordTemplate = ref('');
   const templateError = ref<string | null>(null);
@@ -94,6 +113,7 @@
       tags.value = t.tags;
       padStartMs.value = t.padStartMs;
       padEndMs.value = t.padEndMs;
+      emptyFields.value = { ...(t.emptyFields ?? DEFAULT_EMPTY_FIELDS) };
       ankiKey.value = device.value.key;
       roles.value = {};
       fieldOrder.value = [];
@@ -128,6 +148,7 @@
         tags: tags.value,
         padStartMs: padStartMs.value,
         padEndMs: padEndMs.value,
+        emptyFields: { ...emptyFields.value },
       });
       setKey(ankiKey.value);
       visible.value = false;
@@ -137,6 +158,20 @@
     } finally {
       saving.value = false;
     }
+  }
+
+  /** Whether the role can have an empty-field policy; roles only import reads can't. */
+  function canWarn(role: FieldRole | '' | undefined): role is FieldRole {
+    return !!role && !UNWRITTEN_ROLES.includes(role);
+  }
+
+  function policyOf(role: FieldRole): EmptyFieldPolicy | 'off' {
+    return emptyFields.value[role] ?? 'off';
+  }
+
+  function setPolicy(role: FieldRole, policy: EmptyFieldPolicy | 'off') {
+    const rest = Object.entries(emptyFields.value).filter(([r]) => r !== role);
+    emptyFields.value = Object.fromEntries(policy === 'off' ? rest : [...rest, [role, policy]]) as EmptyFieldPolicies;
   }
 
   const origin = import.meta.client ? window.location.origin : '';
@@ -178,10 +213,24 @@
 
       <div v-if="fieldOrder.length" class="flex flex-col gap-2">
         <div class="text-sm font-semibold">Fields</div>
-        <p class="text-xs text-gray-500 dark:text-gray-400">These are the note type's field roles, which import and Sync read too.</p>
-        <div v-for="name in fieldOrder" :key="name" class="grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] items-center gap-3">
+        <p class="text-xs text-gray-500 dark:text-gray-400">
+          These are the note type's field roles, which import and Sync read too. The last column says what mining does when it would leave the field empty: Warn
+          adds the card and tells you; Deny doesn't add it.
+        </p>
+        <div v-for="name in fieldOrder" :key="name" class="grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_6rem] items-center gap-3">
           <label :for="`mining-field-${name}`" class="text-sm truncate">{{ name }}</label>
           <Select v-model="roles[name]" :input-id="`mining-field-${name}`" :options="ROLE_OPTIONS" option-label="label" option-value="value" size="small" />
+          <Select
+            v-if="canWarn(roles[name])"
+            :model-value="policyOf(roles[name] as FieldRole)"
+            :options="POLICY_OPTIONS"
+            option-label="label"
+            option-value="value"
+            size="small"
+            :input-id="`mining-empty-${name}`"
+            :aria-label="`When ${name} would be empty`"
+            @update:model-value="(p: EmptyFieldPolicy | 'off') => setPolicy(roles[name] as FieldRole, p)"
+          />
         </div>
       </div>
 
