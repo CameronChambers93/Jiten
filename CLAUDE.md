@@ -18,7 +18,7 @@ Jiten (https://jiten.moe) analyses Japanese media (visual novels, subtitles, boo
 
 Dependencies: Api and Cli use Core and Parser; Parser uses Core; Tests use Api and Parser.
 
-Root `PLAN_*.md` files hold feature plans, rolled up by `PLANS_INDEX.md`; `TASKS.md` is the running bug and feature list.
+Feature designs and the running task list live in the vault, not this repo: `/vault/Tooling/jiten/fork/`, with open work in `tasks.md` there. Read the bundle's `conventions.md` before editing it.
 
 ## Build & Run Commands
 
