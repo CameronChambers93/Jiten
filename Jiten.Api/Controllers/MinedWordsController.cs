@@ -14,9 +14,11 @@ namespace Jiten.Api.Controllers;
 [Route("api/mined")]
 [Authorize]
 [EnableRateLimiting("fixed")]
-public class MinedWordsController(MinedSentenceService mined, MinedSyncService sync, ICurrentUserService userService) : ControllerBase
+public class MinedWordsController(MinedSentenceService mined, MinedSyncService sync, WordMatchService wordMatch, ICurrentUserService userService)
+    : ControllerBase
 {
     private const int MaxFlags = 1000;
+    private const int MaxMatches = 500;
     private const int MaxWordSummaries = 100;
 
     [HttpGet("settings")]
@@ -165,19 +167,56 @@ public class MinedWordsController(MinedSentenceService mined, MinedSyncService s
     }
 
     [HttpGet("notes")]
-    [SwaggerOperation(Summary = "The Anki note ids already in the store, so the browser only reads new notes, and those without a sentence of their own")]
+    [SwaggerOperation(Summary = "The Anki note ids already in the store, so the browser only reads new notes; those without a sentence of their own; and those whose word was never checked")]
     public async Task<IActionResult> NoteIds(CancellationToken ct)
     {
         if (userService.UserId is not { } userId) return Unauthorized();
-        return Ok(new { ankiNoteIds = await mined.NoteIdsAsync(userId, ct), withoutSentence = await mined.NoteIdsWithoutSentenceAsync(userId, ct) });
+        return Ok(new
+        {
+            ankiNoteIds = await mined.NoteIdsAsync(userId, ct), withoutSentence = await mined.NoteIdsWithoutSentenceAsync(userId, ct),
+            @unchecked = await mined.UncheckedNoteIdsAsync(userId, ct)
+        });
+    }
+
+    [HttpGet("notes/{ankiNoteId:long}/candidates")]
+    [SwaggerOperation(Summary = "The dictionary entries a stored note's word could be, with their glosses, and the one it's on")]
+    public async Task<IActionResult> NoteCandidates(long ankiNoteId, CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        return await mined.NoteCandidatesAsync(userId, ankiNoteId, ct) is { } candidates ? Ok(candidates) : NotFound();
+    }
+
+    [HttpPost("notes/{ankiNoteId:long}/word")]
+    [SwaggerOperation(Summary = "Puts a stored note on the entry picked, or confirms the one it's on; it moves with its sentences")]
+    public async Task<IActionResult> SetNoteWord(long ankiNoteId, [FromBody] SetNoteWordRequest request, CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        try
+        {
+            return await mined.SetNoteWordAsync(userId, ankiNoteId, request.WordId, request.ReadingIndex, ct) is { } result ? Ok(result) : NotFound();
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException)
+        {
+            return BadRequest(new { message = e.Message });
+        }
+    }
+
+    [HttpPost("match")]
+    [SwaggerOperation(Summary = "Which dictionary entry each Anki word is, decided by the note's text when several share the word and reading")]
+    public async Task<IActionResult> Match([FromBody] WordMatchBatchRequest request, CancellationToken ct)
+    {
+        if (userService.UserId is null) return Unauthorized();
+        if (request.Words.Count > MaxMatches) return BadRequest(new { message = $"At most {MaxMatches} words at a time." });
+        return Ok(new { matches = await wordMatch.MatchAsync(request.Words, ct) });
     }
 
     [HttpGet("words")]
-    [SwaggerOperation(Summary = "A page of mined words, most recently changed first")]
-    public async Task<IActionResult> List([FromQuery] string? search, [FromQuery] int page = 0, CancellationToken ct = default)
+    [SwaggerOperation(Summary = "A page of mined words, most recently changed first; guessed limits it to words with a note matched by guess")]
+    public async Task<IActionResult> List([FromQuery] string? search, [FromQuery] int page = 0, [FromQuery] bool guessed = false,
+                                          CancellationToken ct = default)
     {
         if (userService.UserId is not { } userId) return Unauthorized();
-        return Ok(await mined.ListAsync(userId, search, page, ct));
+        return Ok(await mined.ListAsync(userId, search, page, ct, guessed));
     }
 
     [HttpGet("words/{minedWordId:long}")]

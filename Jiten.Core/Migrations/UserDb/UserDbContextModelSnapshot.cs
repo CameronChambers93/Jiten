@@ -832,6 +832,10 @@ namespace Jiten.Core.Migrations.UserDb
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("WordMatch")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
                     b.HasKey("MinedNoteId");
 
                     b.HasIndex("MinedWordId");

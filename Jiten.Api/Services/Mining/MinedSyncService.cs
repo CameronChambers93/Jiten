@@ -9,7 +9,8 @@ using Microsoft.EntityFrameworkCore;
 namespace Jiten.Api.Services.Mining;
 
 /// <param name="Ready">False while the note is too new to fold: GSM may still be adding its audio and screenshot.</param>
-public record FoldNoteDto(long AnkiNoteId, string DeckName, DateTime CreatedAt, bool Ready, string? Sentence);
+/// <param name="WordMatch">How the note's word was chosen; folding a guessed one asks first.</param>
+public record FoldNoteDto(long AnkiNoteId, string DeckName, DateTime CreatedAt, bool Ready, string? Sentence, string? WordMatch = null);
 
 /// <param name="Keep">The note that stays: the oldest, which carries the review history.</param>
 public record FoldCandidateDto(long MinedWordId, string Expression, string Reading, long Keep, List<FoldNoteDto> Notes);
@@ -88,7 +89,7 @@ public class MinedSyncService(UserDbContext userContext, IDbContextFactory<Jiten
             {
                 var created = CreatedAt(n.AnkiNoteId);
                 var sentence = w.Sentences.FirstOrDefault(s => s.SourceAnkiNoteId == n.AnkiNoteId)?.Shown;
-                return new FoldNoteDto(n.AnkiNoteId, n.DeckName, created, now - created >= FoldDelay, sentence);
+                return new FoldNoteDto(n.AnkiNoteId, n.DeckName, created, now - created >= FoldDelay, sentence, n.WordMatch);
             }).ToList()));
         }
 

@@ -1767,8 +1767,21 @@ public partial class UserController(
                 wordLookup[kv.Key] = (kv.Value.WordId, kv.Value.ReadingIndex);
         }
 
+        // Cards the client matched already (n1miner's known words: homographs told apart by the note's text). Only real
+        // entries are taken; an unknown id falls back to the lookup.
+        var givenIds = reviewedCards.Where(c => c.Card.WordId != null).Select(c => c.Card.WordId!.Value).Distinct().ToList();
+        HashSet<(int WordId, byte ReadingIndex)> realForms = [];
+        if (givenIds.Count > 0)
+        {
+            await using var jmdict = await contextFactory.CreateDbContextAsync();
+            realForms = (await jmdict.WordForms.AsNoTracking().Where(f => givenIds.Contains(f.WordId)).Select(f => new { f.WordId, f.ReadingIndex }).ToListAsync())
+                        .Select(f => (f.WordId, (byte)f.ReadingIndex)).ToHashSet();
+        }
+
+        var realIds = realForms.Select(f => f.WordId).ToHashSet();
+
         // Step 2: Get existing cards
-        var parsedWordIds = wordLookup.Values.Select(v => v.WordId).Distinct().ToList();
+        var parsedWordIds = wordLookup.Values.Select(v => v.WordId).Concat(realIds).Distinct().ToList();
         var existingCards = await userContext.FsrsCards
                                              .Include(c => c.ReviewLogs)
                                              .Where(c => c.UserId == userId && parsedWordIds.Contains(c.WordId))
@@ -1799,7 +1812,10 @@ public partial class UserController(
             }
 
             var reading = wrapper.Card.Reading?.Trim() ?? "";
-            if (!wordLookup.TryGetValue((word, reading), out var wordInfo)
+            (int WordId, byte ReadingIndex) wordInfo;
+            if (wrapper.Card is { WordId: { } givenId, ReadingIndex: { } givenIndex } && realForms.Contains((givenId, givenIndex)))
+                wordInfo = (givenId, givenIndex);
+            else if (!wordLookup.TryGetValue((word, reading), out wordInfo)
                 && (!request.ParseWords || reading.Length == 0 || !wordLookup.TryGetValue((word, ""), out wordInfo)))
             {
                 if (reading.Length > 0 && surfacesInDictionary.Contains(word))

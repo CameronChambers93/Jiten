@@ -28,6 +28,24 @@ export interface ImportNote {
   audioBase64: string | null;
   pictureFilename: string | null;
   pictureBase64: string | null;
+  /** Every field, without markup: decides between dictionary entries that share the word and reading. */
+  text: string;
+}
+
+/** How long a note's text may be; the API reads no further. */
+export const NOTE_TEXT_LIMIT = 20_000;
+
+/**
+ * All of a note's fields as plain text, whatever its note type, for telling homographs apart. The sentence list Jiten
+ * writes is left out: it holds the word's other sentences, which may be another entry's until the note is matched.
+ */
+export function noteText(fields: Record<string, { value: string }>): string {
+  return Object.values(fields)
+    .filter((f) => !f.value.includes('class="jiten-sentences"'))
+    .map((f) => f.value.replace(/\[sound:[^\]]*\]/g, ' ').replace(/<[^>]*>/g, ' '))
+    .join('\n')
+    .replace(/[ \t]+/g, ' ')
+    .slice(0, NOTE_TEXT_LIMIT);
 }
 
 const JITEN_MEDIA = /^jiten_\d+\./;
@@ -84,6 +102,7 @@ export function toImportNote(note: AnkiNoteInfo, deckName: string, media: Record
     audioBase64: (audio && media[audio]) || null,
     pictureFilename: picture,
     pictureBase64: (picture && media[picture]) || null,
+    text: noteText(note.fields),
   };
 }
 
