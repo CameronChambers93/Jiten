@@ -29,6 +29,9 @@ export interface AnkiCardPayload {
   Card: {
     Word: string;
     Reading?: string;
+    /** The entry, when matched from the note's text; the API then uses it instead of looking the word up. */
+    WordId?: number;
+    ReadingIndex?: number;
     Stability: number;
     Difficulty: number;
     Reps: number;
@@ -77,7 +80,13 @@ export function keptReviews(reviews: { ease: number; id: number; time: number; t
 }
 
 /** The import payload for a studied card (not new or suspended; the caller checks), with its reviews when fetched. */
-export function ankiCardPayload(card: AnkiCardInfo, word: string, reading: string, cardReviews: CardReviews | undefined): AnkiCardPayload {
+export function ankiCardPayload(
+  card: AnkiCardInfo,
+  word: string,
+  reading: string,
+  cardReviews: CardReviews | undefined,
+  entry?: WordEntry | null
+): AnkiCardPayload {
   const reviews = cardReviews?.kept ?? [];
   const state = card.queue === 1 || card.queue === 3 ? 1 : 2; // Learning : Review
   const stability = card.interval > 0 ? card.interval : 0;
@@ -101,6 +110,8 @@ export function ankiCardPayload(card: AnkiCardInfo, word: string, reading: strin
     Card: {
       Word: word,
       Reading: reading || undefined,
+      WordId: entry?.wordId,
+      ReadingIndex: entry?.readingIndex,
       Stability: stability,
       Difficulty: difficulty,
       Reps: card.reps,
@@ -139,6 +150,12 @@ export interface KnownCandidate {
   modelName: string;
 }
 
+/** A dictionary entry, as `api/mined/match` decides it. */
+export interface WordEntry {
+  wordId: number;
+  readingIndex: number;
+}
+
 /** The word and reading a card holds, through its setup's roles. */
 export function cardWord(card: AnkiCardInfo, setup: AnkiNoteTypeSetup): { word: string; reading: string } | null {
   const order = Object.entries(card.fields)
@@ -157,20 +174,47 @@ export function cardWord(card: AnkiCardInfo, setup: AnkiNoteTypeSetup): { word: 
   return { word, reading };
 }
 
-/**
- * The strongest card per word (and reading) across every setup with known words on, among cards studied far enough.
- * A word's card is only sent when it changed since `since`, so an unchanged collection sends nothing.
- */
-export function pickKnownCards(cards: { card: AnkiCardInfo; setup: AnkiNoteTypeSetup }[], since: Date | null): KnownCandidate[] {
-  const best = new Map<string, KnownCandidate>();
+/** The cards studied far enough to count, with their words, across every setup with known words on. */
+export function knownCandidates(cards: { card: AnkiCardInfo; setup: AnkiNoteTypeSetup }[]): KnownCandidate[] {
+  const out: KnownCandidate[] = [];
   for (const { card, setup } of cards) {
     if (!setup.knownWords || !cardMeetsState(card, setup.knownWords)) continue;
     const w = cardWord(card, setup);
-    if (!w) continue;
-    const key = `${w.word} ${w.reading}`;
-    const current = best.get(key);
-    if (!current || cardStrength(card) > cardStrength(current.card)) best.set(key, { card, ...w, modelName: setup.modelName });
+    if (w) out.push({ card, ...w, modelName: setup.modelName });
   }
-  const cutoff = since ? since.getTime() - CLOCK_SLACK_MS : null;
-  return [...best.values()].filter((c) => cutoff == null || c.card.mod * 1000 >= cutoff);
+  return out;
+}
+
+function changedSince(card: AnkiCardInfo, since: Date | null): boolean {
+  return since == null || card.mod * 1000 >= since.getTime() - CLOCK_SLACK_MS;
+}
+
+/**
+ * The cards whose entry must be matched before picking: those sharing their word and reading with another card (which
+ * may be another entry with the same spelling), and those that will be sent.
+ */
+export function cardsToMatch(candidates: KnownCandidate[], since: Date | null): KnownCandidate[] {
+  const count = new Map<string, number>();
+  for (const c of candidates) count.set(`${c.word} ${c.reading}`, (count.get(`${c.word} ${c.reading}`) ?? 0) + 1);
+  return candidates.filter((c) => count.get(`${c.word} ${c.reading}`)! > 1 || changedSince(c.card, since));
+}
+
+/**
+ * The strongest card per word across every setup with known words on, among cards studied far enough. A word is its
+ * matched entry when `entryOf` knows it, else its word and reading. A word's card is only sent when it changed since
+ * `since`, so an unchanged collection sends nothing.
+ */
+export function pickKnownCards(
+  candidates: KnownCandidate[],
+  since: Date | null,
+  entryOf: (card: AnkiCardInfo) => WordEntry | null | undefined = () => undefined
+): KnownCandidate[] {
+  const best = new Map<string, KnownCandidate>();
+  for (const c of candidates) {
+    const entry = entryOf(c.card);
+    const key = entry ? `#${entry.wordId}:${entry.readingIndex}` : `${c.word} ${c.reading}`;
+    const current = best.get(key);
+    if (!current || cardStrength(c.card) > cardStrength(current.card)) best.set(key, c);
+  }
+  return [...best.values()].filter((c) => changedSince(c.card, since));
 }

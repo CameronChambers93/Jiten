@@ -2711,6 +2711,47 @@ namespace Jiten.Parser
             return result;
         }
 
+        /// <summary>
+        /// Every entry that <see cref="GetWordsDirectLookupByReading"/> chooses from for each pair, most common first, so
+        /// the first is the one it would pick. A reading that matches none of them gives no entries, as it gives no word.
+        /// </summary>
+        public static async Task<Dictionary<(string Word, string Reading), List<(int WordId, byte ReadingIndex)>>> GetDirectLookupCandidatesByReading(
+            IDbContextFactory<JitenDbContext> contextFactory, List<(string Word, string Reading)> pairs)
+        {
+            await EnsureInitializedAsync(contextFactory);
+
+            var (candidates, formFrequencies) = await ResolveDirectLookupCandidates(pairs.Select(p => p.Word));
+
+            int FreqRank((JmDictWord match, int readingIndex) m) =>
+                formFrequencies.TryGetValue((m.match.WordId, (short)m.readingIndex), out var wff) ? wff.FrequencyRank : int.MaxValue;
+
+            var result = new Dictionary<(string Word, string Reading), List<(int WordId, byte ReadingIndex)>>();
+            foreach (var (word, reading) in pairs)
+            {
+                var key = (word, reading ?? "");
+                if (result.ContainsKey(key) || !candidates.TryGetValue(word, out var matches)) continue;
+
+                var fitting = matches;
+                if (!string.IsNullOrWhiteSpace(reading))
+                {
+                    fitting = [];
+                    foreach (var hint in reading.Split(ReadingHintSeparators, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                    {
+                        var hintHira = KanaNormalizer.Normalize(KanaConverter.ToHiragana(hint, convertLongVowelMark: false));
+                        fitting = matches.Where(m => WordHasKanaReading(m.match, hintHira)).ToList();
+                        if (fitting.Count > 0) break;
+                    }
+                }
+
+                var ordered = fitting.OrderBy(FreqRank).Select(m => (m.match.WordId, (byte)m.readingIndex)).DistinctBy(m => m.WordId).ToList();
+                // As the direct lookup: when its pick is an excluded misparse, the word has no entry.
+                if (ordered.Count == 0 || ExcludedMisparses.Contains(ordered[0])) continue;
+                result[key] = ordered.Where(m => !ExcludedMisparses.Contains(m)).ToList();
+            }
+
+            return result;
+        }
+
         private static async Task<(Dictionary<string, List<(JmDictWord match, int readingIndex)>> candidates,
                                    Dictionary<(int, short), JmDictWordFormFrequency> frequencies)>
             ResolveDirectLookupCandidates(IEnumerable<string> surfaces)

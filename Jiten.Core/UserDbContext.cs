@@ -755,6 +755,7 @@ public class UserDbContext : IdentityDbContext<User>
             entity.Property(n => n.ModelName).HasMaxLength(200).IsRequired();
             entity.Property(n => n.DeckName).HasMaxLength(200).IsRequired();
             entity.Property(n => n.FieldsHash).HasMaxLength(64);
+            entity.Property(n => n.WordMatch).HasMaxLength(16);
 
             entity.HasIndex(n => new { n.UserId, n.AnkiNoteId }).IsUnique();
         });

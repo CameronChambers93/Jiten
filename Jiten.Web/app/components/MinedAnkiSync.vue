@@ -19,6 +19,8 @@
     createdAt: string;
     ready: boolean;
     sentence: string | null;
+    /** How the note's word was chosen; `guessed` notes warn before a fold. */
+    wordMatch: string | null;
   }
 
   interface FoldCandidate {
@@ -39,6 +41,12 @@
   interface ModelResult {
     imported: number;
     importFailed: number;
+    /** Notes already stored without a sentence of their own that got it. */
+    sentencesAdded: number;
+    /** Notes whose word was guessed among entries sharing its spelling, imported or checked now. */
+    guessed: number;
+    /** Stored notes found to be another word on their first check, and moved to it. */
+    moved: number;
     known: number;
     flags: number;
     written: number;
@@ -47,7 +55,7 @@
     missingList: string | null;
   }
 
-  const emit = defineEmits<{ changed: [] }>();
+  const emit = defineEmits<{ changed: []; check: [expression: string] }>();
 
   /** Notes per notesInfo read while writing. */
   const READ_BATCH = 100;
@@ -73,7 +81,18 @@
 
   function resultFor(model: string): ModelResult {
     results.value ??= {};
-    return (results.value[model] ??= { imported: 0, importFailed: 0, known: 0, flags: 0, written: 0, unchanged: 0, missingList: null });
+    return (results.value[model] ??= {
+      imported: 0,
+      importFailed: 0,
+      sentencesAdded: 0,
+      guessed: 0,
+      moved: 0,
+      known: 0,
+      flags: 0,
+      written: 0,
+      unchanged: 0,
+      missingList: null,
+    });
   }
 
   async function syncKnownWords() {
@@ -86,15 +105,21 @@
   async function importNew() {
     const setups = anki.setups.value.filter((s) => s.importSentences);
     if (!setups.length) return;
-    const { ankiNoteIds } = await $api<{ ankiNoteIds: number[] }>('mined/notes');
+    const { ankiNoteIds, withoutSentence, unchecked } = await $api<{ ankiNoteIds: number[]; withoutSentence: number[]; unchecked: number[] }>('mined/notes');
     const stored = new Set(ankiNoteIds);
+    // Stored notes are sent again when they have no sentence of their own (synced for their list before their note type
+    // mapped one), and the server adds it; or when their word was never checked against other entries with its spelling.
+    const again = new Set([...withoutSentence, ...unchecked]);
     for (const setup of setups) {
-      const ids = (await ankiConnect<number[]>('findNotes', { query: setupQuery(setup) })).filter((id) => !stored.has(id));
+      const ids = (await ankiConnect<number[]>('findNotes', { query: setupQuery(setup) })).filter((id) => !stored.has(id) || again.has(id));
       if (!ids.length) continue;
-      step.value = `Importing ${ids.length} new ${setup.modelName} notes…`;
-      const res: MinedImportResult[] = await importNotes(ids);
+      step.value = `Importing ${ids.length} ${setup.modelName} notes…`;
+      const res: MinedImportResult[] = await importNotes(ids, (_, done) => (step.value = `Importing ${setup.modelName} notes… ${done}/${ids.length}`));
       const r = resultFor(setup.modelName);
       r.imported += res.filter((x) => x.status === 'imported').length;
+      r.sentencesAdded += res.filter((x) => x.status === 'sentence').length;
+      r.guessed += res.filter((x) => x.wordMatch === 'guessed').length;
+      r.moved += res.filter((x) => x.moved).length;
       r.importFailed += res.filter((x) => x.status === 'failed').length;
       ids.forEach((id) => stored.add(id));
     }
@@ -221,11 +246,20 @@
     const keepId = keep.value[candidate.minedWordId]!;
     const folded = candidate.notes.filter((n) => n.ankiNoteId !== keepId && n.ready).map((n) => n.ankiNoteId);
     if (!folded.length) return;
+    const involved = candidate.notes.filter((n) => n.ankiNoteId === keepId || folded.includes(n.ankiNoteId));
+    const guessed = involved.filter((n) => n.wordMatch === 'guessed').length;
+    const guessWarning = guessed
+      ? `${guessed} of these notes ${guessed === 1 ? 'was' : 'were'} matched to this word by guess, and may be a different word with the same spelling. `
+      : '';
     confirm.require({
-      header: `Fold ${candidate.expression}`,
-      message: `Delete ${folded.length} Anki note${folded.length === 1 ? '' : 's'} (${folded.join(', ')}) and keep note ${keepId}? The sentences stay with the word (exact copies are kept once) and are written to the kept note now. Review history on the deleted notes is lost.`,
-      acceptProps: { label: 'Fold', severity: 'danger' },
-      rejectProps: { label: 'Cancel', severity: 'secondary', outlined: true },
+      header: guessed ? `Fold ${candidate.expression} anyway?` : `Fold ${candidate.expression}`,
+      message: `${guessWarning}Delete ${folded.length} Anki note${folded.length === 1 ? '' : 's'} (${folded.join(', ')}) and keep note ${keepId}? The sentences stay with the word (exact copies are kept once) and are written to the kept note now. Review history on the deleted notes is lost.`,
+      icon: guessed ? 'pi pi-exclamation-triangle' : undefined,
+      acceptProps: { label: guessed ? 'Fold anyway' : 'Fold', severity: 'danger' },
+      rejectProps: { label: guessed ? 'Check word' : 'Cancel', severity: 'secondary', outlined: true },
+      reject: () => {
+        if (guessed) emit('check', candidate.expression);
+      },
       accept: async () => {
         folding.value = candidate.minedWordId;
         try {
@@ -256,6 +290,9 @@
     const parts: string[] = [];
     if (r.known) parts.push(`${r.known} known words sent`);
     if (r.imported) parts.push(`${r.imported} notes imported`);
+    if (r.sentencesAdded) parts.push(`${r.sentencesAdded} notes' sentences added`);
+    if (r.moved) parts.push(`${r.moved} notes moved to another word`);
+    if (r.guessed) parts.push(`${r.guessed} notes matched by guess`);
     if (r.importFailed) parts.push(`${r.importFailed} couldn't be imported`);
     if (r.flags) parts.push(`${r.flags} flags taken in`);
     if (r.written || r.unchanged) parts.push(`${r.written} notes written, ${r.unchanged} unchanged`);
@@ -323,6 +360,7 @@
               <span v-else class="text-gray-500">No sentence</span>
               <span class="block text-xs text-gray-500">
                 {{ n.deckName }} · {{ new Date(n.createdAt).toLocaleString() }}
+                <template v-if="n.wordMatch === 'guessed'"> · <span class="text-orange-600">guessed word</span></template>
                 <template v-if="n.ankiNoteId === keep[c.minedWordId]"> · kept</template>
                 <template v-else-if="!n.ready"> · too new to fold (GSM may still be adding media)</template>
               </span>

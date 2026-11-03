@@ -46,6 +46,34 @@ public class MinedNote
 
     /// <summary>A hash of what Sync last wrote to the main fields, so a changed sentence is written again.</summary>
     public string? FieldsHash { get; set; }
+
+    /// <summary>How the note's word was chosen (<see cref="MinedWordMatch"/>); null until the note has been checked.</summary>
+    public string? WordMatch { get; set; }
+}
+
+/// <summary>How a note's JMDict entry was chosen. Only <see cref="Guessed"/> is shown for review.</summary>
+public static class MinedWordMatch
+{
+    /// <summary>No entry fits the word and reading: a new note has no WordId; a stored one keeps the word it was on.</summary>
+    public const string None = "none";
+
+    /// <summary>Only one entry fits the word and reading.</summary>
+    public const string Single = "single";
+
+    /// <summary>Several fit, and the glosses of exactly one appear in the note's text.</summary>
+    public const string Gloss = "gloss";
+
+    /// <summary>Several fit and the note's text didn't settle it: the most common one was taken.</summary>
+    public const string Guessed = "guessed";
+
+    /// <summary>Recorded by the mine button, which knows the entry it mined for.</summary>
+    public const string Mined = "mined";
+
+    /// <summary>The user picked or confirmed the entry.</summary>
+    public const string Chosen = "chosen";
+
+    /// <summary>Statuses Jiten decided itself, which a later check may change; the others are never redone.</summary>
+    public static bool IsAutomatic(string? status) => status is null or None or Single or Gloss or Guessed;
 }
 
 public static class MinedSentenceOrigin

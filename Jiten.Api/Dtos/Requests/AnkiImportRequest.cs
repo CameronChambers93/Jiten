@@ -24,6 +24,14 @@ public class AnkiCardImport
     /// same surface but have different readings. Already furigana-stripped by the client.
     /// </summary>
     public string? Reading { get; set; }
+
+    /// <summary>
+    /// The entry, when the client already matched the word (from its note's text, through api/mined/match). Used as it
+    /// is, instead of looking the word and reading up.
+    /// </summary>
+    public int? WordId { get; set; }
+
+    public byte? ReadingIndex { get; set; }
     public double? Stability { get; set; }
     public double? Difficulty { get; set; }
     public int Reps { get; set; } = 0;

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { allowedActions, fieldFor, matchPreset, newSetup, PRESETS, setupQuery, suggestRoles, withRoles, type AnkiNoteTypeSetup } from '../app/utils/ankiSetups';
 import { mainFieldValues, noteWriteFields, type MainFields } from '../app/utils/ankiNoteWrite';
 import { findSlots, handMadeSlots, insertRotation, installedVersion, removeRotation, SCRIPT_VERSION } from '../app/utils/ankiRotationScript';
-import { cardMeetsState, cardStrength, pickKnownCards, type AnkiCardInfo } from '../app/utils/ankiCardImport';
+import { cardMeetsState, cardStrength, cardsToMatch, knownCandidates, pickKnownCards, type AnkiCardInfo } from '../app/utils/ankiCardImport';
 
 const LAPIS_PLUS_FIELDS = [
   'Expression',
@@ -238,10 +238,10 @@ describe('known words', () => {
       interval: 90,
     });
     const picked = pickKnownCards(
-      [
+      knownCandidates([
         { card: weak, setup: lapis },
         { card: strong, setup: core },
-      ],
+      ]),
       null
     );
     expect(picked).toHaveLength(1);
@@ -251,8 +251,39 @@ describe('known words', () => {
 
   it('sends only cards changed since the last Sync', () => {
     const since = new Date(1_800_000_000 * 1000);
-    expect(pickKnownCards([{ card: card({ mod: 1_799_000_000 }), setup: lapis }], since)).toHaveLength(0);
-    expect(pickKnownCards([{ card: card({ mod: 1_800_000_100 }), setup: lapis }], since)).toHaveLength(1);
+    expect(pickKnownCards(knownCandidates([{ card: card({ mod: 1_799_000_000 }), setup: lapis }]), since)).toHaveLength(0);
+    expect(pickKnownCards(knownCandidates([{ card: card({ mod: 1_800_000_100 }), setup: lapis }]), since)).toHaveLength(1);
+  });
+
+  it('keeps a card per dictionary entry when two entries are spelled alike', () => {
+    const fields = (english: string) => ({ Expression: { value: 'コート' }, vocabularyKana: { value: 'コート' }, vocabularyEnglish: { value: english } });
+    const coat = card({ cardId: 1, modelName: 'Core 2000', fields: fields('coat'), interval: 90 });
+    const court = card({ cardId: 2, modelName: 'Core 2000', fields: fields('court'), interval: 10 });
+    const cards = knownCandidates([
+      { card: coat, setup: core },
+      { card: court, setup: core },
+    ]);
+    // Unmatched, they are one word and the stronger card wins.
+    expect(pickKnownCards(cards, null).map((c) => c.card.cardId)).toEqual([1]);
+    const entries = new Map([
+      [1, { wordId: 1049000, readingIndex: 0 }],
+      [2, { wordId: 2842174, readingIndex: 0 }],
+    ]);
+    expect(pickKnownCards(cards, null, (c) => entries.get(c.cardId)).map((c) => c.card.cardId)).toEqual([1, 2]);
+  });
+
+  it('matches cards sharing a word, and the ones to send', () => {
+    const since = new Date(1_800_000_000 * 1000);
+    const old = { mod: 1_799_000_000 };
+    const word = (w: string, cardId: number, mod = old) =>
+      card({ cardId, ...mod, modelName: 'Core 2000', fields: { Expression: { value: w }, vocabularyKana: { value: '' } } });
+    const candidates = knownCandidates([
+      { card: word('コート', 1), setup: core },
+      { card: word('コート', 2), setup: core },
+      { card: word('読む', 3), setup: core },
+      { card: word('書く', 4, { mod: 1_800_000_100 }), setup: core },
+    ]);
+    expect(cardsToMatch(candidates, since).map((c) => c.card.cardId)).toEqual([1, 2, 4]);
   });
 
   it('reads the reading from ruby furigana', () => {
@@ -262,6 +293,6 @@ describe('known words', () => {
       knownWords: 'seen',
     } as AnkiNoteTypeSetup;
     const c = card({ fields: { Word: { value: '怪我' }, WordReading: { value: '<ruby>怪我<rt>けが</rt></ruby>' } } });
-    expect(pickKnownCards([{ card: c, setup: jpmn }], null)[0]).toMatchObject({ word: '怪我', reading: 'けが' });
+    expect(pickKnownCards(knownCandidates([{ card: c, setup: jpmn }]), null)[0]).toMatchObject({ word: '怪我', reading: 'けが' });
   });
 });

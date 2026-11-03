@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { furiganaToKana, noteFlags, noteMedia, toImportNote, type AnkiNoteInfo } from '../app/utils/minedImport';
+import { furiganaToKana, noteFlags, noteMedia, noteText, toImportNote, type AnkiNoteInfo } from '../app/utils/minedImport';
 import { PRESETS } from '../app/utils/ankiSetups';
 
 const LAPIS_PLUS = PRESETS.find((p) => p.name === 'Lapis+')!.roles;
@@ -48,8 +48,20 @@ describe('toImportNote', () => {
 
 describe('toImportNote with JP Mining Note roles', () => {
   it('reads the word, its reading from the hiragana field, and the sentence furigana', () => {
-    const n = note({ Word: '読む', WordReading: '読[よ]む', WordReadingHiragana: 'よむ', Sentence: '本を<b>読む</b>', SentenceReading: '本[ほん]を<b>読[よ]む</b>' });
-    expect(toImportNote(n, 'Mining', {}, JPMN)).toMatchObject({ expression: '読む', reading: 'よむ', sentence: '本を<b>読む</b>', furigana: '本[ほん]を<b>読[よ]む</b>', english: null });
+    const n = note({
+      Word: '読む',
+      WordReading: '読[よ]む',
+      WordReadingHiragana: 'よむ',
+      Sentence: '本を<b>読む</b>',
+      SentenceReading: '本[ほん]を<b>読[よ]む</b>',
+    });
+    expect(toImportNote(n, 'Mining', {}, JPMN)).toMatchObject({
+      expression: '読む',
+      reading: 'よむ',
+      sentence: '本を<b>読む</b>',
+      furigana: '本[ほん]を<b>読[よ]む</b>',
+      english: null,
+    });
   });
 
   it('falls back to the furigana field for the reading', () => {
@@ -70,10 +82,21 @@ describe('noteFlags', () => {
     expect(noteFlags([{ noteId: 5, tags: ['jiten-flag'] }])).toEqual([{ ankiNoteId: 5, minedSentenceId: null, tag: 'jiten-flag' }]);
   });
 
-
   it('reads sentence ids from flag tags', () => {
     expect(noteFlags([{ noteId: 5, tags: ['yomitan', 'sentence-fix::42', 'sentence-fix::x'] }])).toEqual([
       { ankiNoteId: 5, minedSentenceId: 42, tag: 'sentence-fix::42' },
     ]);
+  });
+});
+
+describe('noteText', () => {
+  it('joins every field without markup or sound tags', () => {
+    expect(noteText({ A: { value: '<b>コート</b>' }, B: { value: 'court[sound:x.mp3]' }, C: { value: 'I played <i>tennis</i>.' } })).toBe(
+      ' コート \ncourt \nI played tennis .'
+    );
+  });
+
+  it('leaves out the sentence list Jiten writes', () => {
+    expect(noteText({ A: { value: 'coat' }, S: { value: '<div class="jiten-sentences" data-note="1"><div>court</div></div>' } })).toBe('coat');
   });
 });

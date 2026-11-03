@@ -10,6 +10,7 @@ using Microsoft.EntityFrameworkCore;
 namespace Jiten.Api.Services.Mining;
 
 /// <summary>An Anki note as the browser read it through AnkiConnect, with its media files when the note has them.</summary>
+/// <param name="Text">Every field of the note, which decides between entries sharing the word and reading.</param>
 public record ImportNoteDto(
     long AnkiNoteId,
     string ModelName,
@@ -26,19 +27,32 @@ public record ImportNoteDto(
     string? AudioFilename,
     string? AudioBase64,
     string? PictureFilename,
-    string? PictureBase64);
+    string? PictureBase64,
+    string? Text = null);
 
 public record ImportNotesRequest(List<ImportNoteDto> Notes);
 
 /// <param name="Status">"imported", "already" (the note was imported before), "sentence" (it was, without a sentence of its own, and now has it) or "failed".</param>
-public record ImportNoteResult(long AnkiNoteId, string Status, long? MinedWordId, bool Matched, string? Origin, string? Error);
+/// <param name="WordMatch">How the note's word was chosen, when this import chose it (<see cref="MinedWordMatch"/>).</param>
+/// <param name="Moved">A stored note checked for the first time turned out to be another word, and moved to it.</param>
+public record ImportNoteResult(long AnkiNoteId, string Status, long? MinedWordId, bool Matched, string? Origin, string? Error,
+                               string? WordMatch = null, bool Moved = false);
 
 public record MinedWordSummaryDto(long MinedWordId, int? WordId, byte? ReadingIndex, string Expression, string Reading, int Sentences, int Notes,
-                                  int Flagged, string? MainSentence, DateTime UpdatedAt);
+                                  int Flagged, string? MainSentence, DateTime UpdatedAt, int Guessed = 0);
 
 public record MinedWordsPage(List<MinedWordSummaryDto> Words, int Total);
 
-public record MinedNoteDto(long AnkiNoteId, string ModelName, string DeckName, DateTime ImportedAt);
+/// <param name="WordMatch">How the note's word was chosen (<see cref="MinedWordMatch"/>); null until checked.</param>
+public record MinedNoteDto(long AnkiNoteId, string ModelName, string DeckName, DateTime ImportedAt, string? WordMatch);
+
+/// <param name="WordId">The entry the note is on now.</param>
+public record NoteCandidatesDto(int? WordId, byte? ReadingIndex, string? WordMatch, List<WordCandidateDto> Candidates);
+
+public record SetNoteWordRequest(int WordId, byte ReadingIndex);
+
+/// <param name="MinedWordId">The word the note is on now.</param>
+public record SetNoteWordResult(long MinedWordId, bool Moved);
 
 /// <param name="AudioUrl">The stored copy's URL; null for Jiten sentences (cut from the episode on demand) and sentences without audio.</param>
 public record MinedSentenceDto(long MinedSentenceId, string Text, string? English, string? EnglishOrigin, string Origin, long? ExampleSentenceId,
@@ -112,6 +126,7 @@ public class MinedSentenceService(
     IDbContextFactory<JitenDbContext> contextFactory,
     ICdnService cdn,
     IBackgroundJobClient backgroundJobs,
+    WordMatchService wordMatch,
     ILogger<MinedSentenceService> logger)
 {
     public const int MaxNotesPerImport = 20;
@@ -122,46 +137,53 @@ public class MinedSentenceService(
 
     public async Task<List<ImportNoteResult>> ImportAsync(string userId, IReadOnlyList<ImportNoteDto> notes, CancellationToken ct)
     {
+        notes = notes.DistinctBy(n => n.AnkiNoteId).ToList();
         var noteIds = notes.Select(n => n.AnkiNoteId).ToList();
-        var known = (await userContext.MinedNotes.Where(n => n.UserId == userId && noteIds.Contains(n.AnkiNoteId))
-                                      .Select(n => new { n.AnkiNoteId, n.MinedWordId }).ToListAsync(ct))
-                    .ToDictionary(n => n.AnkiNoteId, n => n.MinedWordId);
+        var known = await userContext.MinedNotes.Where(n => n.UserId == userId && noteIds.Contains(n.AnkiNoteId)).ToDictionaryAsync(n => n.AnkiNoteId, ct);
 
-        // Only new notes need their word looked up.
-        var pairs = notes.Where(n => !known.ContainsKey(n.AnkiNoteId)).Select(n => (Word: PlainText(n.Expression), Reading: PlainText(n.Reading)))
-                         .Where(p => p.Word.Length > 0).Distinct().ToList();
-        var lookup = pairs.Count == 0
-            ? new Dictionary<(string Word, string Reading), Core.Data.DeckWord>()
-            : await Parser.Parser.GetWordsDirectLookupByReading(contextFactory, pairs);
+        // New notes have their word chosen, and stored notes never checked are checked once (when the browser sent their text).
+        var toMatch = notes.Where(n => !known.TryGetValue(n.AnkiNoteId, out var stored) || (stored.WordMatch == null && n.Text != null)).ToList();
+        var matched = await wordMatch.MatchAsync(toMatch.Select(n => new WordMatchRequest(PlainText(n.Expression), PlainText(n.Reading), n.Text)).ToList(), ct);
+        var matchOf = toMatch.Select((n, i) => (n.AnkiNoteId, Match: matched[i])).ToDictionary(x => x.AnkiNoteId, x => x.Match);
 
         var results = new List<ImportNoteResult>();
         foreach (var note in notes)
         {
-            if (known.TryGetValue(note.AnkiNoteId, out var existingWordId))
+            if (known.TryGetValue(note.AnkiNoteId, out var storedNote))
             {
-                // A note recorded before its note type mapped a sentence (Core 2000's notes, synced for their list only) gets
-                // its own sentence now, first in the rotation.
-                var ownSentence = await userContext.MinedSentences.AnyAsync(s => s.UserId == userId && s.SourceAnkiNoteId == note.AnkiNoteId, ct);
-                if (ownSentence || PlainText(note.Sentence).Length == 0)
-                {
-                    results.Add(new ImportNoteResult(note.AnkiNoteId, "already", existingWordId, false, null, null));
-                    continue;
-                }
-
+                // Tracked again if an earlier note's failure cleared the context.
+                storedNote = await userContext.MinedNotes.FirstAsync(n => n.MinedNoteId == storedNote.MinedNoteId, ct);
+                string? checkedAs = null;
+                var moved = false;
                 try
                 {
-                    var knownWord = await userContext.MinedWords.FirstAsync(w => w.MinedWordId == existingWordId, ct);
+                    if (matchOf.TryGetValue(note.AnkiNoteId, out var match))
+                    {
+                        moved = await CheckStoredNoteAsync(userId, storedNote, match, ct);
+                        checkedAs = storedNote.WordMatch;
+                    }
+
+                    // A note recorded before its note type mapped a sentence (Core 2000's notes, synced for their list only) gets
+                    // its own sentence now, first in the rotation.
+                    var ownSentence = await userContext.MinedSentences.AnyAsync(s => s.UserId == userId && s.SourceAnkiNoteId == note.AnkiNoteId, ct);
+                    if (ownSentence || PlainText(note.Sentence).Length == 0)
+                    {
+                        results.Add(new ImportNoteResult(note.AnkiNoteId, "already", storedNote.MinedWordId, false, null, null, checkedAs, moved));
+                        continue;
+                    }
+
+                    var knownWord = await userContext.MinedWords.FirstAsync(w => w.MinedWordId == storedNote.MinedWordId, ct);
                     var ownOrigin = DetectedOrigin.From(note);
                     await AddSentenceAsync(userId, knownWord, note, ownOrigin, ct, first: true);
                     knownWord.UpdatedAt = DateTime.UtcNow;
                     await userContext.SaveChangesAsync(ct);
-                    results.Add(new ImportNoteResult(note.AnkiNoteId, "sentence", existingWordId, true, ownOrigin.Origin, null));
+                    results.Add(new ImportNoteResult(note.AnkiNoteId, "sentence", storedNote.MinedWordId, true, ownOrigin.Origin, null, checkedAs, moved));
                 }
                 catch (Exception e) when (e is ArgumentException or FormatException or DbUpdateException)
                 {
                     userContext.ChangeTracker.Clear();
                     logger.LogWarning(e, "Couldn't import the sentence of Anki note {NoteId}", note.AnkiNoteId);
-                    results.Add(new ImportNoteResult(note.AnkiNoteId, "failed", existingWordId, false, null,
+                    results.Add(new ImportNoteResult(note.AnkiNoteId, "failed", storedNote.MinedWordId, false, null,
                                                      e is DbUpdateException ? "Couldn't save the note's sentence." : e.Message));
                 }
 
@@ -173,14 +195,15 @@ public class MinedSentenceService(
                 var expression = PlainText(note.Expression);
                 if (expression.Length == 0) throw new ArgumentException("The note has no word.");
                 var reading = PlainText(note.Reading);
-                var match = lookup.GetValueOrDefault((expression, reading));
+                var match = matchOf[note.AnkiNoteId];
 
                 var word = await FindOrCreateWordAsync(userId, expression, reading, match?.WordId, match?.ReadingIndex, ct);
                 word.UpdatedAt = DateTime.UtcNow;
+                var status = match?.Status ?? MinedWordMatch.None;
                 userContext.MinedNotes.Add(new MinedNote
                 {
                     MinedWordId = word.MinedWordId, UserId = userId, AnkiNoteId = note.AnkiNoteId,
-                    ModelName = Truncate(note.ModelName, 200), DeckName = Truncate(note.DeckName, 200)
+                    ModelName = Truncate(note.ModelName, 200), DeckName = Truncate(note.DeckName, 200), WordMatch = status
                 });
 
                 var origin = DetectedOrigin.From(note);
@@ -188,7 +211,7 @@ public class MinedSentenceService(
                     await AddSentenceAsync(userId, word, note, origin, ct);
 
                 await userContext.SaveChangesAsync(ct);
-                results.Add(new ImportNoteResult(note.AnkiNoteId, "imported", word.MinedWordId, match != null, origin.Origin, null));
+                results.Add(new ImportNoteResult(note.AnkiNoteId, "imported", word.MinedWordId, match != null, origin.Origin, null, status));
             }
             catch (Exception e) when (e is ArgumentException or FormatException or DbUpdateException)
             {
@@ -198,8 +221,108 @@ public class MinedSentenceService(
             }
         }
 
-        if (results.Any(r => r.Status is "imported" or "sentence")) backgroundJobs.Enqueue<SentenceParseJob>(job => job.ParsePending(CancellationToken.None));
+        if (results.Any(r => r.Status is "imported" or "sentence"))
+            backgroundJobs.Enqueue<SentenceParseJob>(job => job.ParsePending(CancellationToken.None));
         return results;
+    }
+
+    /// <summary>
+    /// Records how a stored note's word is matched, the first time it's checked, and moves the note to the matched entry's
+    /// word when that's another one. A note whose word has a fold under way is left unchecked until the fold is done.
+    /// Returns whether the note moved.
+    /// </summary>
+    private async Task<bool> CheckStoredNoteAsync(string userId, MinedNote note, WordMatchResult? match, CancellationToken ct)
+    {
+        if (match == null)
+        {
+            // No entry fits now; a word that has one keeps it, as it was matched (or mined) before.
+            note.WordMatch = MinedWordMatch.None;
+            await userContext.SaveChangesAsync(ct);
+            return false;
+        }
+
+        await using var transaction = await userContext.Database.BeginTransactionAsync(ct);
+        var outcome = await MoveNoteAsync(userId, note, match.WordId, match.ReadingIndex, ct);
+        if (outcome == null) return false;
+        note.WordMatch = match.Status;
+        await userContext.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
+        return outcome.Value;
+    }
+
+    /// <summary>
+    /// Moves a note to the mined word of another entry (made if the user has none), with the sentences that came from it.
+    /// When it was the word's last note, everything on the word goes with it and the word is removed. Returns whether it
+    /// moved (false when it's on that entry already), or null when its word has a fold under way.
+    /// </summary>
+    private async Task<bool?> MoveNoteAsync(string userId, MinedNote note, int wordId, byte readingIndex, CancellationToken ct)
+    {
+        var source = await userContext.MinedWords.FirstAsync(w => w.MinedWordId == note.MinedWordId, ct);
+        if (source.WordId == wordId && source.ReadingIndex == readingIndex) return false;
+        var notes = await userContext.MinedNotes.Where(n => n.MinedWordId == source.MinedWordId).ToListAsync(ct);
+        if (notes.Any(n => n.FoldingInto != null)) return null;
+        if (await userContext.MinedNotes.AnyAsync(n => n.UserId == userId && n.FoldingInto != null && userContext.MinedWords.Any(
+                                                      w => w.MinedWordId == n.MinedWordId && w.WordId == wordId && w.ReadingIndex == readingIndex), ct))
+            return null;
+
+        var last = notes.All(n => n.MinedNoteId == note.MinedNoteId);
+        var target = await FindOrCreateWordAsync(userId, source.Expression, source.Reading, wordId, readingIndex, ct);
+        var moving = await userContext.MinedSentences.Where(s => s.MinedWordId == source.MinedWordId && (last || s.SourceAnkiNoteId == note.AnkiNoteId))
+                                      .OrderBy(s => s.SortOrder).ToListAsync(ct);
+        var order = await userContext.MinedSentences.Where(s => s.MinedWordId == target.MinedWordId).MaxAsync(s => (int?)s.SortOrder, ct) ?? -1;
+        foreach (var sentence in moving)
+        {
+            sentence.MinedWordId = target.MinedWordId;
+            // The target mark stays: the word is where it was in the sentence, whichever entry it is.
+            sentence.SortOrder = ++order;
+        }
+
+        note.MinedWordId = target.MinedWordId;
+        (note.FieldsSentenceId, note.FieldsHash) = (null, null);
+        target.UpdatedAt = DateTime.UtcNow;
+        source.UpdatedAt = DateTime.UtcNow;
+        await userContext.SaveChangesAsync(ct);
+
+        if (last)
+        {
+            userContext.MinedWords.Remove(source);
+            await userContext.SaveChangesAsync(ct);
+        }
+
+        return true;
+    }
+
+    /// <summary>The entries a stored note's word could be, with the one it's on now; null when the note isn't stored.</summary>
+    public async Task<NoteCandidatesDto?> NoteCandidatesAsync(string userId, long ankiNoteId, CancellationToken ct)
+    {
+        var note = await userContext.MinedNotes.AsNoTracking().FirstOrDefaultAsync(n => n.UserId == userId && n.AnkiNoteId == ankiNoteId, ct);
+        if (note == null) return null;
+        var word = await userContext.MinedWords.AsNoTracking().FirstAsync(w => w.MinedWordId == note.MinedWordId, ct);
+        var candidates = await wordMatch.CandidatesAsync(word.Expression, word.Reading, ct);
+        return new NoteCandidatesDto(word.WordId, word.ReadingIndex, note.WordMatch, candidates);
+    }
+
+    /// <summary>
+    /// Puts a stored note on the entry the user picked (or confirms the one it's on), moving it with its sentences when
+    /// that's another word. Null when the note isn't stored; throws when the entry isn't one of its candidates or a fold
+    /// is under way.
+    /// </summary>
+    public async Task<SetNoteWordResult?> SetNoteWordAsync(string userId, long ankiNoteId, int wordId, byte readingIndex, CancellationToken ct)
+    {
+        var note = await userContext.MinedNotes.FirstOrDefaultAsync(n => n.UserId == userId && n.AnkiNoteId == ankiNoteId, ct);
+        if (note == null) return null;
+        var word = await userContext.MinedWords.AsNoTracking().FirstAsync(w => w.MinedWordId == note.MinedWordId, ct);
+        var candidates = await wordMatch.CandidatesAsync(word.Expression, word.Reading, ct);
+        if (!candidates.Any(c => c.WordId == wordId && c.ReadingIndex == readingIndex) && !(word.WordId == wordId && word.ReadingIndex == readingIndex))
+            throw new ArgumentException("That entry isn't one this note's word could be.");
+
+        await using var transaction = await userContext.Database.BeginTransactionAsync(ct);
+        var moved = await MoveNoteAsync(userId, note, wordId, readingIndex, ct)
+                    ?? throw new InvalidOperationException("A fold of this word or that one is under way; Sync finishes it first.");
+        note.WordMatch = MinedWordMatch.Chosen;
+        await userContext.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
+        return new SetNoteWordResult(note.MinedWordId, moved);
     }
 
     /// <summary>
@@ -261,7 +384,9 @@ public class MinedSentenceService(
         var note = new MinedNote
         {
             MinedWordId = word.MinedWordId, UserId = userId, AnkiNoteId = request.AnkiNoteId,
-            ModelName = Truncate(request.ModelName, 200), DeckName = Truncate(request.DeckName, 200)
+            ModelName = Truncate(request.ModelName, 200), DeckName = Truncate(request.DeckName, 200),
+            // Mined for a known entry; without one, the next Sync checks it like an imported note.
+            WordMatch = request.WordId != null ? MinedWordMatch.Mined : null
         };
         word.Notes.Add(note);
 
@@ -352,12 +477,19 @@ public class MinedSentenceService(
     /// <summary>Notes in the store that none of their word's sentences came from, such as notes synced for their list only.</summary>
     public Task<List<long>> NoteIdsWithoutSentenceAsync(string userId, CancellationToken ct) =>
         userContext.MinedNotes.AsNoTracking()
-                   .Where(n => n.UserId == userId && !userContext.MinedSentences.Any(s => s.UserId == userId && s.SourceAnkiNoteId == n.AnkiNoteId))
+                   .Where(n => n.UserId == userId && n.WordMatch != MinedWordMatch.Mined
+                               && !userContext.MinedSentences.Any(s => s.UserId == userId && s.SourceAnkiNoteId == n.AnkiNoteId))
                    .Select(n => n.AnkiNoteId).ToListAsync(ct);
 
-    public async Task<MinedWordsPage> ListAsync(string userId, string? search, int page, CancellationToken ct)
+    /// <summary>Notes whose word was never checked against the other entries sharing its word and reading.</summary>
+    public Task<List<long>> UncheckedNoteIdsAsync(string userId, CancellationToken ct) =>
+        userContext.MinedNotes.AsNoTracking().Where(n => n.UserId == userId && n.WordMatch == null).Select(n => n.AnkiNoteId).ToListAsync(ct);
+
+    /// <param name="guessed">Only words with a note whose word was guessed.</param>
+    public async Task<MinedWordsPage> ListAsync(string userId, string? search, int page, CancellationToken ct, bool guessed = false)
     {
         var query = userContext.MinedWords.AsNoTracking().Where(w => w.UserId == userId);
+        if (guessed) query = query.Where(w => w.Notes.Any(n => n.WordMatch == MinedWordMatch.Guessed));
         if (!string.IsNullOrWhiteSpace(search))
         {
             var term = search.Trim();
@@ -372,7 +504,7 @@ public class MinedSentenceService(
                                    w.Sentences.Count, w.Notes.Count,
                                    w.Sentences.Count(s => userContext.SentenceFlags.Any(f => f.UserId == userId && f.ResolvedAt == null
                                                                                              && f.ExampleSentenceId == s.ExampleSentenceId)),
-                                   null, w.UpdatedAt))
+                                   null, w.UpdatedAt, w.Notes.Count(n => n.WordMatch == MinedWordMatch.Guessed)))
                                .ToListAsync(ct);
 
         var ids = words.Select(w => w.MinedWordId).ToList();
@@ -394,7 +526,7 @@ public class MinedSentenceService(
 
         return new MinedWordDto(
             word.MinedWordId, word.WordId, word.ReadingIndex, word.Expression, word.Reading,
-            word.Notes.OrderBy(n => n.AnkiNoteId).Select(n => new MinedNoteDto(n.AnkiNoteId, n.ModelName, n.DeckName, n.ImportedAt)).ToList(),
+            word.Notes.OrderBy(n => n.AnkiNoteId).Select(n => new MinedNoteDto(n.AnkiNoteId, n.ModelName, n.DeckName, n.ImportedAt, n.WordMatch)).ToList(),
             word.Sentences.OrderBy(s => s.SortOrder).Select(s => new MinedSentenceDto(
                 s.MinedSentenceId, s.Shown, s.English, s.EnglishOrigin, s.Origin, s.ExampleSentenceId, s.SourceTitle, s.SourceUrl, s.PreviousLine,
                 s.MinedAt, s.AudioPath == null ? null : cdn.GetSignedUrl(s.AudioPath, MediaUrlTtl),

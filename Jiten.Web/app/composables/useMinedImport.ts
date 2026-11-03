@@ -9,6 +9,10 @@ export interface MinedImportResult {
   matched: boolean;
   origin: string | null;
   error: string | null;
+  /** How the note's word was chosen, when this import chose it: `single`, `gloss`, `guessed` or `none`. */
+  wordMatch?: string | null;
+  /** A stored note checked for the first time turned out to be another word, and moved to it. */
+  moved?: boolean;
 }
 
 /** Notes per import request; media rides along as base64, so batches stay small. */

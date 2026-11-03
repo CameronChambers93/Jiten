@@ -1,6 +1,8 @@
 <script setup lang="ts">
   import Card from 'primevue/card';
   import Button from 'primevue/button';
+  import Checkbox from 'primevue/checkbox';
+  import Dialog from 'primevue/dialog';
   import InputText from 'primevue/inputtext';
   import Message from 'primevue/message';
   import Paginator from 'primevue/paginator';
@@ -28,6 +30,8 @@
     flagged: number;
     mainSentence: string | null;
     updatedAt: string;
+    /** Notes whose word was guessed among entries sharing its spelling. */
+    guessed: number;
   }
 
   interface MinedSentence {
@@ -48,13 +52,30 @@
     flagged: boolean;
   }
 
+  interface MinedNote {
+    ankiNoteId: number;
+    modelName: string;
+    deckName: string;
+    importedAt: string;
+    /** How the note's word was chosen: `guessed` needs a look; null until Sync checks it. */
+    wordMatch: string | null;
+  }
+
+  interface WordCandidate {
+    wordId: number;
+    readingIndex: number;
+    glosses: string[];
+    /** How the entry is written, kanji forms first. */
+    forms: string[];
+  }
+
   interface MinedWord {
     minedWordId: number;
     wordId: number | null;
     readingIndex: number | null;
     expression: string;
     reading: string;
-    notes: { ankiNoteId: number; modelName: string; deckName: string; importedAt: string }[];
+    notes: MinedNote[];
     sentences: MinedSentence[];
   }
 
@@ -139,6 +160,7 @@
 
   // Words
   const search = ref('');
+  const guessedOnly = ref(false);
   const page = ref(0);
   const words = ref<MinedWordSummary[]>([]);
   const total = ref(0);
@@ -148,7 +170,9 @@
   async function loadWords() {
     loading.value = true;
     try {
-      const data = await $api<{ words: MinedWordSummary[]; total: number }>('mined/words', { query: { search: search.value || undefined, page: page.value } });
+      const data = await $api<{ words: MinedWordSummary[]; total: number }>('mined/words', {
+        query: { search: search.value || undefined, page: page.value, guessed: guessedOnly.value || undefined },
+      });
       words.value = data.words;
       total.value = data.total;
     } catch (e) {
@@ -169,6 +193,58 @@
     }, 300);
   });
 
+  watch(guessedOnly, () => {
+    page.value = 0;
+    loadWords();
+  });
+
+  /** Sync's fold dialog asks to check a word first: list it, open. */
+  async function checkWord(expression: string) {
+    guessedOnly.value = false;
+    search.value = expression;
+    clearTimeout(searchTimer);
+    page.value = 0;
+    await loadWords();
+    const first = words.value.find((w) => w.expression === expression);
+    if (first && !open.value[first.minedWordId]) await toggle(first.minedWordId);
+  }
+
+  // Which dictionary entry a note's word is
+  const changing = ref<{ note: MinedNote; expression: string; current: number | null; candidates: WordCandidate[] | null } | null>(null);
+  const settingWord = ref(false);
+
+  async function changeWord(note: MinedNote, word: MinedWord) {
+    changing.value = { note, expression: word.expression, current: word.wordId, candidates: null };
+    try {
+      const { candidates } = await $api<{ candidates: WordCandidate[] }>(`mined/notes/${note.ankiNoteId}/candidates`);
+      if (changing.value?.note === note) changing.value.candidates = candidates;
+    } catch (e) {
+      changing.value = null;
+      toast.add({ severity: 'error', summary: 'Error', detail: extractApiError(e, "Couldn't load the dictionary entries"), life: 5000 });
+    }
+  }
+
+  /** Puts the note on the entry (or confirms it), then shows the lists as they now are. */
+  async function setWord(note: MinedNote, wordId: number, readingIndex: number) {
+    settingWord.value = true;
+    try {
+      const { moved } = await $api<{ moved: boolean }>(`mined/notes/${note.ankiNoteId}/word`, { method: 'POST', body: { wordId, readingIndex } });
+      changing.value = null;
+      if (moved)
+        toast.add({
+          severity: 'success',
+          summary: 'Moved',
+          detail: 'The note and its sentence are on the other word now. Sync writes both notes.',
+          life: 5000,
+        });
+      await refresh();
+    } catch (e) {
+      toast.add({ severity: 'error', summary: "Couldn't change the word", detail: extractApiError(e, 'The change failed'), life: 6000 });
+    } finally {
+      settingWord.value = false;
+    }
+  }
+
   async function toggle(id: number) {
     if (open.value[id]) {
       open.value[id] = undefined;
@@ -188,7 +264,7 @@
 
   async function playAudio(s: MinedSentence) {
     let url = s.audioUrl ?? cutMedia.value[s.minedSentenceId]?.audio;
-    if (!url && s.exampleSentenceId) {
+    if (!url && canCut(s)) {
       try {
         url = URL.createObjectURL(await fetchAudio(s.exampleSentenceId));
         cutMedia.value[s.minedSentenceId] = { ...cutMedia.value[s.minedSentenceId], audio: url };
@@ -201,7 +277,7 @@
   }
 
   async function showPicture(s: MinedSentence) {
-    if (!s.exampleSentenceId) return;
+    if (!canCut(s)) return;
     try {
       const url = URL.createObjectURL(await fetchPicture(s.exampleSentenceId));
       cutMedia.value[s.minedSentenceId] = { ...cutMedia.value[s.minedSentenceId], picture: url };
@@ -214,8 +290,13 @@
     return s.pictureUrl ?? cutMedia.value[s.minedSentenceId]?.picture ?? null;
   }
 
+  /** Only Jiten sentences are cut from an episode; the others have their stored copies or nothing. */
+  function canCut(s: MinedSentence): s is MinedSentence & { exampleSentenceId: number } {
+    return s.origin === 'jiten' && !!s.exampleSentenceId;
+  }
+
   function hasAudio(s: MinedSentence) {
-    return !!s.audioUrl || !!s.exampleSentenceId;
+    return !!s.audioUrl || canCut(s);
   }
 </script>
 
@@ -256,12 +337,13 @@
       </template>
     </Card>
 
-    <MinedAnkiSync @changed="refresh" />
+    <MinedAnkiSync @changed="refresh" @check="checkWord" />
 
     <SentenceFlagList ref="flagList" @changed="refresh" />
 
     <div class="flex items-center gap-3 mb-3">
       <InputText v-model="search" placeholder="Search words" class="w-full sm:w-72" lang="ja" />
+      <label class="flex items-center gap-2 text-sm shrink-0"><Checkbox v-model="guessedOnly" binary /> Guessed only</label>
       <span class="text-sm text-gray-500">{{ total }} words</span>
     </div>
 
@@ -285,6 +367,7 @@
             <div>{{ w.sentences }} sentence{{ w.sentences === 1 ? '' : 's' }}</div>
             <div v-if="w.notes > 1" class="text-orange-600">{{ w.notes }} Anki notes</div>
             <div v-if="w.flagged" class="text-red-600">{{ w.flagged }} flagged</div>
+            <div v-if="w.guessed" class="text-orange-600">guessed word</div>
           </div>
         </button>
 
@@ -295,7 +378,7 @@
               <div v-for="s in (open[w.minedWordId] as MinedWord).sentences" :key="s.minedSentenceId" class="flex gap-3">
                 <img v-if="pictureOf(s)" :src="pictureOf(s)!" alt="" class="w-32 h-auto rounded shrink-0 object-cover" />
                 <button
-                  v-else-if="s.exampleSentenceId"
+                  v-else-if="canCut(s)"
                   class="w-32 h-18 rounded shrink-0 bg-surface-100 dark:bg-surface-800 text-xs text-gray-500"
                   @click="showPicture(s)"
                 >
@@ -323,9 +406,19 @@
               <p v-if="!(open[w.minedWordId] as MinedWord).sentences.length" class="text-sm text-gray-500">No sentences.</p>
               <div class="text-xs text-gray-500">
                 Anki notes:
-                <span v-for="(n, i) in (open[w.minedWordId] as MinedWord).notes" :key="n.ankiNoteId"
-                  >{{ i ? ', ' : '' }}{{ n.deckName }} ({{ n.ankiNoteId }})</span
-                >
+                <div v-for="n in (open[w.minedWordId] as MinedWord).notes" :key="n.ankiNoteId" class="flex flex-wrap items-center gap-2 mt-1">
+                  <span>{{ n.deckName }} ({{ n.ankiNoteId }})</span>
+                  <Tag v-if="n.wordMatch === 'guessed'" value="Guessed word" severity="warn" class="text-xs" />
+                  <button
+                    v-if="n.wordMatch === 'guessed' && w.wordId != null"
+                    class="underline hover:text-primary"
+                    :disabled="settingWord"
+                    @click="setWord(n, w.wordId, w.readingIndex ?? 0)"
+                  >
+                    Looks right
+                  </button>
+                  <button class="underline hover:text-primary" @click="changeWord(n, open[w.minedWordId] as MinedWord)">Change word</button>
+                </div>
               </div>
             </div>
           </template>
@@ -346,6 +439,36 @@
         }
       "
     />
+
+    <Dialog
+      :visible="!!changing"
+      modal
+      :header="changing ? `Which ${changing.expression} is note ${changing.note.ankiNoteId}?` : ''"
+      class="w-[36rem] max-w-[95vw]"
+      @update:visible="(v: boolean) => !v && (changing = null)"
+    >
+      <template v-if="changing">
+        <i v-if="!changing.candidates" class="pi pi-spin pi-spinner text-gray-500" />
+        <p v-else-if="changing.candidates.length < 2" class="text-sm text-gray-500">No other dictionary entry is written this way.</p>
+        <div v-else class="flex flex-col gap-2">
+          <p class="text-sm text-gray-500">
+            The note and the sentence that came from it move to the entry you pick. Sentences you mined onto the word later stay where they are.
+          </p>
+          <button
+            v-for="c in changing.candidates"
+            :key="c.wordId"
+            class="text-left border rounded p-2 hover:border-primary disabled:opacity-50"
+            :class="c.wordId === changing.current ? 'border-primary bg-primary-50 dark:bg-primary-950' : 'border-surface-200 dark:border-surface-700'"
+            :disabled="settingWord"
+            @click="setWord(changing.note, c.wordId, c.readingIndex)"
+          >
+            <div class="font-semibold" lang="ja">{{ c.forms.slice(0, 4).join('・') }}</div>
+            <div class="text-sm">{{ c.glosses.slice(0, 6).join('; ') || 'No English' }}</div>
+            <div class="text-xs text-gray-500">Entry {{ c.wordId }}<template v-if="c.wordId === changing.current"> · on now</template></div>
+          </button>
+        </div>
+      </template>
+    </Dialog>
 
     <SentenceFlagDialog v-if="flagging" :sentence-id="flagging.exampleSentenceId!" :text="flagging.text" @close="flagging = null" @saved="refresh" />
   </div>
