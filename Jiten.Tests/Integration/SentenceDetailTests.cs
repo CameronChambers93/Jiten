@@ -34,7 +34,21 @@ public class SentenceDetailTests(JitenWebApplicationFactory factory) : IClassFix
             new ExampleSentence { SentenceId = 2, DeckId = 2, Text = "同じ行", Tokens = NoWords, WordKeys = [], CentralSentenceId = 10 },
             new ExampleSentence { SentenceId = 3, Text = "同じ行", Tokens = NoWords, WordKeys = [], CentralSentenceId = 10, OwnerId = TestUsers.UserB },
             new ExampleSentence { SentenceId = 4, DeckId = 3, Text = "別の行", Tokens = NoWords, WordKeys = [] },
-            new ExampleSentence { SentenceId = 5, DeckId = 3, Text = "また別の行", Tokens = NoWords, WordKeys = [] });
+            new ExampleSentence { SentenceId = 5, DeckId = 3, Text = "また別の行", Tokens = NoWords, WordKeys = [] },
+            new ExampleSentence { SentenceId = 6, DeckId = 1, Position = 5, Text = "そん時は驚いたよ。", Tokens = NoWords, WordKeys = [] },
+            new ExampleSentence { SentenceId = 7, DeckId = 1, Position = 6, Text = "ほんとに近道だったし。", Tokens = NoWords, WordKeys = [] },
+            new ExampleSentence { SentenceId = 8, DeckId = 1, Position = 8, Text = "白川さんも来るかい？", Tokens = NoWords, WordKeys = [] },
+            new ExampleSentence { SentenceId = 9, DeckId = 3, Text = "去年の3月に終わっちゃった。", Tokens = NoWords, WordKeys = [] });
+        db.DeckSubtitleTracks.Add(new DeckSubtitleTrack
+        {
+            DeckId = 3,
+            CuesJson = """[{"s":0,"e":1000,"t":"それで\n去年の3月に"},{"s":1100,"e":2000,"t":"終わっちゃった\nえっ？"}]"""
+        });
+        db.DeckSubtitleTracks.Add(new DeckSubtitleTrack
+        {
+            DeckId = 1,
+            CuesJson = """[{"s":1000,"e":2000,"t":"あの道を通ったんだよ"},{"s":2500,"e":5000,"t":"そん時は驚いたよ\nほんとに近道だったし"},{"s":6000,"e":7000,"t":"白川さんも来るかい？"},{"s":8000,"e":9000,"t":"いいや\n（今井）同じ行"}]"""
+        });
         await db.SaveChangesAsync();
     }
 
@@ -61,6 +75,49 @@ public class SentenceDetailTests(JitenWebApplicationFactory factory) : IClassFix
 
         body.GetProperty("sentence").GetProperty("hasVideo").GetBoolean().Should().BeFalse();
         body.GetProperty("elsewhere").GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task TheClipShowsTheOtherSpeechInTheSentencesCue()
+    {
+        var body = await (await Get(6)).Content.ReadFromJsonAsync<JsonElement>();
+
+        var clip = body.GetProperty("clip").EnumerateArray()
+                       .Select(l => (l.GetProperty("text").GetString(), l.GetProperty("isSentence").GetBoolean(),
+                                     l.GetProperty("sentenceId").ValueKind == JsonValueKind.Null ? (long?)null : l.GetProperty("sentenceId").GetInt64()))
+                       .ToList();
+        clip.Should().Equal(("そん時は驚いたよ。", true, null), ("ほんとに近道だったし", false, 7L));
+        body.GetProperty("before").EnumerateArray().Select(l => l.GetProperty("text").GetString()).Should().Equal("あの道を通ったんだよ");
+        body.GetProperty("after").EnumerateArray().First().GetProperty("text").GetString().Should().Be("白川さんも来るかい？");
+    }
+
+    [Fact]
+    public async Task AnOtherLineThatIsNoExampleSentenceHasNoLink()
+    {
+        var body = await (await Get(1)).Content.ReadFromJsonAsync<JsonElement>();
+
+        var clip = body.GetProperty("clip").EnumerateArray().ToList();
+        clip.Select(l => l.GetProperty("text").GetString()).Should().Equal("いいや", "同じ行");
+        clip[0].GetProperty("sentenceId").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task ASentenceSpanningCuesShowsTheOtherLinesOfBoth()
+    {
+        var body = await (await Get(9)).Content.ReadFromJsonAsync<JsonElement>();
+
+        body.GetProperty("clip").EnumerateArray()
+            .Select(l => (l.GetProperty("startMs").GetInt32(), l.GetProperty("text").GetString(), l.GetProperty("isSentence").GetBoolean()))
+            .Should().Equal((0, "それで", false), (0, "去年の3月に終わっちゃった。", true), (1100, "えっ？", false));
+    }
+
+    [Fact]
+    public async Task ASentenceAloneInItsCueHasNoClip()
+    {
+        var body = await (await Get(8)).Content.ReadFromJsonAsync<JsonElement>();
+
+        body.GetProperty("clip").GetArrayLength().Should().Be(0);
+        body.GetProperty("before").GetArrayLength().Should().Be(2);
     }
 
     [Fact]

@@ -8,7 +8,9 @@ namespace Jiten.Api.Services;
 
 /// <summary>An example sentence with the Japanese cues it was taken from, in subtitle time.</summary>
 /// <param name="From">See <see cref="CueMatch.From"/>.</param>
-public record SentenceCues(int DeckId, string Text, IReadOnlyList<SubtitleCue> Cues, int First, int Last, double From = 0, double To = 1)
+/// <param name="FirstLine">See <see cref="CueMatch.FirstLine"/>.</param>
+public record SentenceCues(int DeckId, string Text, IReadOnlyList<SubtitleCue> Cues, int First, int Last, double From = 0, double To = 1,
+                           int FirstLine = 0, int LastLine = int.MaxValue)
 {
     public int StartMs => Cues[First].StartMs;
     public int EndMs => Cues[Last].EndMs;
@@ -32,7 +34,8 @@ public class SentenceCueLookup(JitenDbContext context, IMemoryCache cache)
         var matcher = await MatcherAsync(deckId, ct);
         var relative = sentence.SentenceCount > 0 ? Math.Clamp(sentence.Position / (double)sentence.SentenceCount, 0, 1) : 0;
         return matcher?.Locate(sentence.Text, relative) is { } match
-            ? new SentenceCues(deckId, sentence.Text, matcher.Cues, match.First, match.Last, match.From, match.To)
+            ? new SentenceCues(deckId, sentence.Text, matcher.Cues, match.First, match.Last, match.From, match.To,
+                               match.FirstLine, match.LastLine)
             : null;
     }
 

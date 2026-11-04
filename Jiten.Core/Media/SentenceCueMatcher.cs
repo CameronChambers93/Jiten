@@ -11,7 +11,10 @@ namespace Jiten.Core.Media;
 /// <param name="From">For a sentence inside one cue, where its lines start in the cue, 0 to 1 (by line, as a cue's lines are
 /// usually different speakers); otherwise 0.</param>
 /// <param name="To">Where its lines end, 0 to 1; otherwise 1.</param>
-public readonly record struct CueMatch(int First, int Last, double From, double To);
+/// <param name="FirstLine">The line of the first cue the sentence starts on, counting only the lines
+/// <see cref="SentenceCueMatcher.Lines"/> returns.</param>
+/// <param name="LastLine">The line of the last cue it ends on; the cue's last line when it was matched by its prefix only.</param>
+public readonly record struct CueMatch(int First, int Last, double From, double To, int FirstLine, int LastLine);
 
 public sealed partial class SentenceCueMatcher
 {
@@ -40,7 +43,7 @@ public sealed partial class SentenceCueMatcher
         {
             // Lines are counted only when they hold text: a speaker label on its own line, like "（トト子）", isn't one.
             var line = 0;
-            foreach (var normalised in cues[i].Text.Split('\n').Select(Normalise).Where(l => l.Length > 0))
+            foreach (var normalised in Lines(cues[i].Text).Select(Normalise))
             {
                 text.Append(normalised);
                 cueAt.AddRange(Enumerable.Repeat(i, normalised.Length));
@@ -85,11 +88,17 @@ public sealed partial class SentenceCueMatcher
         var start = hits.MinBy(h => Math.Abs(h - expected));
         var end = start + needle.Length - 1;
         int first = _cueAt[start], last = _cueAt[end];
+        // Matched by prefix only, the sentence may run on past the matched line: then it ends with the cue.
+        int firstLine = _lineAt[start], lastLine = prefixOnly ? _lineCount[last] - 1 : _lineAt[end];
         return first == last
-            // Matched by prefix only, the sentence may run on past the matched line: then it ends with the cue.
-            ? new CueMatch(first, last, _lineAt[start] / (double)_lineCount[first], prefixOnly ? 1 : (_lineAt[end] + 1) / (double)_lineCount[first])
-            : new CueMatch(first, last, 0, 1);
+            ? new CueMatch(first, last, firstLine / (double)_lineCount[first], (lastLine + 1) / (double)_lineCount[first], firstLine, lastLine)
+            : new CueMatch(first, last, 0, 1, firstLine, lastLine);
     }
+
+    /// <summary>
+    /// A cue's lines that hold text, as the matcher counts them: a speaker label on its own line, like "（トト子）", isn't one.
+    /// </summary>
+    public static List<string> Lines(string cueText) => cueText.Split('\n').Where(l => Normalise(l).Length > 0).ToList();
 
     private List<int> Occurrences(string needle)
     {
