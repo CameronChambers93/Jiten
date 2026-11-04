@@ -15,10 +15,19 @@
     startMs: number;
     text: string;
   }
+  /** A line of the sentence's clip: the sentence itself, or other speech its audio holds. */
+  interface SentenceClipLine {
+    startMs: number;
+    text: string;
+    isSentence: boolean;
+    sentenceId: number | null;
+  }
   interface SentenceDetail {
     sentence: ExampleSentence;
     words: SentenceDetailWord[];
     before: SentenceContextLine[];
+    /** Empty when the clip holds only the sentence. */
+    clip: SentenceClipLine[];
     after: SentenceContextLine[];
     elsewhere: ExampleSentence[];
   }
@@ -33,6 +42,9 @@
   const missing = ref(false);
 
   async function load() {
+    // A link to another sentence reuses this page: drop the previous sentence's audio and card states.
+    resetAudio();
+    cardState.value = {};
     loading.value = true;
     missing.value = false;
     try {
@@ -63,6 +75,13 @@
   const audioLoading = ref(false);
   let player: HTMLAudioElement | null = null;
   let audioUrl: string | null = null;
+
+  function resetAudio() {
+    player?.pause();
+    player = null;
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    audioUrl = null;
+  }
 
   async function play() {
     const sentence = detail.value?.sentence;
@@ -141,10 +160,7 @@
     return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
   }
 
-  onBeforeUnmount(() => {
-    player?.pause();
-    if (audioUrl) URL.revokeObjectURL(audioUrl);
-  });
+  onBeforeUnmount(resetAudio);
 
   if (import.meta.client) watch(() => route.fullPath, load, { immediate: true });
 </script>
@@ -168,7 +184,27 @@
               <span class="tabular-nums mr-2">{{ formatTime(line.startMs) }}</span
               >{{ line.text }}
             </p>
+            <div v-if="detail.clip.length > 0" class="flex flex-col gap-2 rounded border border-surface-200 dark:border-surface-700 p-3">
+              <span class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Clip</span>
+              <template v-for="(line, index) in detail.clip" :key="`clip-${index}`">
+                <ExampleSentenceEntry
+                  v-if="line.isSentence"
+                  :example-sentence="detail.sentence"
+                  show-source
+                  :show-tts="false"
+                  :show-mine="false"
+                  :show-picture="false"
+                  :show-page-link="false"
+                />
+                <NuxtLink v-else-if="line.sentenceId" :to="`/sentences/${line.sentenceId}`" class="self-start hover:underline">
+                  <span class="text-gray-500 dark:text-gray-400" lang="ja">{{ line.text }}</span>
+                  <i class="pi pi-arrow-up-right text-xs text-gray-400 ml-1" aria-hidden="true" />
+                </NuxtLink>
+                <p v-else class="text-gray-500 dark:text-gray-400" lang="ja">{{ line.text }}</p>
+              </template>
+            </div>
             <ExampleSentenceEntry
+              v-else
               :example-sentence="detail.sentence"
               show-source
               :show-tts="false"

@@ -50,4 +50,38 @@ public class SentenceCueMatcherTests
     {
         new SentenceCueMatcher(Cues).Find("知らない文です", 0.5).Should().BeNull();
     }
+
+    [Fact]
+    public void Locate_SentenceOnOneLineOfACue_GivesThatLine()
+    {
+        var match = new SentenceCueMatcher(Cues).Locate("あ？", 0.4);
+
+        match!.Value.Should().Be(new CueMatch(2, 2, 0.5, 1, 1, 1));
+    }
+
+    [Fact]
+    public void Locate_SentenceSpanningCues_GivesItsFirstAndLastLine()
+    {
+        List<SubtitleCue> cues = [new(0, 1000, "それで\n去年の3月に"), new(1100, 2000, "終わっちゃった\nえっ？")];
+
+        var match = new SentenceCueMatcher(cues).Locate("去年の3月に終わっちゃった", 0.5);
+
+        match!.Value.Should().Be(new CueMatch(0, 1, 0, 1, 1, 0));
+    }
+
+    [Fact]
+    public void Locate_MatchedByPrefixOnly_EndsWithTheCue()
+    {
+        List<SubtitleCue> cues = [new(0, 1000, "そん時は驚いたよ\nほんとに近道だったし")];
+
+        var match = new SentenceCueMatcher(cues).Locate("そん時は驚いたよね、本当に", 0.5);
+
+        match!.Value.Should().Be(new CueMatch(0, 0, 0, 1, 0, 1));
+    }
+
+    [Fact]
+    public void Lines_SkipsSpeakerLabelsOnTheirOwnLine()
+    {
+        SentenceCueMatcher.Lines("（トト子）\nそうなの？\nうん").Should().Equal("そうなの？", "うん");
+    }
 }
