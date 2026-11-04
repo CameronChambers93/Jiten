@@ -57,9 +57,5 @@ public class EmbeddedSubtitleSource(JitenDbContext context, IConfiguration confi
         return stream.Language is "eng" or "en" || (stream.Language is null or "und" && title.Contains("eng", StringComparison.OrdinalIgnoreCase));
     }
 
-    private bool IsUnderMediaRoot(string path)
-    {
-        var root = Path.GetFullPath(configuration["MediaRoot"] ?? "/media").TrimEnd('/') + "/";
-        return Path.GetFullPath(path).StartsWith(root, StringComparison.Ordinal);
-    }
+    private bool IsUnderMediaRoot(string path) => MediaRoots.Contains(configuration, path);
 }

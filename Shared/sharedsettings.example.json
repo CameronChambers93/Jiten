@@ -31,6 +31,7 @@
     }
   },
   "StaticFilesPath": "/path/to/staticFiles",
+  "MediaRoots": ["/media"],
   "UseBunnyCdn": false,
   "BunnyCdnSecret": "",
   "BunnyCdnApiKey": "",

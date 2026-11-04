@@ -55,10 +55,6 @@ public class SentenceMediaService(JitenDbContext context, SentenceCueLookup cueL
         }
     }
 
-    /// <summary>Video paths come from metadata.json; only files inside the media library mount are ever opened.</summary>
-    private bool IsUnderMediaRoot(string videoPath)
-    {
-        var root = Path.GetFullPath(configuration["MediaRoot"] ?? "/media").TrimEnd('/') + "/";
-        return Path.GetFullPath(videoPath).StartsWith(root, StringComparison.Ordinal);
-    }
+    /// <summary>Video paths come from metadata.json; only files inside the configured media roots are ever opened.</summary>
+    private bool IsUnderMediaRoot(string videoPath) => MediaRoots.Contains(configuration, videoPath);
 }
