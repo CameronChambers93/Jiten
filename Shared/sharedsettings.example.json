@@ -43,6 +43,7 @@
   "BunnyCdnUserSecret": "",
   "DictionaryPath": "path/to/system_full.dic",
   "Parser": {
+    "SubtitleLines": false,
     "SudachiBulkContexts": 4,
     "SudachiInteractiveContexts": 1
   },

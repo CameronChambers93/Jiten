@@ -14,7 +14,8 @@ namespace Jiten.Api.Controllers;
 [Route("api/mined")]
 [Authorize]
 [EnableRateLimiting("fixed")]
-public class MinedWordsController(MinedSentenceService mined, MinedSyncService sync, WordMatchService wordMatch, ICurrentUserService userService)
+public class MinedWordsController(MinedSentenceService mined, MinedSyncService sync, WordMatchService wordMatch, ICurrentUserService userService,
+                                  IExampleSentenceQueryService exampleSentences)
     : ControllerBase
 {
     private const int MaxFlags = 1000;
@@ -123,6 +124,51 @@ public class MinedWordsController(MinedSentenceService mined, MinedSyncService s
         {
             var result = await mined.AddToNoteAsync(userId, request, ct);
             return result == null ? NotFound(new { message = "That Anki note isn't in the sentence store yet." }) : Ok(result);
+        }
+        catch (ArgumentException e)
+        {
+            return BadRequest(new { message = e.Message });
+        }
+    }
+
+    [HttpGet("rebuild")]
+    [SwaggerOperation(Summary = "The caller's mined sentences whose line changed (a re-ingest as whole-cue lines), each with its line and word marked")]
+    public async Task<IActionResult> SentencesToRebuild(CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        var sentences = await mined.SentencesToRebuildAsync(userId, ct);
+
+        // One query per word: the line with that word marked, else the stored place of the word
+        foreach (var group in sentences.GroupBy(s => (WordId: s.WordId ?? 0, ReadingIndex: s.ReadingIndex ?? 0)))
+        {
+            var dtos = (await exampleSentences.BuildDtosAsync(group.Select(s => s.ExampleSentenceId).Distinct().ToList(),
+                                                              group.Key.WordId, group.Key.ReadingIndex))
+                .ToDictionary(d => d.SentenceId);
+            foreach (var s in group)
+            {
+                var dto = dtos.GetValueOrDefault(s.ExampleSentenceId);
+                // The stored place is the occurrence that was mined, when a line holds the word twice
+                if (dto != null && s.TargetPosition is { } position && s.TargetLength is { } length && position + length <= dto.Text.Length)
+                    dto = dto.ForWord(position, length);
+                s.Sentence = dto;
+            }
+        }
+
+        // A line that can't be shown any more won't become buildable: stop asking
+        var gone = sentences.Where(s => s.Sentence == null).Select(s => s.MinedSentenceId).ToList();
+        if (gone.Count > 0) await mined.ClearRebuildAsync(userId, gone, ct);
+
+        return Ok(sentences.Where(s => s.Sentence != null));
+    }
+
+    [HttpPost("sentences/{minedSentenceId:long}/rebuild")]
+    [SwaggerOperation(Summary = "Stores a mined sentence's text, furigana and English rebuilt from its line")]
+    public async Task<IActionResult> Rebuild(long minedSentenceId, [FromBody] RebuildSentenceRequest request, CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        try
+        {
+            return await mined.RebuildAsync(userId, minedSentenceId, request, ct) ? NoContent() : NotFound();
         }
         catch (ArgumentException e)
         {

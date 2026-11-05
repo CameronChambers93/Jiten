@@ -69,6 +69,16 @@ public record MinedWordDto(long MinedWordId, int? WordId, byte? ReadingIndex, st
 public record AddSentenceRequest(long AnkiNoteId, long ExampleSentenceId, string Sentence, string? Furigana, string? English, string? EnglishOrigin,
                                  string? SourceTitle, string? AudioFilename, string? PictureFilename);
 
+/// <summary>A mined sentence whose line changed, to rebuild with the card code: its line, with the word marked.</summary>
+public record RebuildSentenceDto(long MinedSentenceId, long ExampleSentenceId, int? WordId, byte? ReadingIndex, int? TargetPosition, int? TargetLength)
+{
+    public Jiten.Api.Dtos.ExampleSentenceDto? Sentence { get; set; }
+}
+
+/// <summary>A mined sentence rebuilt from its line by the browser. Parts sent empty keep what the sentence had.</summary>
+/// <param name="Sentence">The line as card HTML, the word in bold.</param>
+public record RebuildSentenceRequest(string Sentence, string? Furigana, string? English, string? EnglishOrigin);
+
 /// <summary>
 /// A note the browser just created in Anki for one of Jiten's example sentences, its fields and media already written. The
 /// sentence is in the store's form, as <see cref="AddSentenceRequest"/> sends it, before the target template.
@@ -438,6 +448,44 @@ public class MinedSentenceService(
             SourceAnkiNoteId = sourceAnkiNoteId,
             SortOrder = word.Sentences.Count == 0 ? 0 : word.Sentences.Max(s => s.SortOrder) + 1,
         };
+    }
+
+    /// <summary>The user's mined sentences whose line changed since they were mined, oldest first.</summary>
+    public async Task<List<RebuildSentenceDto>> SentencesToRebuildAsync(string userId, CancellationToken ct) =>
+        await userContext.MinedSentences.AsNoTracking()
+                         .Where(s => s.UserId == userId && s.NeedsRebuild && s.ExampleSentenceId != null)
+                         .Join(userContext.MinedWords, s => s.MinedWordId, w => w.MinedWordId,
+                               (s, w) => new { s, w.WordId, w.ReadingIndex })
+                         .OrderBy(x => x.s.MinedSentenceId)
+                         .Select(x => new RebuildSentenceDto(x.s.MinedSentenceId, x.s.ExampleSentenceId!.Value, x.WordId, x.ReadingIndex,
+                                                             x.s.TargetPosition, x.s.TargetLength))
+                         .ToListAsync(ct);
+
+    /// <summary>Stops trying to rebuild sentences whose line can't be shown any more; they keep their stored text.</summary>
+    public Task<int> ClearRebuildAsync(string userId, IReadOnlyCollection<long> minedSentenceIds, CancellationToken ct) =>
+        userContext.MinedSentences.Where(s => s.UserId == userId && minedSentenceIds.Contains(s.MinedSentenceId))
+                   .ExecuteUpdateAsync(u => u.SetProperty(s => s.NeedsRebuild, false), ct);
+
+    /// <summary>Stores a mined sentence rebuilt from its line. False when it isn't the user's.</summary>
+    public async Task<bool> RebuildAsync(string userId, long minedSentenceId, RebuildSentenceRequest request, CancellationToken ct)
+    {
+        var sentence = await userContext.MinedSentences.FirstOrDefaultAsync(s => s.MinedSentenceId == minedSentenceId && s.UserId == userId, ct);
+        if (sentence == null) return false;
+        if (PlainText(request.Sentence).Length == 0) throw new ArgumentException("The sentence is empty.");
+
+        sentence.Text = Truncate(request.Sentence.Trim(), 4000);
+        // Furigana follows the new text (an all-kana line has none); English that couldn't be rebuilt (translation off or
+        // failed) keeps the old one, which still translates the part of the line the sentence used to be
+        sentence.Furigana = PlainText(request.Furigana ?? "").Length > 0 ? Truncate(request.Furigana!.Trim(), 8000) : null;
+        if (PlainText(request.English ?? "").Length > 0)
+        {
+            sentence.English = Truncate(request.English!.Trim(), 4000);
+            sentence.EnglishOrigin = request.EnglishOrigin is "subtitles" or "ai" ? request.EnglishOrigin : null;
+        }
+
+        sentence.NeedsRebuild = false;
+        await userContext.SaveChangesAsync(ct);
+        return true;
     }
 
     private async Task SaveNewSentenceAsync(MinedWord word, MinedSentence sentence, CancellationToken ct)

@@ -886,6 +886,9 @@ namespace Jiten.Core.Migrations.UserDb
                     b.Property<long>("MinedWordId")
                         .HasColumnType("bigint");
 
+                    b.Property<bool>("NeedsRebuild")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("Origin")
                         .IsRequired()
                         .HasMaxLength(20)

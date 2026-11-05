@@ -811,6 +811,13 @@ namespace Jiten.Parser
             return ExcludeFinalMisparses(corrected, diagnostics);
         }
 
+        /// <summary>
+        /// The fork's <c>Parser:SubtitleLines</c> setting: subtitle speech that carries its cue ends is stored as whole-cue
+        /// lines, every line kept, instead of a sample of sentences.
+        /// </summary>
+        public static bool SubtitleLinesEnabled =>
+            bool.TryParse(ParserRuntimeSettings.Current.Configuration["Parser:SubtitleLines"], out var on) && on;
+
         public static async Task<Deck> ParseTextToDeck(IDbContextFactory<JitenDbContext> contextFactory, string text,
                                                        bool storeRawText = false,
                                                        bool predictDifficulty = true,
@@ -849,8 +856,12 @@ namespace Jiten.Parser
                 : null;
 
             // Subtitle lines rarely end in punctuation, so they are rejoined into one sentence per line before parsing.
+            // With cue lines on (the fork), text that carries its cue ends becomes one line per whole-cue unit instead,
+            // parsed line by line, every line kept.
             var parseTexts = texts;
             byte[]?[]? boundariesByText = null;
+            var lineUnits = new bool[texts.Count];
+            var cueLines = SubtitleLinesEnabled;
             if (MediaTypes.IsSubtitleSpeech(mediatype))
             {
                 parseTexts = new List<string>(texts.Count);
@@ -858,7 +869,10 @@ namespace Jiten.Parser
                 for (int i = 0; i < texts.Count; i++)
                 {
                     var stored = speechBoundaries != null && i < speechBoundaries.Count ? speechBoundaries[i] : null;
-                    var (assembled, boundaries) = SpeechTextAssembler.Prepare(texts[i], stored, SpeechBoundaryModel.Default);
+                    lineUnits[i] = cueLines && CueLineAssembler.HasCueBreaks(texts[i]);
+                    var (assembled, boundaries) = lineUnits[i]
+                        ? CueLineAssembler.Prepare(texts[i], stored, SpeechBoundaryModel.Default)
+                        : SpeechTextAssembler.Prepare(texts[i], stored, SpeechBoundaryModel.Default);
                     parseTexts.Add(assembled);
                     boundariesByText[i] = boundaries;
                 }
@@ -869,7 +883,11 @@ namespace Jiten.Parser
                 boundariesByText = new byte[texts.Count][];
                 for (int i = 0; i < texts.Count; i++)
                 {
-                    var (prepared, boundaries) = YouTubeSpeechText.Prepare(texts[i], SpeechBoundaryModel.YouTube);
+                    var stored = speechBoundaries != null && i < speechBoundaries.Count ? speechBoundaries[i] : null;
+                    lineUnits[i] = cueLines && CueLineAssembler.HasCueBreaks(texts[i]);
+                    var (prepared, boundaries) = lineUnits[i]
+                        ? CueLineAssembler.Prepare(texts[i], stored, SpeechBoundaryModel.YouTube)
+                        : YouTubeSpeechText.Prepare(texts[i], SpeechBoundaryModel.YouTube);
                     parseTexts.Add(prepared);
                     boundariesByText[i] = boundaries;
                 }
@@ -890,7 +908,7 @@ namespace Jiten.Parser
             var parser = new MorphologicalAnalyser { HasCompoundLookup = HasLookupForCompound, HasNonNameCompoundLookup = HasNonNameLookup, HasPrioritizedNonNameCompoundLookup = HasPrioritizedNonNameLookup, HasKanaAppropriateCompoundLookup = HasKanaAppropriateLookup, HasSuruVerbCompoundLookup = HasSuruVerbLookup, GetNonNameCompoundWordId = GetNonNameCompoundId, GetNonNameCompoundFrequencyRank = GetBestNonNameFrequencyRank, HasVerbOrAdjectiveLookup = HasVerbOrAdjectiveLookup, HasExpressionLookup = HasExpressionLookup, HasCounterSenseLookup = HasCounterSenseAvailable, GetPartialKanaSpelling = GetPartialKanaSpelling };
             var cleanedOriginals = new List<string>();
             var rawCharCounts = new List<int>();
-            var batchedSentences = await parser.ParseBatch(cleanTexts, diagnostics: diagnostics, timings: timings, userDictCsv: userDictCsv, cleanedOriginals: cleanedOriginals, rawContentCharCounts: rawCharCounts);
+            var batchedSentences = await parser.ParseBatch(cleanTexts, diagnostics: diagnostics, timings: timings, userDictCsv: userDictCsv, cleanedOriginals: cleanedOriginals, rawContentCharCounts: rawCharCounts, lineUnits: lineUnits);
 
             timer.Restart();
 
@@ -919,7 +937,7 @@ namespace Jiten.Parser
                 var subtitleSpeech = boundariesByText?[textIndex] != null;
                 // Manga text holds one speech bubble per line and bubbles rarely end in punctuation.
                 var profileLineBreaks = mediatype == MediaType.Manga ? FlatLineBreakOffsets(cleanedOriginals[textIndex]) : null;
-                var deck = await ProcessSentencesToDeck(sentences, text, deconjugator, storeRawText, predictDifficulty, mediatype, subtitleSpeech, timings, dictionaryEntriesBySurface, relocated, rawCharCounts[textIndex], diagnostics, occurrenceSink, profileLineBreaks);
+                var deck = await ProcessSentencesToDeck(sentences, text, deconjugator, storeRawText, predictDifficulty, mediatype, subtitleSpeech, timings, dictionaryEntriesBySurface, relocated, rawCharCounts[textIndex], diagnostics, occurrenceSink, profileLineBreaks, keepEveryLine: lineUnits[textIndex]);
                 if (deck.RawText != null && boundariesByText != null)
                     deck.RawText.SpeechBoundaries = boundariesByText[textIndex];
                 decks.Add(deck);
@@ -964,7 +982,8 @@ namespace Jiten.Parser
             int? rawContentCharCount = null,
             ParserDiagnostics? diagnostics = null,
             List<List<ParsedOccurrence>>? occurrenceSink = null,
-            IReadOnlyList<int>? profileLineBreaks = null)
+            IReadOnlyList<int>? profileLineBreaks = null,
+            bool keepEveryLine = false)
         {
             var sw = timings != null ? Stopwatch.StartNew() : null;
 
@@ -1094,7 +1113,7 @@ namespace Jiten.Parser
             {
                 var formFreqRanks = await formFreqRanksTask;
                 exampleSentences = ExampleSentenceExtractor.ExtractSentences(
-                    sentences, processedWords, formFreqRanks, _wordFrequencyRanks, subtitleSpeech);
+                    sentences, processedWords, formFreqRanks, _wordFrequencyRanks, subtitleSpeech, keepEveryLine);
             }
 
             var deck = new Deck

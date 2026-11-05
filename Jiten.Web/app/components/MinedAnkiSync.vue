@@ -65,7 +65,7 @@
   const confirm = useConfirm();
   const anki = useAnkiSetups();
   const { importNotes } = useMinedImport();
-  const { writeNote, recordMainWritten } = useMiningCards();
+  const { writeNote, recordMainWritten, rebuildMovedSentences } = useMiningCards();
   const knownWords = useAnkiKnownWords();
 
   const running = ref(false);
@@ -209,6 +209,15 @@
       await readFlags();
       step.value = 'Finishing folds…';
       await finishPendingFolds(await loadFolds());
+      step.value = 'Updating sentences whose line changed…';
+      const moved = await rebuildMovedSentences();
+      if (moved.failed)
+        toast.add({
+          severity: 'warn',
+          summary: `${moved.failed} sentence${moved.failed === 1 ? '' : 's'} not updated`,
+          detail: 'They keep their current text and are tried again on the next Sync.',
+          life: 6000,
+        });
       step.value = 'Writing sentences to notes…';
       await writeNotes();
       step.value = 'Finding notes to fold…';

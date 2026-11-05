@@ -55,6 +55,23 @@ public partial class SubtitleExtractor
         return string.Join(Environment.NewLine, lines.Select(l => l.Text));
     }
 
+    /// <summary>
+    /// As <see cref="Extract"/>, with a blank line after each cue, so the parser can keep cues whole (n1miner's
+    /// <c>Parser:SubtitleLines</c>). Blank lines carry no text, so counts over the text don't change.
+    /// </summary>
+    public async Task<string> ExtractWithCueBreaks(string filePath)
+    {
+        var lines = await ExtractCueLines(filePath);
+        var sb = new StringBuilder();
+        foreach (var line in lines)
+        {
+            sb.Append(line.Text).Append('\n');
+            if (line.EndsCue) sb.Append('\n');
+        }
+
+        return sb.ToString().TrimEnd('\n');
+    }
+
     /// <summary>The lines <see cref="Extract"/> joins, flagged when a line is the last one kept from its subtitle cue.</summary>
     public async Task<List<CueLine>> ExtractCueLines(string filePath)
     {

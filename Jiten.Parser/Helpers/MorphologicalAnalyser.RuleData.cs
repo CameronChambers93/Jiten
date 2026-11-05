@@ -243,6 +243,9 @@ public partial class MorphologicalAnalyser
     // Private-use char tagging a line-final ）; preprocessing erases line structure, so the tag carries it to the sentence splitter.
     private const char LineEndParenMark = '\uE000';
 
+    /// <summary>Marks the end of a whole-cue subtitle line, so the sentence splitter ends sentences only there.</summary>
+    private const char UnitEndMark = '\uE001';
+
     private static readonly HashSet<string> NCompoundSuffixes =
         ["だ", "です", "じゃ", "なら", "ても", "でも", "だろ", "だろう", "だって", "だけど", "だけ", "だが", "だし", "だから"];
 

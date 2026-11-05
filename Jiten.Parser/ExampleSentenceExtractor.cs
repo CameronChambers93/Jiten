@@ -18,7 +18,8 @@ public static partial class ExampleSentenceExtractor
         DeckWord[] words,
         Dictionary<(int WordId, byte ReadingIndex), int> formFreqRanks,
         Dictionary<int, int> wordFreqRanks,
-        bool subtitleSpeech = false)
+        bool subtitleSpeech = false,
+        bool keepEveryLine = false)
     {
         static bool IsPosMatch(DeckWord deckWord, WordInfo token)
         {
@@ -145,12 +146,7 @@ public static partial class ExampleSentenceExtractor
 
         var sentencePositions = new Dictionary<SentenceInfo, int>();
         for (int i = 0; i < sentences.Count; i++)
-        {
-            if (validSentences.Contains(sentences[i]))
-            {
-                sentencePositions[sentences[i]] = i;
-            }
-        }
+            sentencePositions.TryAdd(sentences[i], i);
 
         var wordsByText = new Dictionary<string, List<DeckWord>>();
         foreach (var word in words)
@@ -179,6 +175,7 @@ public static partial class ExampleSentenceExtractor
 
         var exampleSentences = new List<ExampleSentence>();
         var usedSentences = new HashSet<SentenceInfo>();
+        var stored = new HashSet<SentenceInfo>();
 
         foreach (var pass in subtitleSpeech ? SubtitlePasses : ProsePasses)
         {
@@ -201,6 +198,45 @@ public static partial class ExampleSentenceExtractor
             for (int i = 0; i < candidateSentences.Count; i++)
             {
                 var sentence = candidateSentences[i];
+                var built = Build(sentence, takeTargets: true);
+                if (built != null)
+                {
+                    exampleSentences.Add(built);
+                    stored.Add(sentence);
+                }
+
+                usedSentences.Add(sentence);
+
+                if (wordsByText.Count == 0 && !keepEveryLine)
+                {
+                    return exampleSentences;
+                }
+            }
+
+            if (wordsByText.Count == 0)
+            {
+                break;
+            }
+        }
+
+        // Every other line too (n1miner): no word picked from it, but it's a line of the episode to mine from.
+        if (keepEveryLine)
+        {
+            for (int i = 0; i < sentences.Count; i++)
+            {
+                if (stored.Contains(sentences[i])) continue;
+                if (Build(sentences[i], takeTargets: false) is { } line) exampleSentences.Add(line);
+            }
+
+            exampleSentences.Sort((a, b) => a.Position.CompareTo(b.Position));
+        }
+
+        return exampleSentences;
+
+        // A line as stored: picks consume the deck words they're matched to; without picks, its known forms still give
+        // tokens, and they stand in for the picks when scoring difficulty.
+        ExampleSentence? Build(SentenceInfo sentence, bool takeTargets)
+        {
                 var trimmedText = NormalizeTrailingPunctuation(sentence.Text).Trim();
                 int leadingTrim = sentence.Text.Length - sentence.Text.AsSpan().TrimStart().Length;
 
@@ -221,7 +257,7 @@ public static partial class ExampleSentenceExtractor
                 foreach (var (wordInfo, position, length) in sentence.Words)
                 {
                     int textPosition = position - leadingTrim + bracketPrepend;
-                    var foundWord = TakeTargetWord(wordInfo, wordsByText, textsWithNonNameEntry);
+                    var foundWord = takeTargets ? TakeTargetWord(wordInfo, wordsByText, textsWithNonNameEntry) : null;
 
                     if (foundWord != null)
                         picks.Add((Math.Clamp(textPosition, 0, 255), foundWord.WordId, foundWord.ReadingIndex));
@@ -237,33 +273,17 @@ public static partial class ExampleSentenceExtractor
                                                  IsFunctionWord: wordInfo.PartOfSpeech is PartOfSpeech.Particle or PartOfSpeech.Auxiliary));
                 }
 
-                if (picks.Count > 0)
+                if (picks.Count == 0 && (takeTargets || balancedText.Length == 0)) return null;
+                var scored = picks.Count > 0 ? picks : tokens.Select(t => ((int)t.Position, t.WordId, t.ReadingIndex)).ToList();
+                return new ExampleSentence
                 {
-                    exampleSentences.Add(new ExampleSentence
-                    {
-                        Text = balancedText,
-                        Position = sentencePositions[sentence],
-                        Difficulty = SentenceDifficultyScorer.Score(sentence, picks, formFreqRanks, wordFreqRanks),
-                        Tokens = ExampleSentenceTokens.Encode(tokens),
-                        WordKeys = ExampleSentenceTokens.WordKeys(tokens, Random.Shared.Next(ExampleSentenceTokens.FineBucketCount))
-                    });
-                }
-
-                usedSentences.Add(sentence);
-
-                if (wordsByText.Count == 0)
-                {
-                    return exampleSentences;
-                }
-            }
-
-            if (wordsByText.Count == 0)
-            {
-                break;
-            }
+                    Text = balancedText,
+                    Position = sentencePositions[sentence],
+                    Difficulty = SentenceDifficultyScorer.Score(sentence, scored, formFreqRanks, wordFreqRanks),
+                    Tokens = ExampleSentenceTokens.Encode(tokens),
+                    WordKeys = ExampleSentenceTokens.WordKeys(tokens, Random.Shared.Next(ExampleSentenceTokens.FineBucketCount))
+                };
         }
-
-        return exampleSentences;
     }
 
     private static readonly HashSet<char> ClosingSigns =

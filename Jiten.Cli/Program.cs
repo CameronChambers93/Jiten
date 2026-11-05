@@ -6,6 +6,7 @@ using Jiten.Core;
 using Jiten.Core.Data;
 using Jiten.Parser.Romanization;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 // ReSharper disable MethodSupportsCancellation
 
@@ -202,6 +203,18 @@ public class Program
         if (options.LinkVideo != null)
         {
             await new VideoCommands(context).LinkVideo(options);
+        }
+
+        if (options.MoveMinedLines)
+        {
+            await using var jiten = await context.ContextFactory.CreateDbContextAsync();
+            var userOptions = new DbContextOptionsBuilder<UserDbContext>().UseNpgsql(context.Configuration.GetConnectionString("JitenDatabase")).Options;
+            await using var user = new UserDbContext(userOptions);
+            var report = await MinedLineMover.MoveAsync(jiten, user, options.DryRun);
+            Console.WriteLine($"{(options.DryRun ? "[dry run] " : "")}Moved {report.SentencesMoved} mined sentences and {report.FlagsMoved} flags; " +
+                              $"{report.Unplaced.Count} not placed ({report.Ambiguous} found on more than one line).");
+            foreach (var u in report.Unplaced)
+                Console.WriteLine($"  not placed: {u.Kind} {u.Id} on line {u.OldLineId}: {u.Text}");
         }
 
         if (options.BackfillSpeechStats != null)

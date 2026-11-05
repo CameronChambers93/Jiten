@@ -600,5 +600,31 @@ export function useMiningCards() {
     writeNote,
     recordMainWritten,
     addToExistingNote,
+    rebuildMovedSentences,
   };
+
+  /**
+   * Rebuilds the text, furigana and English of mined sentences whose line changed (a re-ingest as whole-cue lines), with
+   * the same code as a new card; their audio in Anki is already the whole cue. One that fails is left for the next Sync;
+   * a lost connection stops the Sync, as everywhere else.
+   */
+  async function rebuildMovedSentences(): Promise<{ rebuilt: number; failed: number }> {
+    const pending = await $api<{ minedSentenceId: number; sentence: ExampleSentence }[]>('mined/rebuild');
+    let rebuilt = 0;
+    let failed = 0;
+    for (const s of pending) {
+      try {
+        const { body } = await buildSentence(s.sentence, { audio: false, picture: false, english: true });
+        await $api(`mined/sentences/${s.minedSentenceId}/rebuild`, {
+          method: 'POST',
+          body: { sentence: body.sentence, furigana: body.furigana, english: body.english, englishOrigin: body.englishOrigin },
+        });
+        rebuilt++;
+      } catch (e) {
+        if (e instanceof TypeError) throw e;
+        failed++;
+      }
+    }
+    return { rebuilt, failed };
+  }
 }

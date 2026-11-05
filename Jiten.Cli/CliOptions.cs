@@ -55,6 +55,10 @@ public class CliOptions
     [Option(longName: "insert", Required = false, HelpText = "Insert the parsed deck.json into the database from a directory.")]
     public string? Insert { get; set; }
 
+    [Option(longName: "move-mined-lines", Required = false,
+            HelpText = "After a re-ingest as whole-cue lines, move mined sentences and open flags off removed lines onto the new line holding their text, and mark the sentences for a Sync rebuild. Honours --dry-run.")]
+    public bool MoveMinedLines { get; set; }
+
     [Option(longName: "link-video", Required = false,
             HelpText = "For each deck folder in a directory, link its inserted episodes to the videos named by VideoPath in metadata.json, for card audio and screenshots. Honours --dry-run.")]
     public string? LinkVideo { get; set; }

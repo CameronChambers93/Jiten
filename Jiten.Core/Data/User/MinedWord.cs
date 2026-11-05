@@ -125,6 +125,12 @@ public class MinedSentence
 
     public int? TargetLength { get; set; }
 
+    /// <summary>
+    /// The occurrence's text changed (moved to a whole-cue line by a re-ingest), so the stored text, furigana and English
+    /// are rebuilt from it by the next Sync.
+    /// </summary>
+    public bool NeedsRebuild { get; set; }
+
     /// <summary>The game, show or site it came from, as known (GSM's Game:: tag, the card's source, the page's host). Stored on the occurrence, like the media.</summary>
     public string? SourceTitle { get; set; }
 
