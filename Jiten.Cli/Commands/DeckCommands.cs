@@ -423,6 +423,7 @@ public class DeckCommands(CliContext context)
             List<string> lines = [];
             Jiten.Parser.SubtitleStats? subtitleStats = null;
             var extension = Path.GetExtension(filePath)?.ToLowerInvariant();
+            var cueText = false;
 
             if (extension == ".epub")
             {
@@ -440,9 +441,11 @@ public class DeckCommands(CliContext context)
             else if (extension != null && SubtitleExtractor.SupportedExtensions.Contains(extension))
             {
                 var extractor = new SubtitleExtractor();
-                var text = await extractor.Extract(filePath);
+                // The fork keeps cues whole: their ends travel as blank lines (see CueLineAssembler)
+                cueText = Jiten.Parser.Parser.SubtitleLinesEnabled;
+                var text = cueText ? await extractor.ExtractWithCueBreaks(filePath) : await extractor.Extract(filePath);
                 if (!string.IsNullOrEmpty(text))
-                    lines = text.Split(Environment.NewLine).ToList();
+                    lines = text.Split(cueText ? "\n" : Environment.NewLine).ToList();
 
                 var items = await extractor.ExtractItems(filePath);
                 if (items.Count > 0)
@@ -459,6 +462,7 @@ public class DeckCommands(CliContext context)
             {
                 for (int i = lines.Count - 1; i >= 0; i--)
                 {
+                    var wasBlank = cueText && string.IsNullOrWhiteSpace(lines[i]);
                     lines[i] = lines[i].Trim();
                     if (SubtitleCleanStartsWith.Any(s => lines[i].StartsWith(s)))
                     {
@@ -469,7 +473,8 @@ public class DeckCommands(CliContext context)
                     lines[i] = Regex.Replace(lines[i], @"\((.*?)\)", "");
                     lines[i] = Regex.Replace(lines[i], @"（(.*?)）", "");
 
-                    if (string.IsNullOrWhiteSpace(lines[i]))
+                    // A line cleaned to nothing goes; a blank cue break stays, or the cues run together
+                    if (string.IsNullOrWhiteSpace(lines[i]) && !wasBlank)
                     {
                         lines.RemoveAt(i);
                     }

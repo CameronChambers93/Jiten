@@ -222,7 +222,7 @@ public partial class MorphologicalAnalyser
         return string.Join('\n', lines);
     }
 
-    private void PreprocessText(ref string text, bool preserveStopToken, out int rawContentCharCount)
+    private void PreprocessText(ref string text, bool preserveStopToken, out int rawContentCharCount, bool markUnitEnds = false)
     {
         text = StripChineseLines(text);
         text = HashRubyAnnotationRegex().Replace(text, "");
@@ -230,6 +230,10 @@ public partial class MorphologicalAnalyser
         text = text.Replace('‥', '…');
         text = text.ToFullWidthDigits();
         text = NonJapaneseCharRegex().Replace(text, "");
+
+        // Before the punctuation below adds line breaks of its own: these are the whole-cue lines' ends
+        if (markUnitEnds)
+            text = text.Replace("\n", UnitEndMark + "\n");
 
         rawContentCharCount = CountContentChars(text);
 
@@ -449,17 +453,20 @@ public partial class MorphologicalAnalyser
     }
 
     /// <summary>Strips the ） marks; returns their positions in the text with line breaks removed.</summary>
-    private static HashSet<int> TakeLineEndParenMarks(ref string text)
+    private static HashSet<int> TakeLineEndParenMarks(ref string text) => TakeMarks(ref text, LineEndParenMark);
+
+    /// <summary>Strips a mark; returns the positions of the characters it followed, in the text with line breaks removed.</summary>
+    private static HashSet<int> TakeMarks(ref string text, char mark)
     {
         var positions = new HashSet<int>();
-        if (text.IndexOf(LineEndParenMark) < 0)
+        if (text.IndexOf(mark) < 0)
             return positions;
 
         var sb = new StringBuilder(text.Length);
         int flatPos = 0;
         foreach (char c in text)
         {
-            if (c == LineEndParenMark)
+            if (c == mark)
             {
                 positions.Add(flatPos - 1);
                 continue;
@@ -474,7 +481,8 @@ public partial class MorphologicalAnalyser
         return positions;
     }
 
-    private List<SentenceInfo> SplitIntoSentences(string text, List<WordInfo> wordInfos, HashSet<int> lineEndParens)
+    /// <param name="lineEnds">When set, sentences end only at these positions (whole-cue subtitle lines).</param>
+    private List<SentenceInfo> SplitIntoSentences(string text, List<WordInfo> wordInfos, HashSet<int> lineEndParens, HashSet<int>? lineEnds = null)
     {
         text = text.Replace("\r", "").Replace("\n", "");
 
@@ -488,6 +496,18 @@ public partial class MorphologicalAnalyser
         {
             char current = text[i];
             sb.Append(current);
+
+            if (lineEnds != null)
+            {
+                if (lineEnds.Contains(i))
+                {
+                    sentenceData.Add((new SentenceInfo(sb.ToString()), sentenceStartPos));
+                    sentenceStartPos = i + 1;
+                    sb.Clear();
+                }
+
+                continue;
+            }
 
             if (_sentenceEnders.Contains(current) || lineEndParens.Contains(i))
             {

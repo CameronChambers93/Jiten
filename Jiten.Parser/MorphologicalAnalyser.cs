@@ -115,7 +115,8 @@ public partial class MorphologicalAnalyser
                                                            BenchmarkTimings? timings = null,
                                                            byte[]? userDictCsv = null,
                                                            List<string>? cleanedOriginals = null,
-                                                           List<int>? rawContentCharCounts = null)
+                                                           List<int>? rawContentCharCounts = null,
+                                                           IReadOnlyList<bool>? lineUnits = null)
     {
         if (texts.Count == 0) return [];
 
@@ -130,27 +131,31 @@ public partial class MorphologicalAnalyser
         var processedTexts = new List<string>(texts.Count);
         var originalTexts = new List<string>(texts.Count);
         var lineEndParens = new List<HashSet<int>>(texts.Count);
-        foreach (var text in texts)
+        var unitEnds = new List<HashSet<int>?>(texts.Count);
+        for (var t = 0; t < texts.Count; t++)
         {
-            var copy = text;
+            var copy = texts[t];
+            var markUnits = lineUnits != null && t < lineUnits.Count && lineUnits[t];
             if (!copy.Contains('\n') && Encoding.UTF8.GetByteCount(copy) > sudachiMaxBytes)
             {
                 processedTexts.Add("");
                 originalTexts.Add("");
                 lineEndParens.Add([]);
+                unitEnds.Add(null);
                 cleanedOriginals?.Add("");
                 rawContentCharCounts?.Add(0);
                 continue;
             }
 
-            PreprocessText(ref copy, preserveStopToken, out int rawCharCount);
+            PreprocessText(ref copy, preserveStopToken, out int rawCharCount, markUnits);
             rawContentCharCounts?.Add(rawCharCount);
 
             var cleanedOriginal = copy.Replace(" ", "");
             if (!preserveStopToken)
                 cleanedOriginal = cleanedOriginal.Replace(_stopToken, "");
             lineEndParens.Add(TakeLineEndParenMarks(ref cleanedOriginal));
-            processedTexts.Add(copy.Replace(LineEndParenMark.ToString(), ""));
+            unitEnds.Add(markUnits ? TakeMarks(ref cleanedOriginal, UnitEndMark) : null);
+            processedTexts.Add(copy.Replace(LineEndParenMark.ToString(), "").Replace(UnitEndMark.ToString(), ""));
             originalTexts.Add(cleanedOriginal);
             cleanedOriginals?.Add(cleanedOriginal);
         }
@@ -289,7 +294,8 @@ public partial class MorphologicalAnalyser
 
             if (sw != null) { timings!.PipelineMs += sw.Elapsed.TotalMilliseconds; sw.Restart(); }
 
-            results.Add(SplitIntoSentences(originalTexts[i], wordInfos, lineEndParens[i]));
+            // A text of whole-cue lines is split only at its line ends, never at 。！？ inside a line
+            results.Add(SplitIntoSentences(originalTexts[i], wordInfos, lineEndParens[i], unitEnds[i]));
 
             if (sw != null) { timings!.SentenceSplitMs += sw.Elapsed.TotalMilliseconds; sw.Restart(); }
         }
