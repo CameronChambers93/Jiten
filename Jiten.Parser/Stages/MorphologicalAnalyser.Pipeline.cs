@@ -40,6 +40,7 @@ public partial class MorphologicalAnalyser
 
         Stage(TokenStageGroup.Repair, RepairHasaNoun, TokenFeatures.TextHasa),
         Stage(TokenStageGroup.Repair, RepairNTokenisation),
+        Stage(TokenStageGroup.Repair, RepairMidWordLongVowel, TokenFeatures.LongVowelMark),
         Stage(TokenStageGroup.Repair, RepairVowelElongation),
         Stage(TokenStageGroup.Repair, ApplyTokenRewriteRulesEarly),
         Stage(TokenStageGroup.Repair, ProcessSpecialCases),

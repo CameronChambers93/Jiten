@@ -2485,6 +2485,202 @@ public partial class MorphologicalAnalyser
         return memo;
     }
 
+    private static bool IsHiraganaOrBar(string s)
+    {
+        if (s.Length == 0) return false;
+        foreach (var c in s)
+            if (c is (< 'ぁ' or > 'ゖ') and not 'ー') return false;
+        return true;
+    }
+
+    // Nouns are left out: stripping the ー after an interjection makes nouns (えー|んな → 円, いやあー|また → 数多).
+    private const uint StretchableWordPos =
+        (1u << (int)PartOfSpeech.Verb) | (1u << (int)PartOfSpeech.IAdjective) | (1u << (int)PartOfSpeech.Auxiliary) |
+        (1u << (int)PartOfSpeech.Adverb) | (1u << (int)PartOfSpeech.AdverbTo) | (1u << (int)PartOfSpeech.Particle);
+
+    // Sudachi reads a ー stretching a word mid-way as a word boundary (ありがたーい → あり|が|たー|い, あり read as 蟻).
+    // The kana run is re-tokenised without the ー, alone; a verb, adjective, auxiliary, adverb or particle that then
+    // spans the ー replaces the original tokens it covers (もー|ん → もん). A ー after an interjection is a real boundary
+    // (いやあー|また, not いや|あまた), and a stretched spelling that is a word itself stays (すーっと, not すっと).
+    private List<WordInfo> RepairMidWordLongVowel(List<WordInfo> wordInfos)
+    {
+        if (_sudachiConfigPath == null || _sudachiDicPath == null || HasNonNameCompoundLookup == null
+            || _retokeniseOovDisabled || !SudachiInterop.StreamingAvailable)
+            return wordInfos;
+
+        // Runs of hiragana tokens [start, end) holding a ー between hiragana, with offsets matching their text.
+        var runs = new List<(int Start, int End, string Text, List<int> Bars, string Stripped, List<int> OrigIndex)>();
+        for (int i = 0; i < wordInfos.Count;)
+        {
+            if (!IsHiraganaOrBar(wordInfos[i].Text)) { i++; continue; }
+            int j = i;
+            var sb = new System.Text.StringBuilder();
+            bool offsetsOk = true;
+            while (j < wordInfos.Count && IsHiraganaOrBar(wordInfos[j].Text))
+            {
+                var w = wordInfos[j];
+                if (w.StartOffset < 0 || w.EndOffset - w.StartOffset != w.Text.Length
+                    || (j > i && w.StartOffset != wordInfos[j - 1].EndOffset))
+                    offsetsOk = false;
+                sb.Append(w.Text);
+                j++;
+            }
+            var text = sb.ToString();
+            var bars = offsetsOk && j - i >= 2 ? MidWordBarPositions(text) : null;
+            if (bars is { Count: > 0 })
+                runs.Add((i, j, text, bars, StripBars(text, bars, out var origIndex), origIndex));
+            i = j;
+        }
+        if (runs.Count == 0)
+            return wordInfos;
+
+        var stripped = runs.Select(r => r.Stripped).Distinct(StringComparer.Ordinal).ToList();
+        Dictionary<string, List<WordInfo>?> memo;
+        try
+        {
+            memo = RetokeniseBlobs(stripped);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Warning] RepairMidWordLongVowel: Sudachi FFI failed, disabling retokenisation for this analyser: {ex.Message}");
+            _retokeniseOovDisabled = true;
+            return wordInfos;
+        }
+
+        // Original token index → the pieces replacing original tokens [index, index + Count).
+        var replacements = new Dictionary<int, (int Count, List<WordInfo> Words)>();
+        foreach (var run in runs)
+        {
+            if (!memo.TryGetValue(run.Stripped, out var pieces) || pieces == null) continue;
+
+            var (bars, origIndex) = (run.Bars, run.OrigIndex);
+            int runOffset = wordInfos[run.Start].StartOffset;
+            var tokenStarts = new List<int>();
+            for (int k = run.Start; k < run.End; k++) tokenStarts.Add(wordInfos[k].StartOffset - runOffset);
+
+            // Each piece's span in the original run text; a piece ending before a ー takes it (だー|いらない).
+            var spans = new List<(int A, int B, int LastChar)>(pieces.Count);
+            int a = 0;
+            foreach (var piece in pieces)
+            {
+                int b = a + piece.Text.Length;
+                if (piece.Text.Length == 0 || b > origIndex.Count) { spans = null; break; }
+                spans.Add((origIndex[a], b < origIndex.Count ? origIndex[b] : run.Text.Length, origIndex[b - 1]));
+                a = b;
+            }
+            if (spans == null || a != origIndex.Count) continue;
+
+            int claimedUpTo = 0;
+            for (int p = 0; p < pieces.Count; p++)
+            {
+                var piece = pieces[p];
+                var (origA, origB, lastChar) = spans[p];
+
+                // The ー must sit between two of the piece's own characters.
+                var inside = bars.Where(x => x > origA && x < lastChar).ToList();
+                if (inside.Count == 0) continue;
+                if ((StretchableWordPos & (1u << (int)piece.PartOfSpeech)) == 0) continue;
+                var lemma = string.IsNullOrEmpty(piece.DictionaryForm) ? piece.Text : piece.DictionaryForm;
+                if (!HasNonNameCompoundLookup(lemma) && !HasNonNameCompoundLookup(piece.Text)) continue;
+                if (HasNonNameCompoundLookup(run.Text[origA..(lastChar + 1)])) continue;
+
+                // A ー ending an interjection or filler is a real boundary.
+                if (inside.Any(x => wordInfos[run.Start + tokenStarts.FindLastIndex(t => t < x)].PartOfSpeech
+                        is PartOfSpeech.Interjection or PartOfSpeech.Filler))
+                    continue;
+
+                // Widen to the smallest window of original tokens whose edges are also piece edges
+                // (し|かい|なーい → しか|いない), and replace that window with the pieces in it.
+                int first = tokenStarts.FindLastIndex(t => t <= origA);
+                int afterLast = tokenStarts.FindIndex(t => t >= origB);
+                if (afterLast < 0) afterLast = tokenStarts.Count;
+                int pFirst = p, pLast = p;
+                bool aligned = false;
+                while (true)
+                {
+                    int winA = tokenStarts[first];
+                    int winB = afterLast < tokenStarts.Count ? tokenStarts[afterLast] : run.Text.Length;
+                    pFirst = spans.FindLastIndex(sp => sp.A <= winA);
+                    pLast = spans.FindIndex(sp => sp.B >= winB);
+                    if (pFirst < 0 || pLast < 0) break;
+                    if (spans[pFirst].A == winA && spans[pLast].B == winB) { aligned = true; break; }
+                    first = tokenStarts.FindLastIndex(t => t <= spans[pFirst].A);
+                    afterLast = tokenStarts.FindIndex(t => t >= spans[pLast].B);
+                    if (afterLast < 0) afterLast = tokenStarts.Count;
+                }
+                // The window must merge tokens, not just re-split one, and not overlap an earlier window.
+                if (!aligned || first < claimedUpTo || afterLast - first < 2) continue;
+
+                // Tokens an earlier stage pinned to a word keep that word.
+                bool pinned = false;
+                for (int k = run.Start + first; k < run.Start + afterLast; k++)
+                {
+                    var w = wordInfos[k];
+                    if (w.PreMatchedWordId != null || w.HardPinned || w.PinnedByRewriteRule) pinned = true;
+                }
+                if (pinned) continue;
+
+                var newTokens = new List<WordInfo>(pLast - pFirst + 1);
+                for (int q = pFirst; q <= pLast; q++)
+                    newTokens.Add(new WordInfo(pieces[q])
+                    {
+                        StartOffset = runOffset + spans[q].A,
+                        EndOffset = runOffset + spans[q].B
+                    });
+                replacements[run.Start + first] = (afterLast - first, newTokens);
+                claimedUpTo = afterLast;
+                p = pLast;
+            }
+        }
+        if (replacements.Count == 0)
+            return wordInfos;
+
+        var result = new List<WordInfo>(wordInfos.Count);
+        for (int i = 0; i < wordInfos.Count;)
+        {
+            if (replacements.TryGetValue(i, out var r))
+            {
+                result.AddRange(r.Words);
+                i += r.Count;
+                continue;
+            }
+            result.Add(wordInfos[i]);
+            i++;
+        }
+        return result;
+    }
+
+    /// <summary>Positions of each ー with hiragana on both sides, counting through a run of ー.</summary>
+    private static List<int> MidWordBarPositions(string text)
+    {
+        var positions = new List<int>();
+        for (int i = 1; i < text.Length - 1; i++)
+        {
+            if (text[i] != 'ー' || text[i - 1] is < 'ぁ' or > 'ゖ') continue;
+            int j = i;
+            while (j < text.Length && text[j] == 'ー') j++;
+            if (j < text.Length && text[j] is >= 'ぁ' and <= 'ゖ')
+                for (int k = i; k < j; k++) positions.Add(k);
+            i = j - 1;
+        }
+        return positions;
+    }
+
+    /// <summary>The text without the given ー; origIndex maps each kept character to its original position.</summary>
+    private static string StripBars(string text, List<int> barPositions, out List<int> origIndex)
+    {
+        var bars = new HashSet<int>(barPositions);
+        var sb = new System.Text.StringBuilder(text.Length);
+        origIndex = new List<int>(text.Length);
+        for (int i = 0; i < text.Length; i++)
+        {
+            if (bars.Contains(i)) continue;
+            sb.Append(text[i]);
+            origIndex.Add(i);
+        }
+        return sb.ToString();
+    }
+
     /// <summary>なく belongs to a bound auxiliary verb stem after a て-form (出て+こ+なく), not to a following なった.</summary>
     private static bool IsBoundAuxiliaryNegative(WordInfo w1, List<WordInfo> emitted)
     {

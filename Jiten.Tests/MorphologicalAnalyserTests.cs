@@ -1165,6 +1165,17 @@ public class MorphologicalAnalyserTests
         yield return ["困るですー", new[] { "困る", "ですー" }];
         yield return ["一緒に回りたいですー！", new[] { "一緒に", "回りたい", "ですー" }];
 
+        // A ー stretching a word mid-way splits it (あり|が|たー|い read as 蟻); RepairMidWordLongVowel rejoins it.
+        yield return ["大変ありがたーい日だろうが。", new[] { "大変", "ありがたい", "日", "だろう", "が" }];
+        yield return ["一発逆転、でーきた！", new[] { "一発逆転", "できた" }];
+        yield return ["いいキャラしてるもーん！", new[] { "いい", "キャラ", "してる", "もん" }];
+        // A ー ending an interjection is a real boundary: not いや|あまた (数多) or えん (円)|なの.
+        yield return ["いやあーまた競馬で稼がないとな！", new[] { "いやあー", "また", "競馬", "で", "稼がない", "と", "な" }];
+        yield return ["えーんなの人の好みによるだろ。", new[] { "えー", "んな", "の", "人", "の", "好み", "による", "だろ" }];
+        // A stretched spelling that is a word itself stays: すーっと, not すっと.
+        yield return ["すーっと消えた。", new[] { "すーっと", "消えた" }];
+        yield return ["ぴったーりと合う。", new[] { "ぴったり", "と", "合う" }];
+
         // Shouldn't be split as 死ん-だの
         yield return ["自分が死んだのを誰か", new[] { "自分","が","死んだ","の","を","誰か" }];
         yield return ["いつ死んだの", new[] { "いつ","死んだ","の" }];
