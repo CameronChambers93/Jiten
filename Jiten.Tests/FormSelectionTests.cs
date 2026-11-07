@@ -2251,4 +2251,19 @@ public class FormSelectionTests
                                     .FirstOrDefaultAsync();
         formText.Should().Be(name, $"ReadingIndex {match!.ReadingIndex} of word {match.WordId} should be the '{name}' form");
     }
+
+    // A word rejoined across a stretching ー keeps the ー in its span, so the sentence highlights ありがたーい.
+    [Fact]
+    public async Task MidWordLongVowelTokenSpansStretchedSurface()
+    {
+        const string text = "大変ありがたーい日だろうが。";
+        var deck = await Jiten.Parser.Parser.ParseTextToDeck(GetContextFactory(), text, predictDifficulty: false,
+                                                             mediatype: MediaType.Anime);
+
+        var word = deck.DeckWords.FirstOrDefault(w => w.OriginalText == "ありがたい");
+        word.Should().NotBeNull();
+        var sentence = deck.ExampleSentences!.Single(s => s.Text == text);
+        var token = ExampleSentenceTokens.Decode(sentence.Tokens).Single(t => t.WordId == word!.WordId);
+        text.Substring(token.Position, token.Length).Should().Be("ありがたーい");
+    }
 }

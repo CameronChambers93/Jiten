@@ -34,6 +34,29 @@ public static class VideoMedia
         RunBytes("ffmpeg", ["-v", "error", "-ss", Seconds(atMs), "-i", videoPath, "-map", "0:v:0", "-frames:v", "1", "-vf", $"scale=-2:{height}",
                             "-q:v", "4", "-f", "image2", "-c:v", "mjpeg", "-"], ct);
 
+    /// <summary>
+    /// A VP9/Opus WebM of the video and one audio stream between two video times, scaled to <paramref name="height"/>
+    /// pixels high. WebM rather than H.264 MP4: Anki's desktop webview (Qt WebEngine) has no H.264 or AAC decoder. Written
+    /// to a temporary file, since only a seekable output gets the duration and seek index in the file.
+    /// </summary>
+    public static async Task<byte[]> CutVideoWebm(string videoPath, int audioStream, int startMs, int endMs, int height, CancellationToken ct = default)
+    {
+        var output = Path.Combine(Path.GetTempPath(), $"jiten-clip-{Guid.NewGuid():N}.webm");
+        try
+        {
+            await RunBytes("ffmpeg", ["-v", "error", "-ss", Seconds(startMs), "-i", videoPath, "-t", Seconds(endMs - startMs),
+                                      "-map", "0:v:0", "-map", $"0:{audioStream}", "-map_metadata", "-1", "-map_chapters", "-1", "-sn", "-dn",
+                                      "-vf", $"scale=-2:{height}", "-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8", "-row-mt", "1",
+                                      "-crf", "42", "-b:v", "0", "-pix_fmt", "yuv420p", "-c:a", "libopus", "-b:a", "64k", "-ac", "2", "-f", "webm",
+                                      "-y", output], ct);
+            return await File.ReadAllBytesAsync(output, ct);
+        }
+        finally
+        {
+            File.Delete(output);
+        }
+    }
+
     /// <summary>A subtitle stream inside a video file, as ffprobe reports it.</summary>
     public record SubtitleStream(int Index, string Codec, string? Language, string? Title)
     {

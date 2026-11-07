@@ -78,6 +78,7 @@
   const PART_OPTIONS: { key: keyof MiningSettings['parts']; label: string }[] = [
     { key: 'audio', label: 'Audio' },
     { key: 'picture', label: 'Screenshot' },
+    { key: 'video', label: 'Video clip' },
     { key: 'english', label: 'English' },
   ];
   const MEDIA_TYPE_OPTIONS = (Object.values(MediaType).filter((v) => typeof v === 'number') as MediaType[]).map((value) => ({
@@ -341,7 +342,7 @@
   <Dialog v-model:visible="visible" modal header="Anki card settings" :style="{ width: '44rem', maxWidth: '95vw' }">
     <div class="flex flex-col gap-4">
       <p class="text-sm text-gray-600 dark:text-gray-300">
-        Mined sentences are added to Anki through AnkiConnect on this computer, with the sentence audio and a screenshot cut from the episode. These settings
+        Mined sentences are added to Anki through AnkiConnect on this computer, with the sentence audio, a screenshot and a video clip cut from the episode. These settings
         are saved to your account, except the API key.
       </p>
 

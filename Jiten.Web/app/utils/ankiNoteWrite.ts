@@ -12,6 +12,8 @@ export interface MainFields {
   audioFilename: string | null;
   pictureFilename: string | null;
   source: string | null;
+  /** Missing from main fields written before clips existed. */
+  videoFilename?: string | null;
 }
 
 /** What Sync writes to a word's kept note (`NoteWriteDto`). */
@@ -37,6 +39,8 @@ export function mainFieldValues(main: MainFields, roles: Record<string, FieldRol
     sentenceEnglish: main.english ?? '',
     sentenceAudio: main.audioFilename ? `[sound:${main.audioFilename}]` : '',
     picture: main.pictureFilename ? `<img src="${attr(main.pictureFilename)}">` : '',
+    // A sound tag, so Anki plays it in its own player on templates without the rotation script.
+    video: main.videoFilename ? `[sound:${main.videoFilename}]` : '',
   };
   // The source is only written when known, so the note keeps whatever it had (Yomitan's page title) otherwise.
   if (main.source) values.source = escapeFieldText(main.source);

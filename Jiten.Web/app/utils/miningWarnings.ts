@@ -40,7 +40,7 @@ const FALLBACK: Partial<Record<FieldRole, string>> = {
 };
 
 /** Names for a stored sentence's parts, when the note type has no field to name them by. */
-const PART_LABELS: Partial<Record<FieldRole, string>> = { sentenceEnglish: 'English', sentenceAudio: 'Audio', picture: 'Picture' };
+const PART_LABELS: Partial<Record<FieldRole, string>> = { sentenceEnglish: 'English', sentenceAudio: 'Audio', picture: 'Picture', video: 'Video clip' };
 
 /** A field is empty when it has no text, picture or sound. */
 export function fieldIsEmpty(html: string | undefined): boolean {

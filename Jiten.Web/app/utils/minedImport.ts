@@ -1,4 +1,4 @@
-import { extractAudioRef, extractImageRef } from '~/utils/ankiMediaExtract';
+import { extractAudioRef, extractImageRef, extractVideoRef } from '~/utils/ankiMediaExtract';
 import { fieldFor, type FieldRole } from '~/utils/ankiSetups';
 
 /** An Anki note as AnkiConnect's notesInfo returns it. */
@@ -28,6 +28,8 @@ export interface ImportNote {
   audioBase64: string | null;
   pictureFilename: string | null;
   pictureBase64: string | null;
+  /** The Video field's clip, by name only: it stays in Anki's collection and Sync writes it back as it is. */
+  videoFilename: string | null;
   /** Every field, without markup: decides between dictionary entries that share the word and reading. */
   text: string;
 }
@@ -102,6 +104,7 @@ export function toImportNote(note: AnkiNoteInfo, deckName: string, media: Record
     audioBase64: (audio && media[audio]) || null,
     pictureFilename: picture,
     pictureBase64: (picture && media[picture]) || null,
+    videoFilename: extractVideoRef(value('video'))?.filename ?? null,
     text: noteText(note.fields),
   };
 }

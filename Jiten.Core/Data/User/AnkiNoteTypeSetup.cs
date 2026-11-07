@@ -93,7 +93,7 @@ public static class AnkiFieldRoles
     public static readonly string[] All =
     [
         "word", "wordReading", "wordFurigana", "pitchPosition", "pitchCategories", "definitions", "mainDefinition", "frequency",
-        "sentence", "sentencePlain", "sentenceFurigana", "sentenceEnglish", "sentenceAudio", "picture", "source", "url",
+        "sentence", "sentencePlain", "sentenceFurigana", "sentenceEnglish", "sentenceAudio", "picture", "video", "source", "url",
         "previousLine", "sentenceList",
     ];
 }

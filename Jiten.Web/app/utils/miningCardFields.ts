@@ -26,6 +26,7 @@ export type MiningFieldSource =
   | 'sentenceEnglish'
   | 'sentenceAudio'
   | 'picture'
+  | 'video'
   | 'source';
 
 export const MINING_FIELD_SOURCES: { value: MiningFieldSource; label: string }[] = [
@@ -43,6 +44,7 @@ export const MINING_FIELD_SOURCES: { value: MiningFieldSource; label: string }[]
   { value: 'sentenceEnglish', label: 'Sentence (English)' },
   { value: 'sentenceAudio', label: 'Sentence audio' },
   { value: 'picture', label: 'Screenshot' },
+  { value: 'video', label: 'Video clip' },
   { value: 'source', label: 'Source (title and episode)' },
 ];
 
@@ -60,6 +62,7 @@ const FIELD_GUESSES: [RegExp, MiningFieldSource][] = [
   [/^(sentence ?(english|translation|meaning)|translation|english)$/i, 'sentenceEnglish'],
   [/^sentence ?audio$/i, 'sentenceAudio'],
   [/^(picture|image|screenshot)$/i, 'picture'],
+  [/^(video|clip|sentence ?video)$/i, 'video'],
   [/^(source|misc ?info|game|show)$/i, 'source'],
 ];
 

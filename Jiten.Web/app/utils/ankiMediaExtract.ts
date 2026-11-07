@@ -90,6 +90,18 @@ export function extractAudioRef(html: string): ExtractedMediaRef | null {
   return first ? { filename: first, extraRefs: count - 1 } : null;
 }
 
+/** First `[sound:…]` reference of any media type, for a Video field: Anki plays video files through sound tags. */
+export function extractVideoRef(html: string): ExtractedMediaRef | null {
+  if (!html) return null;
+  const refs: string[] = [];
+  SOUND_TAG.lastIndex = 0;
+  for (let match = SOUND_TAG.exec(html); match !== null; match = SOUND_TAG.exec(html)) {
+    const value = decodeEntities(match[1] ?? '').trim();
+    if (value && !value.startsWith('anki:')) refs.push(value);
+  }
+  return refs.length ? { filename: refs[0]!, extraRefs: refs.length - 1 } : null;
+}
+
 /** AnkiConnect returns media as base64; the upload needs bytes. */
 export function base64ToBytes(base64: string): Uint8Array {
   const binary = atob(base64);

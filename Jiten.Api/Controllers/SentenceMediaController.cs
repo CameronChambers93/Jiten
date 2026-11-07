@@ -6,7 +6,7 @@ using Swashbuckle.AspNetCore.Annotations;
 
 namespace Jiten.Api.Controllers;
 
-/// <summary>Sentence audio and screenshots cut from the local video a subtitle deck was linked to, for mining cards.</summary>
+/// <summary>Sentence audio, screenshots and video clips cut from the local video a subtitle deck was linked to, for mining cards.</summary>
 [ApiController]
 [Route("api/sentence-media")]
 [Authorize]
@@ -14,7 +14,7 @@ namespace Jiten.Api.Controllers;
 public class SentenceMediaController(ISentenceMediaService sentenceMedia) : ControllerBase
 {
     private const int MaxPadMs = 5000;
-    private const string PictureCacheControl = "private, max-age=86400";
+    private const string CacheControl = "private, max-age=86400";
 
     [HttpGet("{sentenceId:long}/audio")]
     [SwaggerOperation(Summary = "MP3 of the sentence's subtitle cues, padded on both sides")]
@@ -36,7 +36,19 @@ public class SentenceMediaController(ISentenceMediaService sentenceMedia) : Cont
 
         // Lists show these as thumbnails, so a repeat view shouldn't start ffmpeg again
         var picture = await sentenceMedia.GrabPictureAsync(clip, ct);
-        Response.Headers.CacheControl = PictureCacheControl;
+        Response.Headers.CacheControl = CacheControl;
         return Results.File(picture, "image/jpeg");
+    }
+
+    [HttpGet("{sentenceId:long}/video")]
+    [SwaggerOperation(Summary = "WebM (VP9, Opus) with sound of the sentence's subtitle cues, padded on both sides like the audio")]
+    public async Task<IResult> GetVideo(long sentenceId, [FromQuery] int padStartMs = 250, [FromQuery] int padEndMs = 250, CancellationToken ct = default)
+    {
+        var clip = await sentenceMedia.ResolveAsync(sentenceId, ct);
+        if (clip == null) return Results.NotFound(new { error = "No linked video for this sentence" });
+
+        var video = await sentenceMedia.CutVideoAsync(clip, Math.Clamp(padStartMs, 0, MaxPadMs), Math.Clamp(padEndMs, 0, MaxPadMs), ct);
+        Response.Headers.CacheControl = CacheControl;
+        return Results.File(video, "video/webm");
     }
 }

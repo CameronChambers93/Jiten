@@ -44,6 +44,8 @@ export interface MiningParts {
   audio: boolean;
   picture: boolean;
   english: boolean;
+  /** The clip with sound; Lapis+ shows it in the picture slot through the rotation script. */
+  video: boolean;
 }
 
 /** How mining treats one note type, stored on its setup. */
@@ -54,10 +56,10 @@ export interface MiningSettings {
   emptyFields: EmptyFieldPolicies | null;
 }
 
-export const DEFAULT_PARTS: MiningParts = { audio: true, picture: true, english: true };
+export const DEFAULT_PARTS: MiningParts = { audio: true, picture: true, english: true, video: true };
 
 /** The role each part fills. */
-export const PART_ROLES: Record<keyof MiningParts, FieldRole> = { audio: 'sentenceAudio', picture: 'picture', english: 'sentenceEnglish' };
+export const PART_ROLES: Record<keyof MiningParts, FieldRole> = { audio: 'sentenceAudio', picture: 'picture', english: 'sentenceEnglish', video: 'video' };
 
 /** A setup's mining settings, with the defaults filled in. */
 export function miningOf(setup: Pick<AnkiNoteTypeSetup, 'mining'> | null | undefined): MiningSettings {
@@ -134,6 +136,7 @@ export const ROLE_LABELS: Record<FieldRole, string> = {
   sentenceEnglish: 'Sentence (English)',
   sentenceAudio: 'Sentence audio',
   picture: 'Screenshot',
+  video: 'Video clip',
   source: 'Source (title and episode)',
   url: 'Source URL (read on import)',
   previousLine: 'Previous line (read on import)',
