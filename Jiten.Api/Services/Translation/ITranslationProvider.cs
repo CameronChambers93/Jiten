@@ -1,5 +1,13 @@
 namespace Jiten.Api.Services.Translation;
 
+/// <summary>
+/// One line to translate. LLM providers send <see cref="Prompt"/>, which already holds the sentence and its context;
+/// providers that take text directly, like DeepL, use the parts.
+/// </summary>
+/// <param name="Before">Japanese lines before the sentence, oldest first.</param>
+/// <param name="After">Japanese lines after the sentence.</param>
+public record TranslationRequest(string Prompt, string Sentence, IReadOnlyList<string> Before, IReadOnlyList<string> After);
+
 public record TranslationResult(string Text, string Model, int? InputTokens, int? OutputTokens);
 
 /// <summary>US dollars per million tokens.</summary>
@@ -17,7 +25,7 @@ public interface ITranslationProvider
 
     Task<IReadOnlyList<string>> ListModelsAsync(ProviderConfig config, CancellationToken ct);
 
-    Task<TranslationResult> TranslateAsync(ProviderConfig config, string prompt, CancellationToken ct);
+    Task<TranslationResult> TranslateAsync(ProviderConfig config, TranslationRequest request, CancellationToken ct);
 
     /// <summary>Null when the provider doesn't know the model's price.</summary>
     ModelPrice? PriceFor(string model);

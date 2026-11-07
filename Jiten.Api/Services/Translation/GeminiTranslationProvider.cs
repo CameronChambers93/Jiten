@@ -31,10 +31,10 @@ public class GeminiTranslationProvider(IHttpClientFactory httpClientFactory) : I
                    .ToList() ?? [];
     }
 
-    public async Task<TranslationResult> TranslateAsync(ProviderConfig config, string prompt, CancellationToken ct)
+    public async Task<TranslationResult> TranslateAsync(ProviderConfig config, TranslationRequest request, CancellationToken ct)
     {
         var model = config.Get("model");
-        var body = new { contents = new[] { new { role = "user", parts = new[] { new { text = prompt } } } } };
+        var body = new { contents = new[] { new { role = "user", parts = new[] { new { text = request.Prompt } } } } };
         var json = await Send(config, HttpMethod.Post, $"models/{Uri.EscapeDataString(model)}:generateContent", body, ct);
 
         var candidate = json["candidates"]?.AsArray().FirstOrDefault();

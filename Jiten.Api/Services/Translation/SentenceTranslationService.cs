@@ -121,15 +121,13 @@ public class SentenceTranslationService(
                                     .FirstOrDefaultAsync(ct)
                        ?? throw new KeyNotFoundException($"Sentence {sentenceId} not found");
 
-        var contextLines = cues == null
-            ? []
-            : cues.Cues.Skip(Math.Max(0, cues.First - settings.ContextLines))
-                  .Take(cues.Last - Math.Max(0, cues.First - settings.ContextLines) + 1 + settings.ContextLines)
-                  .Select(c => c.Text)
-                  .ToList();
-
-        var prompt = TranslationPrompt.Render(settings.EffectivePrompt, sentence.Title, contextLines, sentence.Text);
-        var result = await active.Provider.TranslateAsync(active.Config, prompt, ct);
+        var (before, own, after) = SplitContext(cues, settings.ContextLines);
+        // A sentence that starts partway through a cue: the cue's earlier text is context too.
+        var ownText = string.Concat(own);
+        var at = ownText.IndexOf(sentence.Text, StringComparison.Ordinal);
+        var directBefore = at > 0 ? [..before, ownText[..at].Trim()] : before;
+        var prompt = TranslationPrompt.Render(settings.EffectivePrompt, sentence.Title, [..before, ..own, ..after], sentence.Text);
+        var result = await active.Provider.TranslateAsync(active.Config, new TranslationRequest(prompt, sentence.Text, directBefore, after), ct);
 
         context.ExampleSentenceTranslations.Add(new ExampleSentenceTranslation
         {
@@ -148,6 +146,19 @@ public class SentenceTranslationService(
         }
 
         return new SentenceTranslationDto(result.Text, TranslationOrigin.Ai, active.Provider.Id, result.Model, null);
+    }
+
+    /// <summary>
+    /// The subtitle lines around a sentence: up to <paramref name="lines"/> before its first cue, its own cues, and up to
+    /// <paramref name="lines"/> after its last.
+    /// </summary>
+    public static (List<string> Before, List<string> Own, List<string> After) SplitContext(SentenceCues? cues, int lines)
+    {
+        if (cues == null) return ([], [], []);
+        var start = Math.Max(0, cues.First - lines);
+        return (cues.Cues.Skip(start).Take(cues.First - start).Select(c => c.Text).ToList(),
+                cues.Cues.Skip(cues.First).Take(cues.Last - cues.First + 1).Select(c => c.Text).ToList(),
+                cues.Cues.Skip(cues.Last + 1).Take(lines).Select(c => c.Text).ToList());
     }
 
     /// <summary>The cached translations of deck occurrences' texts; a private line's id finds nothing.</summary>

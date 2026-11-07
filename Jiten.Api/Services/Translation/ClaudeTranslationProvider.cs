@@ -41,7 +41,7 @@ public class ClaudeTranslationProvider : ITranslationProvider
         return page.Items.Select(m => m.ID).ToList();
     }
 
-    public async Task<TranslationResult> TranslateAsync(ProviderConfig config, string prompt, CancellationToken ct)
+    public async Task<TranslationResult> TranslateAsync(ProviderConfig config, TranslationRequest request, CancellationToken ct)
     {
         var model = config.Get("model");
         var parameters = new MessageCreateParams
@@ -52,7 +52,7 @@ public class ClaudeTranslationProvider : ITranslationProvider
             Betas = ["server-side-fallback-2026-07-01"],
             Fallbacks = new Default(),
             OutputConfig = new BetaOutputConfig { Effort = config.Get("effort") },
-            Messages = [new BetaUserMessageParam { Content = prompt }],
+            Messages = [new BetaUserMessageParam { Content = request.Prompt }],
         };
 
         BetaMessage response;
