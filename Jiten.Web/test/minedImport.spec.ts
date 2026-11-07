@@ -68,6 +68,12 @@ describe('toImportNote with JP Mining Note roles', () => {
     const n = note({ Word: '読む', WordReading: '読[よ]む', Sentence: 's' });
     expect(toImportNote(n, 'Mining', {}, { Word: 'word', WordReading: 'wordFurigana', Sentence: 'sentence' }).reading).toBe('よむ');
   });
+
+  it("reads a Video field's clip by name, MP4 included, so Sync writes it back", () => {
+    const roles = { Word: 'word', Sentence: 'sentence', Clip: 'video' } as const;
+    expect(toImportNote(note({ Word: '読む', Sentence: 's', Clip: '[sound:gsm_line.mp4]' }), 'Mining', {}, roles).videoFilename).toBe('gsm_line.mp4');
+    expect(toImportNote(note({ Word: '読む', Sentence: 's', Clip: '' }), 'Mining', {}, roles).videoFilename).toBeNull();
+  });
 });
 
 describe('furiganaToKana', () => {

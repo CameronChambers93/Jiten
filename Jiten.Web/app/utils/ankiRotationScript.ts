@@ -10,7 +10,7 @@ import { fieldsFor, type FieldRole } from '~/utils/ankiSetups';
  * rewrites every src="…" in the card's HTML, scripts included (so the script never writes one), and it fills field
  * references anywhere in a template, comments in scripts included (so the script never writes double braces).
  */
-export const SCRIPT_VERSION = 1;
+export const SCRIPT_VERSION = 2;
 
 const START = /<!-- jiten:rotation v(\d+) -->/;
 const BLOCK = /<!-- jiten:rotation v\d+ -->[\s\S]*?<!-- \/jiten:rotation -->\n?/g;
@@ -159,6 +159,7 @@ function jitenRotation(onBack) {
     var withReadings = jitenRuby((part("furigana") || part("text") || { innerHTML: "" }).innerHTML);
     var english = part("english") ? part("english").innerHTML : "";
     var picture = part("picture");
+    var video = part("video");
     var audio = part("audio");
 
     var fill = function (root) {
@@ -170,8 +171,21 @@ function jitenRotation(onBack) {
     var clickTemplate = document.getElementById("click-sentence");
     if (clickTemplate) fill(clickTemplate.content);
 
-    document.querySelectorAll('[data-jiten="picture-box"]').forEach(function (box) { box.style.display = picture ? "" : "none"; });
+    document.querySelectorAll('[data-jiten="picture-box"]').forEach(function (box) { box.style.display = picture || video ? "" : "none"; });
     document.querySelectorAll('[data-jiten="picture"]').forEach(function (slot) {
+        if (video) {
+            // The clip, with sound, in the picture's place; it plays only when clicked, and the screenshot is its poster
+            var player = document.createElement("video");
+            player.className = "jiten-video";
+            player.controls = true;
+            player.preload = "none";
+            player.playsInline = true;
+            player.style.maxWidth = "100%";
+            if (picture) player.poster = picture.getAttribute("src");
+            player.src = video.getAttribute("src");
+            slot.replaceChildren(player);
+            return;
+        }
         if (!picture) { slot.replaceChildren(); return; }
         // Built with the DOM, never as an HTML string: Anki rewrites src attributes it finds in the card's text
         var img = document.createElement("img");

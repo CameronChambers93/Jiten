@@ -125,6 +125,11 @@ describe('note writes', () => {
     expect(mainFieldValues(MAIN, { Plain: 'sentencePlain' }).Plain).toBe('本を読む &amp; more');
   });
 
+  it('writes the clip to a Video field as a sound tag, and empties it without one', () => {
+    expect(mainFieldValues({ ...MAIN, videoFilename: 'jiten_5.webm' }, { Clip: 'video' }).Clip).toBe('[sound:jiten_5.webm]');
+    expect(mainFieldValues(MAIN, { Clip: 'video' }).Clip).toBe('');
+  });
+
   it('writes only what changed, and reports a missing list field', () => {
     const current = { Sentences: { value: 'old' }, Sentence: { value: '本を<b>読む</b>' }, SentenceEnglish: { value: '' } };
     const { fields, missingList } = noteWriteFields({ ankiNoteId: 1, modelName: 'Lapis+', sentencesHtml: 'new', main: MAIN }, roles, current);

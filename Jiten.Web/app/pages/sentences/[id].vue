@@ -52,6 +52,7 @@
         query: { wordId: Number(route.query.wordId) || 0, readingIndex: Number(route.query.readingIndex) || 0 },
       });
       loadPicture();
+      loadClip();
       loadEnglish();
     } catch {
       detail.value = null;
@@ -67,6 +68,19 @@
 
   async function loadPicture() {
     picture.value = detail.value?.sentence.hasVideo ? await loadSentencePicture(sentenceId.value) : null;
+  }
+
+  // ---- Clip: the screenshot's place once it's cut, with the screenshot as its poster ----
+  const { load: loadSentenceVideo } = useSentenceVideo();
+  const clip = ref<string | null>(null);
+
+  async function loadClip() {
+    clip.value = null;
+    const id = sentenceId.value;
+    if (!detail.value?.sentence.hasVideo) return;
+    const url = await loadSentenceVideo(id);
+    // A link to another sentence may have loaded meanwhile.
+    if (id === sentenceId.value) clip.value = url;
   }
 
   // ---- Audio: the linked video, or text-to-speech without one ----
@@ -175,7 +189,17 @@
     </Card>
 
     <template v-else-if="detail">
-      <img v-if="picture" :src="picture" alt="Screenshot of the sentence" class="w-full max-h-[60vh] object-contain rounded bg-black" />
+      <video
+        v-if="clip"
+        :key="clip"
+        :src="clip"
+        :poster="picture ?? undefined"
+        controls
+        playsinline
+        preload="auto"
+        class="w-full max-h-[60vh] rounded bg-black"
+      />
+      <img v-else-if="picture" :src="picture" alt="Screenshot of the sentence" class="w-full max-h-[60vh] object-contain rounded bg-black" />
 
       <Card>
         <template #content>

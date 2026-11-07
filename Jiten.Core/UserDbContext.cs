@@ -781,6 +781,7 @@ public class UserDbContext : IdentityDbContext<User>
             entity.Property(s => s.PreviousLine).HasMaxLength(4000);
             entity.Property(s => s.AnkiAudioFilename).HasMaxLength(300);
             entity.Property(s => s.AnkiPictureFilename).HasMaxLength(300);
+            entity.Property(s => s.AnkiVideoFilename).HasMaxLength(300);
 
             entity.HasIndex(s => new { s.MinedWordId, s.SortOrder });
             entity.HasIndex(s => new { s.UserId, s.SourceAnkiNoteId });

@@ -95,6 +95,7 @@ interface BuiltSentence {
     sourceTitle: string | null;
     audioFilename: string | null;
     pictureFilename: string | null;
+    videoFilename: string | null;
   };
   reasons: EmptyReasons;
 }
@@ -160,6 +161,14 @@ export function useMiningCards() {
     return $api<Blob>(`sentence-media/${sentenceId}/picture`, { responseType: 'blob' });
   }
 
+  /** The clip with sound, padded like the audio. */
+  function fetchVideo(sentenceId: number): Promise<Blob> {
+    return $api<Blob>(`sentence-media/${sentenceId}/video`, {
+      responseType: 'blob',
+      query: { padStartMs: settings.value.padStartMs, padEndMs: settings.value.padEndMs },
+    });
+  }
+
   /**
    * The sentence's audio and screenshot, cut from its episode. Without a linked video the audio is text-to-speech and
    * there is no screenshot. A part that fails is left out, with the reason.
@@ -167,8 +176,9 @@ export function useMiningCards() {
   async function cardMedia(
     sentenceId: number,
     wantAudio: boolean,
-    wantPicture: boolean
-  ): Promise<{ audio: CardFile | null; picture: CardFile | null; reasons: EmptyReasons }> {
+    wantPicture: boolean,
+    wantVideo: boolean
+  ): Promise<{ audio: CardFile | null; picture: CardFile | null; video: CardFile | null; reasons: EmptyReasons }> {
     const reasons: EmptyReasons = {};
     const audio = async (): Promise<CardFile | null> => {
       try {
@@ -196,8 +206,16 @@ export function useMiningCards() {
         return null;
       }
     };
-    const [a, p] = await Promise.all([wantAudio ? audio() : null, wantPicture ? picture() : null]);
-    return { audio: a, picture: p, reasons };
+    const video = async (): Promise<CardFile | null> => {
+      try {
+        return { blob: await fetchVideo(sentenceId), filename: `jiten_${sentenceId}.webm` };
+      } catch (e) {
+        reasons.video = isNotFound(e) ? 'this title has no linked video' : failureReason('Cutting the video clip', e);
+        return null;
+      }
+    };
+    const [a, p, v] = await Promise.all([wantAudio ? audio() : null, wantPicture ? picture() : null, wantVideo ? video() : null]);
+    return { audio: a, picture: p, video: v, reasons };
   }
 
   /** The English a card gets, with why there's none: null and no reason when card English is off. */
@@ -217,9 +235,12 @@ export function useMiningCards() {
    * The sentence as both ways of mining store it, its media already in Anki's collection: one builder, so a new note
    * and an existing one get the same text.
    */
-  async function buildSentence(sentence: ExampleSentence, want: { audio: boolean; picture: boolean; english: boolean }): Promise<BuiltSentence> {
+  async function buildSentence(
+    sentence: ExampleSentence,
+    want: { audio: boolean; picture: boolean; english: boolean; video: boolean }
+  ): Promise<BuiltSentence> {
     const [media, english] = await Promise.all([
-      cardMedia(sentence.sentenceId, want.audio, want.picture),
+      cardMedia(sentence.sentenceId, want.audio, want.picture, want.video),
       want.english
         ? cardEnglish(sentence.sentenceId)
         : Promise.resolve({ text: null, origin: null } as { text: string | null; origin: string | null; reason?: string }),
@@ -229,6 +250,7 @@ export function useMiningCards() {
     for (const [role, file] of [
       ['sentenceAudio', media.audio],
       ['picture', media.picture],
+      ['video', media.video],
     ] as const) {
       if (!file) continue;
       try {
@@ -237,7 +259,8 @@ export function useMiningCards() {
         if (e instanceof TypeError) throw e;
         reasons[role] = failureReason('Storing the file in Anki', e);
         if (role === 'sentenceAudio') media.audio = null;
-        else media.picture = null;
+        else if (role === 'picture') media.picture = null;
+        else media.video = null;
       }
     }
     return {
@@ -250,14 +273,25 @@ export function useMiningCards() {
         sourceTitle: sourceLabel(sentence) || null,
         audioFilename: media.audio?.filename ?? null,
         pictureFilename: media.picture?.filename ?? null,
+        videoFilename: media.video?.filename ?? null,
       },
       reasons,
     };
   }
 
+  /**
+   * Whether mining cuts the clip for a note type: its video part is on, and something shows it, a field with the Video
+   * role or the rotation script's sentence list, from v2 (which plays it in the picture slot; v1 can't show it).
+   */
+  function wantsVideo(modelName: string): boolean {
+    if (!miningFor(modelName).parts.video) return false;
+    const setup = anki.setupFor(modelName);
+    return !!setup && (!!fieldFor(setup.fieldRoles, 'video') || (setup.sentenceList === 'script' && (setup.scriptVersion ?? 0) >= 2));
+  }
+
   /** The roles of the parts built for a stored sentence, whose failures are listed by reason. */
   function builtPartRoles(parts: MiningParts): FieldRole[] {
-    return (['english', 'audio', 'picture'] as const).filter((p) => parts[p]).map((p) => PART_ROLES[p]);
+    return (['english', 'audio', 'picture', 'video'] as const).filter((p) => parts[p]).map((p) => PART_ROLES[p]);
   }
 
   /**
@@ -412,8 +446,8 @@ export function useMiningCards() {
       if (failed) throw new Error(failed.error ?? "Couldn't read the existing note");
     }
 
-    const built = await buildSentence(sentence, parts);
-    const builtParts = builtPartRoles(parts);
+    const built = await buildSentence(sentence, { ...parts, video: wantsVideo(modelName) });
+    const builtParts = builtPartRoles({ ...parts, video: wantsVideo(modelName) });
 
     // Denied parts stop the sentence before the store or the note changes.
     const deny = denyRoles(modelName);
@@ -447,7 +481,7 @@ export function useMiningCards() {
     if (done.missingList && warn.includes('sentenceList')) warnings.push(missingListWarning(write.modelName));
     const roles: FieldRole[] = [];
     if (write.sentencesHtml != null && !done.missingList) roles.push('sentenceList');
-    if (write.main) roles.push('sentence', 'sentencePlain', 'sentenceFurigana', 'sentenceEnglish', 'sentenceAudio', 'picture', 'source');
+    if (write.main) roles.push('sentence', 'sentencePlain', 'sentenceFurigana', 'sentenceEnglish', 'sentenceAudio', 'picture', 'video', 'source');
     const fieldRoles = anki.setupFor(write.modelName)?.fieldRoles ?? {};
     warnings.push(...emptyFieldWarnings({ fieldRoles, fields: done.fields, warn, reasons, roles, parts }));
     return warnings;
@@ -486,6 +520,7 @@ export function useMiningCards() {
         audio: wanted.has('sentenceAudio') || !!keptParts?.audio,
         picture: wanted.has('picture') || !!keptParts?.picture,
         english: wanted.has('sentenceEnglish') || !!keptParts?.english,
+        video: wantsVideo(target.modelName) || (!!keptModelName && wantsVideo(keptModelName)),
       }),
       $api<{ targetWordTemplate: string }>('mined/settings'),
     ]);
@@ -502,6 +537,7 @@ export function useMiningCards() {
       english: parts.english ? b.english : null,
       audioFilename: parts.audio ? b.audioFilename : null,
       pictureFilename: parts.picture ? b.pictureFilename : null,
+      videoFilename: parts.video ? b.videoFilename : null,
       source: b.sourceTitle,
     };
     const values: Partial<Record<FieldRole, string>> = {
@@ -591,6 +627,7 @@ export function useMiningCards() {
     configured,
     fetchAudio,
     fetchPicture,
+    fetchVideo,
     addCard,
     existingNotes,
     keptNote,

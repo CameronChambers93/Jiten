@@ -64,16 +64,18 @@ describe('new-card targets', () => {
 
 describe('mining settings per note type', () => {
   it('fills the defaults', () => {
-    expect(miningOf(null)).toEqual({ existing: 'ask', parts: { audio: true, picture: true, english: true }, emptyFields: null });
+    expect(miningOf(null)).toEqual({ existing: 'ask', parts: { audio: true, picture: true, english: true, video: true }, emptyFields: null });
+    // Settings saved before clips existed have no video part, which then defaults to on
     expect(miningOf({ mining: { existing: 'auto', parts: { audio: true, picture: false, english: true }, emptyFields: { sentenceAudio: 'deny' } } })).toEqual({
       existing: 'auto',
-      parts: { audio: true, picture: false, english: true },
+      parts: { audio: true, picture: false, english: true, video: true },
       emptyFields: { sentenceAudio: 'deny' },
     });
   });
 
   it('names the roles of parts that are off', () => {
-    expect(partsOffRoles({ audio: true, picture: false, english: false })).toEqual(['picture', 'sentenceEnglish']);
+    expect(partsOffRoles({ audio: true, picture: false, english: false, video: true })).toEqual(['picture', 'sentenceEnglish']);
+    expect(partsOffRoles({ audio: true, picture: true, english: true, video: false })).toEqual(['video']);
   });
 
   it('fills Core 2000 from its preset, so its own sentence can be imported', () => {
