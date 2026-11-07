@@ -148,6 +148,9 @@ public class MinedSentence
 
     public string? AnkiPictureFilename { get; set; }
 
+    /// <summary>The video clip's file name in Anki's collection; only Jiten sentences cut from a linked video have one.</summary>
+    public string? AnkiVideoFilename { get; set; }
+
     /// <summary>The Anki note it was imported from.</summary>
     public long? SourceAnkiNoteId { get; set; }
 

@@ -33,6 +33,41 @@ public class MinedSyncTests
     }
 
     [Fact]
+    public void RenderSentencesAddsTheVideoClip()
+    {
+        var html = MinedSyncService.RenderSentences(1, [
+            new MinedSentence
+            {
+                Text = "これじゃあ", Origin = MinedSentenceOrigin.Jiten, AnkiPictureFilename = "jiten_5.jpg", AnkiVideoFilename = "jiten_5.webm"
+            }
+        ]);
+
+        html.Should().Contain("<video class=\"jiten-sentence-video\" src=\"jiten_5.webm\" preload=\"none\"></video>");
+    }
+
+    [Fact]
+    public void MainFieldsHashIsUnchangedForSentencesWithoutAClip()
+    {
+        var sentence = new MinedSentence
+        {
+            MinedSentenceId = 7, Text = "<b>猫</b>だ", English = "A cat", AnkiAudioFilename = "jiten_7.mp3", AnkiPictureFilename = "jiten_7.jpg",
+            SourceTitle = "Show", Origin = MinedSentenceOrigin.Jiten
+        };
+        var before = MinedSyncService.MainFields(sentence, TargetWordMarkup.Default);
+
+        // The hash as it was computed before clips existed, so notes already written aren't rewritten
+        var parts = string.Join("\u0001", before.Sentence, before.SentencePlain, before.Furigana, "A cat", "jiten_7.mp3", "jiten_7.jpg", "Show");
+        var old = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(parts)))[..32];
+        before.Hash.Should().Be(old);
+        before.VideoFilename.Should().BeNull();
+
+        sentence.AnkiVideoFilename = "jiten_7.webm";
+        var after = MinedSyncService.MainFields(sentence, TargetWordMarkup.Default);
+        after.Hash.Should().NotBe(old);
+        after.VideoFilename.Should().Be("jiten_7.webm");
+    }
+
+    [Fact]
     public void InRotationLeavesOutFlaggedSentences()
     {
         var kept = new MinedSentence { MinedSentenceId = 2, ExampleSentenceId = 20, SortOrder = 1 };

@@ -84,7 +84,7 @@
 
   const { $api } = useNuxtApp();
   const toast = useToast();
-  const { fetchAudio, fetchPicture } = useMiningCards();
+  const { fetchAudio, fetchPicture, fetchVideo } = useMiningCards();
   const { importNotes } = useMinedImport();
   const flagList = ref<{ load: () => Promise<void> } | null>(null);
 
@@ -260,7 +260,7 @@
   }
 
   // Jiten sentences have no stored media: it's cut from the episode when asked for.
-  const cutMedia = ref<Record<number, { audio?: string; picture?: string }>>({});
+  const cutMedia = ref<Record<number, { audio?: string; picture?: string; video?: string }>>({});
 
   async function playAudio(s: MinedSentence) {
     let url = s.audioUrl ?? cutMedia.value[s.minedSentenceId]?.audio;
@@ -276,14 +276,26 @@
     if (url) new Audio(url).play();
   }
 
-  async function showPicture(s: MinedSentence) {
+  /** Cuts the clip with sound and shows it in the picture's place; the screenshot instead when the clip can't be cut. */
+  async function showClip(s: MinedSentence) {
     if (!canCut(s)) return;
+    try {
+      const url = URL.createObjectURL(await fetchVideo(s.exampleSentenceId));
+      cutMedia.value[s.minedSentenceId] = { ...cutMedia.value[s.minedSentenceId], video: url };
+      return;
+    } catch {
+      // The screenshot below, or why there's neither
+    }
     try {
       const url = URL.createObjectURL(await fetchPicture(s.exampleSentenceId));
       cutMedia.value[s.minedSentenceId] = { ...cutMedia.value[s.minedSentenceId], picture: url };
     } catch (e) {
-      toast.add({ severity: 'warn', summary: 'No picture', detail: extractApiError(e, "Couldn't cut the picture"), life: 4000 });
+      toast.add({ severity: 'warn', summary: 'No clip', detail: extractApiError(e, "Couldn't cut the clip"), life: 4000 });
     }
+  }
+
+  function clipOf(s: MinedSentence) {
+    return cutMedia.value[s.minedSentenceId]?.video ?? null;
   }
 
   function pictureOf(s: MinedSentence) {
@@ -376,13 +388,10 @@
           <template v-else>
             <div class="flex flex-col gap-3">
               <div v-for="s in (open[w.minedWordId] as MinedWord).sentences" :key="s.minedSentenceId" class="flex gap-3">
-                <img v-if="pictureOf(s)" :src="pictureOf(s)!" alt="" class="w-32 h-auto rounded shrink-0 object-cover" />
-                <button
-                  v-else-if="canCut(s)"
-                  class="w-32 h-18 rounded shrink-0 bg-surface-100 dark:bg-surface-800 text-xs text-gray-500"
-                  @click="showPicture(s)"
-                >
-                  Show picture
+                <video v-if="clipOf(s)" :src="clipOf(s)!" controls autoplay playsinline class="w-48 h-auto rounded shrink-0 bg-black" />
+                <img v-else-if="pictureOf(s)" :src="pictureOf(s)!" alt="" class="w-32 h-auto rounded shrink-0 object-cover" />
+                <button v-else-if="canCut(s)" class="w-32 h-18 rounded shrink-0 bg-surface-100 dark:bg-surface-800 text-xs text-gray-500" @click="showClip(s)">
+                  <i class="pi pi-play text-xs mr-1" aria-hidden="true" />Play clip
                 </button>
                 <div class="flex-1 min-w-0">
                   <div class="flex items-start gap-2">

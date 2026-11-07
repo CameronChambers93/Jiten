@@ -28,7 +28,8 @@ public record ImportNoteDto(
     string? AudioBase64,
     string? PictureFilename,
     string? PictureBase64,
-    string? Text = null);
+    string? Text = null,
+    string? VideoFilename = null);
 
 public record ImportNotesRequest(List<ImportNoteDto> Notes);
 
@@ -67,7 +68,7 @@ public record MinedWordDto(long MinedWordId, int? WordId, byte? ReadingIndex, st
 /// <param name="Sentence">The sentence as card HTML, the word in bold.</param>
 /// <param name="EnglishOrigin">"subtitles" or "ai".</param>
 public record AddSentenceRequest(long AnkiNoteId, long ExampleSentenceId, string Sentence, string? Furigana, string? English, string? EnglishOrigin,
-                                 string? SourceTitle, string? AudioFilename, string? PictureFilename);
+                                 string? SourceTitle, string? AudioFilename, string? PictureFilename, string? VideoFilename = null);
 
 /// <summary>
 /// A note the browser just created in Anki for one of Jiten's example sentences, its fields and media already written. The
@@ -75,10 +76,10 @@ public record AddSentenceRequest(long AnkiNoteId, long ExampleSentenceId, string
 /// </summary>
 public record CreatedNoteRequest(long AnkiNoteId, string ModelName, string DeckName, int? WordId, byte? ReadingIndex, string Expression, string Reading,
                                  long ExampleSentenceId, string Sentence, string? Furigana, string? English, string? EnglishOrigin, string? SourceTitle,
-                                 string? AudioFilename, string? PictureFilename)
+                                 string? AudioFilename, string? PictureFilename, string? VideoFilename = null)
 {
     public AddSentenceRequest AsSentence() =>
-        new(AnkiNoteId, ExampleSentenceId, Sentence, Furigana, English, EnglishOrigin, SourceTitle, AudioFilename, PictureFilename);
+        new(AnkiNoteId, ExampleSentenceId, Sentence, Furigana, English, EnglishOrigin, SourceTitle, AudioFilename, PictureFilename, VideoFilename);
 }
 
 /// <param name="AnkiNoteId">The word's kept note (the oldest), which <paramref name="SentencesHtml"/> is for.</param>
@@ -435,6 +436,7 @@ public class MinedSentenceService(
             MinedAt = DateTime.UtcNow,
             AnkiAudioFilename = string.IsNullOrWhiteSpace(request.AudioFilename) ? null : Truncate(request.AudioFilename, 500),
             AnkiPictureFilename = string.IsNullOrWhiteSpace(request.PictureFilename) ? null : Truncate(request.PictureFilename, 500),
+            AnkiVideoFilename = string.IsNullOrWhiteSpace(request.VideoFilename) ? null : Truncate(request.VideoFilename, 300),
             SourceAnkiNoteId = sourceAnkiNoteId,
             SortOrder = word.Sentences.Count == 0 ? 0 : word.Sentences.Max(s => s.SortOrder) + 1,
         };
@@ -573,6 +575,7 @@ public class MinedSentenceService(
             PreviousLine = previous.Length > 0 ? Truncate(previous, 4000) : null,
             MinedAt = DateTimeOffset.FromUnixTimeMilliseconds(note.AnkiNoteId).UtcDateTime,
             AnkiAudioFilename = note.AudioFilename, AnkiPictureFilename = note.PictureFilename,
+            AnkiVideoFilename = string.IsNullOrWhiteSpace(note.VideoFilename) ? null : Truncate(note.VideoFilename, 300),
             SourceAnkiNoteId = note.AnkiNoteId,
             SortOrder = first ? (existing ?? 1) - 1 : (existing ?? -1) + 1,
         };

@@ -15,6 +15,9 @@ public interface ISentenceMediaService
     Task<byte[]> CutAudioAsync(SentenceClip clip, int padStartMs, int padEndMs, CancellationToken ct);
 
     Task<byte[]> GrabPictureAsync(SentenceClip clip, CancellationToken ct);
+
+    /// <summary>A WebM with sound of the sentence's cues, padded on both sides like the audio.</summary>
+    Task<byte[]> CutVideoAsync(SentenceClip clip, int padStartMs, int padEndMs, CancellationToken ct);
 }
 
 /// <summary>Cuts card media out of the local videos linked with <c>--link-video</c>.</summary>
@@ -41,6 +44,10 @@ public class SentenceMediaService(JitenDbContext context, SentenceCueLookup cueL
 
     public Task<byte[]> GrabPictureAsync(SentenceClip clip, CancellationToken ct) =>
         WithSlot(() => VideoMedia.GrabFrameJpeg(clip.VideoPath, (clip.StartMs + clip.EndMs) / 2, PictureHeight, ct), ct);
+
+    public Task<byte[]> CutVideoAsync(SentenceClip clip, int padStartMs, int padEndMs, CancellationToken ct) =>
+        WithSlot(() => VideoMedia.CutVideoWebm(clip.VideoPath, clip.AudioStreamIndex, Math.Max(0, clip.StartMs - padStartMs), clip.EndMs + padEndMs,
+                                              PictureHeight, ct), ct);
 
     private static async Task<byte[]> WithSlot(Func<Task<byte[]>> work, CancellationToken ct)
     {

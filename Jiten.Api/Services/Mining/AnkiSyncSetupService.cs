@@ -24,8 +24,8 @@ public record AnkiNoteTypeSetupDto(
 
 public record AnkiSetupsDto(List<AnkiNoteTypeSetupDto> Setups, DateTime? KnownWordsSyncedAt);
 
-/// <summary>Which parts of a sentence mining builds for a note type: the audio, the screenshot, the English.</summary>
-public record AnkiMiningPartsDto(bool Audio = true, bool Picture = true, bool English = true);
+/// <summary>Which parts of a sentence mining builds for a note type: the audio, the screenshot, the English, the video clip.</summary>
+public record AnkiMiningPartsDto(bool Audio = true, bool Picture = true, bool English = true, bool Video = true);
 
 /// <summary>
 /// How mining treats a note type. <c>Existing</c>: when a word already has a card of this type, add the sentence to it

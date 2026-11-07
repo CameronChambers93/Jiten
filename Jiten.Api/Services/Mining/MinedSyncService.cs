@@ -40,7 +40,7 @@ public record MinedSettingsRequest(string TargetWordTemplate);
 /// with that role, then reports the note written with the id and hash.
 /// </summary>
 public record MainFieldsDto(long MinedSentenceId, string Hash, string Sentence, string SentencePlain, string? Furigana, string? English,
-                            string? AudioFilename, string? PictureFilename, string? Source);
+                            string? AudioFilename, string? PictureFilename, string? Source, string? VideoFilename = null);
 
 /// <summary>
 /// What Sync writes to a word's kept note: the sentence list (in the setup's format; null when it has none) and the main
@@ -268,8 +268,11 @@ public class MinedSyncService(UserDbContext userContext, IDbContextFactory<Jiten
         var plain = MinedSentenceService.PlainText(s.Shown);
         var furigana = string.IsNullOrEmpty(s.Furigana) ? null : TargetWordMarkup.Apply(s.Furigana, template);
         var parts = string.Join("\u0001", sentence, plain, furigana, s.English, s.AnkiAudioFilename, s.AnkiPictureFilename, s.SourceTitle);
+        // Only a sentence with a clip adds it, so the hashes of notes written before clips existed stay the same.
+        if (!string.IsNullOrEmpty(s.AnkiVideoFilename)) parts += "\u0001" + s.AnkiVideoFilename;
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(parts)))[..32];
-        return new MainFieldsDto(s.MinedSentenceId, hash, sentence, plain, furigana, s.English, s.AnkiAudioFilename, s.AnkiPictureFilename, s.SourceTitle);
+        return new MainFieldsDto(s.MinedSentenceId, hash, sentence, plain, furigana, s.English, s.AnkiAudioFilename, s.AnkiPictureFilename, s.SourceTitle,
+                                s.AnkiVideoFilename);
     }
 
     /// <summary>Records the main fields the browser wrote; notes or sentences that aren't the user's are skipped.</summary>
@@ -317,7 +320,7 @@ public class MinedSyncService(UserDbContext userContext, IDbContextFactory<Jiten
 
     /// <summary>
     /// The Sentences field: one block per sentence for Lapis+'s script, which shows a random one on each review. Media are
-    /// real <c>&lt;audio src&gt;</c> / <c>&lt;img src&gt;</c> references (not file names in data), so Anki's Check Media
+    /// real <c>&lt;audio src&gt;</c> / <c>&lt;img src&gt;</c> / <c>&lt;video src&gt;</c> references (not file names in data), so Anki's Check Media
     /// counts the files as used; the template keeps the blocks hidden. The note's id is on the list, since a template
     /// can't otherwise know it and the card's flag button tags the note through AnkiConnect.
     /// </summary>
@@ -338,6 +341,8 @@ public class MinedSyncService(UserDbContext userContext, IDbContextFactory<Jiten
                 html.Append($"<audio class=\"jiten-sentence-audio\" src=\"{Attr(s.AnkiAudioFilename)}\" preload=\"none\"></audio>");
             if (!string.IsNullOrEmpty(s.AnkiPictureFilename))
                 html.Append($"<img class=\"jiten-sentence-picture\" src=\"{Attr(s.AnkiPictureFilename)}\" alt=\"\" loading=\"lazy\">");
+            if (!string.IsNullOrEmpty(s.AnkiVideoFilename))
+                html.Append($"<video class=\"jiten-sentence-video\" src=\"{Attr(s.AnkiVideoFilename)}\" preload=\"none\"></video>");
             html.Append("</div>");
         }
 
