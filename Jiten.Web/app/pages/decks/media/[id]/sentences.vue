@@ -162,11 +162,9 @@
   }
 
   // Mining: preview the sentence audio cut from the linked episode, and add the sentence to Anki through AnkiConnect.
-  const { configured: cardsConfigured, fetchAudio } = useMiningCards();
+  const { fetchAudio } = useMiningCards();
   const toast = useToast();
   const cardSettingsVisible = ref(false);
-  const { mine, choice: mineChoice, answer: answerMine } = useMineSentence();
-  const cardState = ref<Record<number, 'adding' | 'added'>>({});
   const audioLoading = ref<number | null>(null);
   const audioUrls = new Map<number, string>();
   let player: HTMLAudioElement | null = null;
@@ -207,21 +205,6 @@
     }
     player = new Audio(url);
     player.play();
-  }
-
-  async function mineSentence(word: DeckIPlusOneSentence['word'], sentence: DeckIPlusOneSentence['sentence']) {
-    if (!cardsConfigured.value) {
-      cardSettingsVisible.value = true;
-      return;
-    }
-    cardState.value = { ...cardState.value, [sentence.sentenceId]: 'adding' };
-    const outcome = await mine(word, sentence);
-    if (outcome) {
-      cardState.value = { ...cardState.value, [sentence.sentenceId]: 'added' };
-    } else {
-      const { [sentence.sentenceId]: _, ...rest } = cardState.value;
-      cardState.value = rest;
-    }
   }
 
   // English: shown per the admin's page mode, from the episode's English subtitles or (for admins) an AI translation.
@@ -495,18 +478,7 @@
                       :loading="audioLoading === sentence.sentenceId"
                       @click="playSentence(sentence.sentenceId, sentence.text)"
                     />
-                    <Button
-                      v-tooltip.left="cardState[sentence.sentenceId] === 'added' ? 'Added to Anki' : 'Add to Anki'"
-                      :icon="cardState[sentence.sentenceId] === 'added' ? 'pi pi-check' : 'pi pi-plus'"
-                      size="small"
-                      :severity="cardState[sentence.sentenceId] === 'added' ? 'success' : 'secondary'"
-                      text
-                      rounded
-                      :aria-label="cardState[sentence.sentenceId] === 'added' ? 'Added to Anki' : 'Add to Anki'"
-                      :loading="cardState[sentence.sentenceId] === 'adding'"
-                      :disabled="!!cardState[sentence.sentenceId]"
-                      @click="mineSentence(group.word, sentence)"
-                    />
+                    <MineSentenceButton boxed :sentence="sentence" :word-id="group.word.wordId" :reading-index="group.word.readingIndex" />
                   </div>
                 </div>
               </li>
@@ -520,7 +492,6 @@
     </template>
 
     <MiningCardSettingsDialog v-model:visible="cardSettingsVisible" />
-    <MineChoiceDialog :choice="mineChoice" @answer="answerMine" />
 
     <LazySrsAddDeckDialog
       v-if="studyDialog && mainDeck"

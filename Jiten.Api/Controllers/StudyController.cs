@@ -4092,11 +4092,15 @@ public partial class StudyController(
 
         var result = new Dictionary<string, StudyExampleSentenceDto>();
         var remainingPairs = new List<CardExamplesRequest.WordPair>();
+        // The word's sentence list comes first (n1miner), then custom sentences, then the corpus.
+        var listed = await ListedStudyExamples(userId, request.Pairs, sentenceTokens);
 
         foreach (var pair in request.Pairs)
         {
             var key = $"{pair.WordId}-{pair.ReadingIndex}";
-            if (customByKey.TryGetValue(key, out var customs) && customs.Count > 0)
+            if (listed.TryGetValue(key, out var fromList))
+                result[key] = fromList;
+            else if (customByKey.TryGetValue(key, out var customs) && customs.Count > 0)
             {
                 var picked = customs[Random.Shared.Next(customs.Count)];
                 result[key] = BuildCustomStudyExample(picked);
@@ -4196,7 +4200,7 @@ public partial class StudyController(
             result.TryAdd($"{match.WordId}-{match.ReadingIndex}", example);
         }
 
-        var corpusExamples = result.Values.Where(e => !e.IsCustom).ToList();
+        var corpusExamples = result.Values.Where(e => !e.IsCustom && sentences.ContainsKey(e.SentenceId) && !listed.ContainsValue(e)).ToList();
         var furigana = await sentenceTokens.BuildFuriganaDtosAsync(
             corpusExamples.Select(e => (e.SentenceId, e.Text, (byte[]?)sentences.GetValueOrDefault(e.SentenceId)?.Tokens)));
         foreach (var example in corpusExamples)
@@ -4360,6 +4364,85 @@ public partial class StudyController(
     }
 
     private record FormMatch(long SentenceId, int WordId, byte ReadingIndex, byte Position, byte Length);
+
+    /// <summary>
+    /// A random sentence from each word's list (the user's mined and kept sentences), keyed like the card examples. Only
+    /// lines from a deck count, as corpus sentences do; flagged ones are skipped.
+    /// </summary>
+    private async Task<Dictionary<string, StudyExampleSentenceDto>> ListedStudyExamples(string userId, List<CardExamplesRequest.WordPair> pairs,
+                                                                                         ISentenceTokenService sentenceTokens)
+    {
+        var wordIds = pairs.Select(p => (int?)p.WordId).Distinct().ToList();
+        var rows = await userContext.MinedSentences.AsNoTracking()
+            .Where(s => s.UserId == userId && s.ExampleSentenceId != null
+                        && !userContext.SentenceFlags.Any(f => f.UserId == userId && f.ResolvedAt == null && f.ExampleSentenceId == s.ExampleSentenceId))
+            .Join(userContext.MinedWords.Where(w => w.UserId == userId && wordIds.Contains(w.WordId)), s => s.MinedWordId, w => w.MinedWordId,
+                  (s, w) => new { WordId = w.WordId!.Value, ReadingIndex = w.ReadingIndex ?? (byte)0, SentenceId = s.ExampleSentenceId!.Value, s.TargetPosition, s.TargetLength })
+            .ToListAsync();
+        var wanted = pairs.Select(p => $"{p.WordId}-{p.ReadingIndex}").ToHashSet();
+        rows = rows.Where(r => wanted.Contains($"{r.WordId}-{r.ReadingIndex}")).ToList();
+        if (rows.Count == 0) return new();
+
+        var ids = rows.Select(r => r.SentenceId).Distinct().ToList();
+        var sentences = await context.ExampleSentences.AsNoTracking().IgnoreQueryFilters()
+            .Where(es => ids.Contains(es.SentenceId) && es.DeckId != null)
+            .ToDictionaryAsync(es => es.SentenceId);
+
+        var picks = rows.Where(r => sentences.ContainsKey(r.SentenceId))
+            .GroupBy(r => $"{r.WordId}-{r.ReadingIndex}")
+            .ToDictionary(g => g.Key, g => g.ElementAt(Random.Shared.Next(g.Count())));
+        if (picks.Count == 0) return new();
+
+        var decks = await DeckProjections(picks.Values.Select(r => sentences[r.SentenceId].DeckId!.Value));
+        var result = new Dictionary<string, StudyExampleSentenceDto>();
+        foreach (var (key, row) in picks)
+        {
+            var sentence = sentences[row.SentenceId];
+            // The place the word was saved at, else where the line's tokens put it.
+            var (position, length) = row.TargetPosition is { } p && row.TargetLength is { } l && p >= 0 && l > 0 && p <= byte.MaxValue
+                                     && l <= byte.MaxValue && p + l <= sentence.Text.Length
+                ? ((byte)p, (byte)l)
+                : ExampleSentenceTokens.FindForm(ExampleSentenceTokens.Decode(sentence.Tokens), row.WordId, row.ReadingIndex) is { } token
+                    ? (token.Position, token.Length)
+                    : ((byte)0, (byte)0);
+            var match = new FormMatch(row.SentenceId, row.WordId, row.ReadingIndex, position, length);
+            var example = BuildStudyExampleSentence(match, sentence, decks, decks);
+            if (length == 0) (example.WordPosition, example.WordLength) = (-1, 0);
+            result[key] = example;
+        }
+
+        var furigana = await sentenceTokens.BuildFuriganaDtosAsync(
+            result.Values.Select(e => (e.SentenceId, e.Text, (byte[]?)sentences[e.SentenceId].Tokens)));
+        foreach (var example in result.Values)
+        {
+            var annotations = furigana.GetValueOrDefault(example.SentenceId);
+            example.Furigana = annotations?.Furigana;
+            example.Words = annotations?.Words;
+        }
+
+        return result;
+    }
+
+    /// <summary>The decks of these sentences, and their parents.</summary>
+    private async Task<Dictionary<int, DeckProjection>> DeckProjections(IEnumerable<int> deckIds)
+    {
+        var ids = deckIds.Distinct().ToList();
+        var decks = await context.Decks.AsNoTracking()
+            .Where(d => ids.Contains(d.DeckId))
+            .Select(d => new DeckProjection(d.DeckId, d.OriginalTitle, d.RomajiTitle, d.EnglishTitle, d.MediaType, d.ParentDeckId))
+            .ToDictionaryAsync(d => d.DeckId);
+        var parentIds = decks.Values.Where(d => d.ParentDeckId is { } p && !decks.ContainsKey(p)).Select(d => d.ParentDeckId!.Value).Distinct().ToList();
+        if (parentIds.Count > 0)
+        {
+            var parents = await context.Decks.AsNoTracking()
+                .Where(d => parentIds.Contains(d.DeckId))
+                .Select(d => new DeckProjection(d.DeckId, d.OriginalTitle, d.RomajiTitle, d.EnglishTitle, d.MediaType, d.ParentDeckId))
+                .ToListAsync();
+            foreach (var parent in parents) decks[parent.DeckId] = parent;
+        }
+
+        return decks;
+    }
 
     /// <summary>Up to a pool of random sentences per form from the given study decks, keyed by WordKey; a wider pool for served cards, which get an i+1 pick.</summary>
     private async Task<Dictionary<int, List<long>>> StudyDeckCandidates(List<(int WordId, byte ReadingIndex)> forms, int[] studyDeckIds,

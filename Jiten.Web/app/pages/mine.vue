@@ -194,7 +194,7 @@
   }
 
   // ---- Words already in Anki (read through the user's AnkiConnect) ----
-  const { configured: cardsConfigured, fetchAudio, wordsInAnki } = useMiningCards();
+  const { fetchAudio, wordsInAnki } = useMiningCards();
   const { miningSetups, load: loadSetups } = useAnkiSetups();
   const ankiWords = ref<string[] | null>(null);
   const ankiLoading = ref(false);
@@ -284,9 +284,7 @@
 
   // ---- Mining: same flow as a title's Sentences page ----
   const cardSettingsVisible = ref(false);
-  const { mine, choice: mineChoice, answer: answerMine } = useMineSentence();
   // By word and sentence: with young or mature targets one sentence can be listed for several words.
-  const cardState = ref<Record<string, 'adding' | 'added'>>({});
   const minedWords = ref<Set<string>>(new Set());
   const audioLoading = ref<number | null>(null);
   const audioUrls = new Map<number, string>();
@@ -330,26 +328,10 @@
     player.play();
   }
 
-  function cardKey(word: WordSummary, sentence: ExampleSentence) {
-    return `${wordKey(word)}:${sentence.sentenceId}`;
-  }
-
-  async function mineSentence(word: WordSummary, sentence: ExampleSentence) {
-    if (!cardsConfigured.value) {
-      cardSettingsVisible.value = true;
-      return;
-    }
-    const key = cardKey(word, sentence);
-    cardState.value = { ...cardState.value, [key]: 'adding' };
-    const outcome = await mine(word, sentence);
-    if (outcome) {
-      cardState.value = { ...cardState.value, [key]: 'added' };
-      minedWords.value = new Set(minedWords.value).add(wordKey(word));
-      ankiWords.value?.push(word.reading);
-    } else {
-      const { [key]: _, ...rest } = cardState.value;
-      cardState.value = rest;
-    }
+  /** A sentence of the word went to Anki through the row's sentence button. */
+  function onMined(word: WordSummary) {
+    minedWords.value = new Set(minedWords.value).add(wordKey(word));
+    ankiWords.value?.push(word.reading);
   }
 
   // ---- English ----
@@ -658,17 +640,12 @@
                       :loading="audioLoading === sentence.sentenceId"
                       @click="playSentence(sentence.sentenceId, sentence.text)"
                     />
-                    <Button
-                      v-tooltip.left="cardState[cardKey(item.word, sentence)] === 'added' ? 'Added to Anki' : 'Add to Anki'"
-                      :icon="cardState[cardKey(item.word, sentence)] === 'added' ? 'pi pi-check' : 'pi pi-plus'"
-                      size="small"
-                      :severity="cardState[cardKey(item.word, sentence)] === 'added' ? 'success' : 'secondary'"
-                      text
-                      rounded
-                      :aria-label="cardState[cardKey(item.word, sentence)] === 'added' ? 'Added to Anki' : 'Add to Anki'"
-                      :loading="cardState[cardKey(item.word, sentence)] === 'adding'"
-                      :disabled="!!cardState[cardKey(item.word, sentence)]"
-                      @click="mineSentence(item.word, sentence)"
+                    <MineSentenceButton
+                      boxed
+                      :sentence="sentence"
+                      :word-id="item.word.wordId"
+                      :reading-index="item.word.readingIndex"
+                      @mined="onMined"
                     />
                   </div>
                 </div>
@@ -693,6 +670,5 @@
     </template>
 
     <MiningCardSettingsDialog v-model:visible="cardSettingsVisible" />
-    <MineChoiceDialog :choice="mineChoice" @answer="answerMine" />
   </div>
 </template>

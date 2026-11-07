@@ -70,6 +70,27 @@ public record MinedWordDto(long MinedWordId, int? WordId, byte? ReadingIndex, st
 public record AddSentenceRequest(long AnkiNoteId, long ExampleSentenceId, string Sentence, string? Furigana, string? English, string? EnglishOrigin,
                                  string? SourceTitle, string? AudioFilename, string? PictureFilename, string? VideoFilename = null);
 
+/// <summary>One of Jiten's lines to save to a word's list, the word at <paramref name="Position"/> in the line's text.</summary>
+public record SaveToListRequest(int WordId, byte ReadingIndex, long ExampleSentenceId, int Position, int Length);
+
+/// <summary>Where a line stands in a word's list, for the sentence button.</summary>
+public static class ListSentenceState
+{
+    /// <summary>In the word's list, kept for Jiten (not on an Anki card).</summary>
+    public const string Kept = "kept";
+
+    /// <summary>In the word's list and on its Anki card.</summary>
+    public const string Card = "card";
+
+    public static string Of(MinedSentence sentence, bool wordHasNotes) => sentence.JitenOnly || !wordHasNotes ? Kept : Card;
+}
+
+/// <param name="State">A <see cref="ListSentenceState"/> value.</param>
+public record SaveToListResult(long MinedSentenceId, bool Added, string State);
+
+/// <param name="State">A <see cref="ListSentenceState"/> value; lines in no list aren't returned.</param>
+public record ListStateDto(int WordId, byte ReadingIndex, long SentenceId, string State);
+
 /// <summary>A mined sentence whose line changed, to rebuild with the card code: its line, with the word marked.</summary>
 public record RebuildSentenceDto(long MinedSentenceId, long ExampleSentenceId, int? WordId, byte? ReadingIndex, int? TargetPosition, int? TargetLength)
 {
@@ -353,16 +374,21 @@ public class MinedSentenceService(
                                     .FirstAsync(w => w.MinedWordId == note.MinedWordId, ct);
         await sync.FillAsync(userId, word.Sentences, ct);
         var sentence = word.Sentences.FirstOrDefault(s => s.ExampleSentenceId == request.ExampleSentenceId || PlainText(s.Shown) == text);
-        var added = sentence == null;
+        var added = sentence == null || sentence.JitenOnly;
         if (sentence == null)
         {
             sentence = NewJitenSentence(userId, word, request, null);
             await SaveNewSentenceAsync(word, sentence, ct);
         }
+        else if (sentence.JitenOnly)
+        {
+            PromoteToCard(userId, word, sentence, request, null);
+            await userContext.SaveChangesAsync(ct);
+        }
 
         var write = added ? (await sync.NoteWritesAsync(userId, word.MinedWordId, ct)).FirstOrDefault() : null;
         var kept = write?.AnkiNoteId ?? word.Notes.Where(n => n.FoldingInto == null).Min(n => n.AnkiNoteId);
-        return new AddSentenceResult(kept, sentence.MinedSentenceId, added, word.Sentences.Count, write);
+        return new AddSentenceResult(kept, sentence.MinedSentenceId, added, word.Sentences.Count(s => !s.JitenOnly), write);
     }
 
     /// <summary>
@@ -386,12 +412,14 @@ public class MinedSentenceService(
                                          .FirstAsync(w => w.MinedWordId == existing.MinedWordId, ct);
             var own = known.Sentences.FirstOrDefault(s => s.SourceAnkiNoteId == request.AnkiNoteId) ?? known.Sentences.MinBy(s => s.SortOrder);
             var keptNote = known.Notes.Where(n => n.FoldingInto == null).Select(n => (long?)n.AnkiNoteId).Min() ?? request.AnkiNoteId;
-            return new AddSentenceResult(keptNote, own?.MinedSentenceId ?? 0, false, known.Sentences.Count, null);
+            return new AddSentenceResult(keptNote, own?.MinedSentenceId ?? 0, false, known.Sentences.Count(s => !s.JitenOnly), null);
         }
 
         var word = await FindOrCreateWordAsync(userId, expression, PlainText(request.Reading), request.WordId, request.ReadingIndex, ct);
         await userContext.Entry(word).Collection(w => w.Notes).LoadAsync(ct);
         await userContext.Entry(word).Collection(w => w.Sentences).LoadAsync(ct);
+        // A word kept only in Jiten until now: its first card shows the sentence it was made with.
+        var firstNote = word.Notes.Count == 0;
         var note = new MinedNote
         {
             MinedWordId = word.MinedWordId, UserId = userId, AnkiNoteId = request.AnkiNoteId,
@@ -404,13 +432,23 @@ public class MinedSentenceService(
         // A word already in Anki may have this line already ("Create new" on it); the new note shows that sentence.
         await sync.FillAsync(userId, word.Sentences, ct);
         var sentence = word.Sentences.FirstOrDefault(s => s.ExampleSentenceId == request.ExampleSentenceId || PlainText(s.Shown) == text);
-        var added = sentence == null;
+        var added = sentence == null || sentence.JitenOnly;
         if (sentence == null)
         {
             sentence = NewJitenSentence(userId, word, request.AsSentence(), request.AnkiNoteId);
             await SaveNewSentenceAsync(word, sentence, ct);
         }
-        else await userContext.SaveChangesAsync(ct);
+        else
+        {
+            if (sentence.JitenOnly) PromoteToCard(userId, word, sentence, request.AsSentence(), request.AnkiNoteId);
+            await userContext.SaveChangesAsync(ct);
+        }
+
+        if (firstNote && word.Sentences.Any(s => s != sentence && s.SortOrder <= sentence.SortOrder))
+        {
+            sentence.SortOrder = word.Sentences.Min(s => s.SortOrder) - 1;
+            await userContext.SaveChangesAsync(ct);
+        }
 
         // The source title is the line's, not the row's: read it as Sync will, so the hash is the one Sync computes.
         (sentence.SourceTitle, sentence.SourceUrl) = (null, null);
@@ -427,7 +465,85 @@ public class MinedSentenceService(
         // When the main sentence is another one, the write already holds it, as Sync would write it.
         if (kept == request.AnkiNoteId && write?.Main == null && await sync.UpdatesMainFieldsAsync(userId, note.ModelName, ct))
             write = (write ?? new NoteWriteDto(request.AnkiNoteId, note.ModelName, null, null)) with { Main = main };
-        return new AddSentenceResult(kept, sentence.MinedSentenceId, added, word.Sentences.Count, write);
+        return new AddSentenceResult(kept, sentence.MinedSentenceId, added, word.Sentences.Count(s => !s.JitenOnly), write);
+    }
+
+    /// <summary>
+    /// Saves one of Jiten's lines to a word's list, kept for Jiten only, creating the word's list if it has none. A line the
+    /// word has already is left as it is. The line's text, source and media are read from it; the card's parts (English,
+    /// furigana, media in Anki) are built if it's mined to Anki later.
+    /// </summary>
+    public async Task<SaveToListResult> SaveToListAsync(string userId, SaveToListRequest request, CancellationToken ct)
+    {
+        await using var jiten = await contextFactory.CreateDbContextAsync(ct);
+        var line = await jiten.ExampleSentences.AsNoTracking().IgnoreQueryFilters()
+                              .Where(s => s.SentenceId == request.ExampleSentenceId && (s.OwnerId == null || s.OwnerId == userId))
+                              .Select(s => s.Text).FirstOrDefaultAsync(ct)
+                   ?? throw new ArgumentException("That sentence doesn't exist.");
+        if (request.Position < 0 || request.Length <= 0 || request.Position + request.Length > line.Length)
+            throw new ArgumentException("The word isn't in that sentence.");
+        var summary = (await WordSummariesAsync([(request.WordId, request.ReadingIndex)], ct)).FirstOrDefault()
+                      ?? throw new ArgumentException("Jiten has no reading for that word.");
+
+        var word = await FindOrCreateWordAsync(userId, summary.Reading, KanaReading(string.IsNullOrEmpty(summary.ReadingFurigana) ? summary.Reading : summary.ReadingFurigana),
+                                               request.WordId, request.ReadingIndex, ct);
+        await userContext.Entry(word).Collection(w => w.Notes).LoadAsync(ct);
+        await userContext.Entry(word).Collection(w => w.Sentences).LoadAsync(ct);
+        var hasNotes = word.Notes.Count > 0;
+
+        await sync.FillAsync(userId, word.Sentences, ct);
+        var text = PlainText(line);
+        var existing = word.Sentences.FirstOrDefault(s => s.ExampleSentenceId == request.ExampleSentenceId || PlainText(s.Shown) == text);
+        if (existing != null) return new SaveToListResult(existing.MinedSentenceId, false, ListSentenceState.Of(existing, hasNotes));
+
+        var sentence = new MinedSentence
+        {
+            MinedWordId = word.MinedWordId, UserId = userId, Origin = MinedSentenceOrigin.Jiten, ExampleSentenceId = request.ExampleSentenceId,
+            TargetPosition = request.Position, TargetLength = request.Length, JitenOnly = true, MinedAt = DateTime.UtcNow,
+            SortOrder = word.Sentences.Count == 0 ? 0 : word.Sentences.Max(s => s.SortOrder) + 1,
+        };
+        await SaveNewSentenceAsync(word, sentence, ct);
+        return new SaveToListResult(sentence.MinedSentenceId, true, ListSentenceState.Kept);
+    }
+
+    /// <summary>Which of these lines are in the user's list for their word, and whether they're on its Anki card.</summary>
+    public async Task<List<ListStateDto>> ListStatesAsync(string userId, IReadOnlyList<(int WordId, byte ReadingIndex, long SentenceId)> lines,
+                                                          CancellationToken ct)
+    {
+        var sentenceIds = lines.Select(l => (long?)l.SentenceId).Distinct().ToList();
+        var rows = await userContext.MinedSentences.AsNoTracking()
+                                    .Where(s => s.UserId == userId && sentenceIds.Contains(s.ExampleSentenceId))
+                                    .Join(userContext.MinedWords, s => s.MinedWordId, w => w.MinedWordId,
+                                          (s, w) => new { s.ExampleSentenceId, s.JitenOnly, w.WordId, w.ReadingIndex, HasNotes = w.Notes.Any() })
+                                    .ToListAsync(ct);
+        var wanted = lines.ToHashSet();
+        return rows.Where(r => r.WordId != null && wanted.Contains((r.WordId.Value, (byte)(r.ReadingIndex ?? 0), r.ExampleSentenceId!.Value)))
+                   .Select(r => new ListStateDto(r.WordId!.Value, (byte)(r.ReadingIndex ?? 0), r.ExampleSentenceId!.Value,
+                                                 r.JitenOnly || !r.HasNotes ? ListSentenceState.Kept : ListSentenceState.Card))
+                   .OrderBy(r => r.State == ListSentenceState.Card ? 0 : 1)
+                   .DistinctBy(r => (r.WordId, r.ReadingIndex, r.SentenceId))
+                   .ToList();
+    }
+
+    private static readonly Regex RubyMarkup = new(@"([\u4E00-\u9FFF\uFF10-\uFF5A々ヵヶ]+)\[([\u3040-\u309F\u30A0-\u30FF]+)\]", RegexOptions.Compiled);
+
+    /// <summary>A word form's kana reading from its ruby markup (漢字[かんじ]), as the browser records it for new notes.</summary>
+    public static string KanaReading(string rubyText) => RubyMarkup.Replace(rubyText, "$2");
+
+    /// <summary>A sentence kept for Jiten goes onto the word's card: it takes the card's parts as the browser built them.</summary>
+    private static void PromoteToCard(string userId, MinedWord word, MinedSentence sentence, AddSentenceRequest request, long? sourceAnkiNoteId)
+    {
+        var built = NewJitenSentence(userId, word, request, sourceAnkiNoteId);
+        sentence.Text = built.Text;
+        sentence.Furigana = built.Furigana;
+        sentence.English = built.English;
+        sentence.EnglishOrigin = built.EnglishOrigin;
+        sentence.AnkiAudioFilename = built.AnkiAudioFilename;
+        sentence.AnkiPictureFilename = built.AnkiPictureFilename;
+        sentence.AnkiVideoFilename = built.AnkiVideoFilename;
+        sentence.SourceAnkiNoteId ??= sourceAnkiNoteId;
+        sentence.JitenOnly = false;
+        sentence.UpdatedAt = DateTime.UtcNow;
     }
 
     /// <summary>One of Jiten's example sentences for a word, last in its rotation, as both ways of mining it store it.</summary>
@@ -647,6 +763,22 @@ public class MinedSentenceService(
         // The occurrence now holds this text, unless the note's markup can't be rebuilt from it.
         await MinedLineStore.FillAsync(jiten, userId, [sentence], ct);
         if (sentence.OccurrenceHtml == sentence.Text) sentence.Text = null;
+
+        // A line kept for Jiten goes onto the card with the note's parts, rather than being listed twice.
+        var kept = await userContext.MinedSentences.FirstOrDefaultAsync(s => s.MinedWordId == word.MinedWordId && s.JitenOnly
+                                                                             && s.ExampleSentenceId == sentence.ExampleSentenceId, ct);
+        if (kept != null)
+        {
+            (kept.Text, kept.Furigana, kept.English, kept.EnglishOrigin) = (sentence.Text, sentence.Furigana, sentence.English, sentence.EnglishOrigin);
+            (kept.Origin, kept.PreviousLine, kept.SourceAnkiNoteId) = (sentence.Origin, sentence.PreviousLine, sentence.SourceAnkiNoteId);
+            (kept.AnkiAudioFilename, kept.AnkiPictureFilename, kept.AnkiVideoFilename) =
+                (sentence.AnkiAudioFilename, sentence.AnkiPictureFilename, sentence.AnkiVideoFilename);
+            (kept.TargetPosition, kept.TargetLength) = (sentence.TargetPosition, sentence.TargetLength);
+            if (first) kept.SortOrder = sentence.SortOrder;
+            kept.JitenOnly = false;
+            kept.UpdatedAt = DateTime.UtcNow;
+            return;
+        }
 
         userContext.MinedSentences.Add(sentence);
     }

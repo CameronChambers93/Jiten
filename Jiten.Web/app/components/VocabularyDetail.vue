@@ -273,7 +273,6 @@
     }
   }
 
-  const customSentenceTexts = computed(() => customSentences.value.map((s) => s.text));
 
   const exampleSentences = ref<ExampleSentence[]>([]);
   const canLoadExampleSentences = ref(true);
@@ -655,7 +654,6 @@
                     :word-id="props.wordId"
                     :reading-index="currentReadingIndex"
                     :at-limit="customSentences.length >= planLimits.customSentencesPerWord"
-                    :saved-texts="customSentenceTexts"
                     @favourited="loadCustomSentences()"
                   />
                 </template>
@@ -710,7 +708,6 @@
                 :word-id="props.wordId"
                 :reading-index="currentReadingIndex"
                 :at-limit="customSentences.length >= planLimits.customSentencesPerWord"
-                :saved-texts="customSentenceTexts"
                 :known-states="knownStatesOverride"
                 @favourited="loadCustomSentences()"
               />

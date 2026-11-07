@@ -884,6 +884,9 @@ namespace Jiten.Core.Migrations.UserDb
                         .HasMaxLength(8000)
                         .HasColumnType("character varying(8000)");
 
+                    b.Property<bool>("JitenOnly")
+                        .HasColumnType("boolean");
+
                     b.Property<DateTime?>("MinedAt")
                         .HasColumnType("timestamp with time zone");
 

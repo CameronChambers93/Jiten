@@ -1,8 +1,9 @@
 namespace Jiten.Core.Data.User;
 
 /// <summary>
-/// A word the user mined into Anki, with the sentences Jiten keeps for it (n1miner's sentence store). Jiten is the
-/// source of truth for the sentences and writes them out to the word's Anki note.
+/// A word's sentence list (n1miner's sentence store), whether or not the word has an Anki note: sentences saved in Jiten
+/// and those imported from or mined into Anki. Jiten is the source of truth for the sentences and writes them out to the
+/// word's Anki note, when it has one.
 /// </summary>
 public class MinedWord
 {
@@ -130,6 +131,12 @@ public class MinedSentence
     /// are rebuilt from it by the next Sync.
     /// </summary>
     public bool NeedsRebuild { get; set; }
+
+    /// <summary>
+    /// Kept for Jiten only: the sentence is in the word's list but Sync doesn't write it to the word's Anki card. Mining
+    /// it to Anki clears this, with the card's parts (English, furigana, media) built then.
+    /// </summary>
+    public bool JitenOnly { get; set; }
 
     /// <summary>The game, show or site it came from, as known (GSM's Game:: tag, the card's source, the page's host). Stored on the occurrence, like the media.</summary>
     public string? SourceTitle { get; set; }
