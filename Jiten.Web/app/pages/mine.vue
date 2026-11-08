@@ -642,6 +642,7 @@
                     />
                     <MineSentenceButton
                       boxed
+                      page="mine"
                       :sentence="sentence"
                       :word-id="item.word.wordId"
                       :reading-index="item.word.readingIndex"

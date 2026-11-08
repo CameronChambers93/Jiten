@@ -8,15 +8,14 @@ import {
   miningOf,
   PART_ROLES,
   partsOffRoles,
-  pickTarget,
   setupQuery,
   type AnkiNoteTypeSetup,
-  type CardTargets,
   type FieldRole,
   type MiningParts,
   type MiningSettings,
   type NewCardTarget,
 } from '~/utils/ankiSetups';
+import type { BuildChoice, PipelineEnglish } from '~/utils/pipelines';
 import { mainFieldValues, noteWriteFields, type MainFields, type NoteWrite } from '~/utils/ankiNoteWrite';
 import { DEFAULT_EMPTY_FIELDS, emptyFieldWarnings, failureReason, MineDenied, rolesWith, type EmptyReasons } from '~/utils/miningWarnings';
 import type { AnkiNoteInfo } from '~/utils/minedImport';
@@ -115,16 +114,18 @@ async function blobToBase64(blob: Blob): Promise<string> {
 
 export function useMiningCards() {
   const { $api } = useNuxtApp();
-  const { forCardTranslation, loadOptions: loadTranslationOptions } = useSentenceTranslation();
+  const { forCardWith, loadOptions: loadTranslationOptions } = useSentenceTranslation();
   const { importNotes } = useMinedImport();
   const store = useJitenStore();
   const anki = useAnkiSetups();
-  if (import.meta.client) anki.load().catch(() => {});
+  const pipelines = usePipelines();
+  if (import.meta.client) {
+    anki.load().catch(() => {});
+    pipelines.load().catch(() => {});
+  }
 
-  const targets = computed(() => anki.cardTargets.value as CardTargets);
-
-  /** The audio padding every target shares. */
-  const settings = computed(() => ({ padStartMs: targets.value.padStartMs, padEndMs: targets.value.padEndMs }));
+  /** The padding for listening to a line on a page; a card's comes from its pipeline's Build step. */
+  const settings = pipelines.previewPadding;
 
   function rolesOf(modelName: string): Record<string, FieldRole> {
     return (anki.setupFor(modelName)?.fieldRoles ?? {}) as Record<string, FieldRole>;
@@ -134,26 +135,20 @@ export function useMiningCards() {
     return !!t.deckName && !!t.modelName && Object.keys(rolesOf(t.modelName)).length > 0;
   }
 
-  /** The last target, which takes every line the others don't, has a deck, a note type and field roles. */
-  const configured = computed(() => {
-    const list = targets.value.targets;
-    return list.length > 0 && targetReady(list[list.length - 1]!);
-  });
+  /** Anki is set up for mining: some note type has field roles. Where a card goes is the pipeline's. */
+  const configured = computed(() => anki.miningSetups.value.some((s) => Object.keys(s.fieldRoles).length > 0));
 
-  /** The target a new card for the line goes to. */
-  function targetFor(sentence: ExampleSentence): NewCardTarget {
-    return pickTarget(targets.value, sentence);
-  }
-
-  /** The note type's mining settings, with the defaults. */
+  /** The note type's mining settings, with the defaults; its parts aren't used for mining any more (the pipeline's are). */
   function miningFor(modelName: string): MiningSettings {
     return miningOf(anki.setupFor(modelName));
   }
 
-  function fetchAudio(sentenceId: number): Promise<Blob> {
+  type Padding = { padStartMs: number; padEndMs: number };
+
+  function fetchAudio(sentenceId: number, pad: Padding = settings.value): Promise<Blob> {
     return $api<Blob>(`sentence-media/${sentenceId}/audio`, {
       responseType: 'blob',
-      query: { padStartMs: settings.value.padStartMs, padEndMs: settings.value.padEndMs },
+      query: { padStartMs: pad.padStartMs, padEndMs: pad.padEndMs },
     });
   }
 
@@ -162,10 +157,10 @@ export function useMiningCards() {
   }
 
   /** The clip with sound, padded like the audio. */
-  function fetchVideo(sentenceId: number): Promise<Blob> {
+  function fetchVideo(sentenceId: number, pad: Padding = settings.value): Promise<Blob> {
     return $api<Blob>(`sentence-media/${sentenceId}/video`, {
       responseType: 'blob',
-      query: { padStartMs: settings.value.padStartMs, padEndMs: settings.value.padEndMs },
+      query: { padStartMs: pad.padStartMs, padEndMs: pad.padEndMs },
     });
   }
 
@@ -177,12 +172,13 @@ export function useMiningCards() {
     sentenceId: number,
     wantAudio: boolean,
     wantPicture: boolean,
-    wantVideo: boolean
+    wantVideo: boolean,
+    pad: Padding
   ): Promise<{ audio: CardFile | null; picture: CardFile | null; video: CardFile | null; reasons: EmptyReasons }> {
     const reasons: EmptyReasons = {};
     const audio = async (): Promise<CardFile | null> => {
       try {
-        return { blob: await fetchAudio(sentenceId), filename: `jiten_${sentenceId}.mp3` };
+        return { blob: await fetchAudio(sentenceId, pad), filename: `jiten_${sentenceId}.mp3` };
       } catch (e) {
         if (!isNotFound(e)) {
           reasons.sentenceAudio = failureReason('Cutting the audio', e);
@@ -208,7 +204,7 @@ export function useMiningCards() {
     };
     const video = async (): Promise<CardFile | null> => {
       try {
-        return { blob: await fetchVideo(sentenceId), filename: `jiten_${sentenceId}.webm` };
+        return { blob: await fetchVideo(sentenceId, pad), filename: `jiten_${sentenceId}.webm` };
       } catch (e) {
         reasons.video = isNotFound(e) ? 'this title has no linked video' : failureReason('Cutting the video clip', e);
         return null;
@@ -218,13 +214,15 @@ export function useMiningCards() {
     return { audio: a, picture: p, video: v, reasons };
   }
 
-  /** The English a card gets, with why there's none: null and no reason when card English is off. */
-  async function cardEnglish(sentenceId: number): Promise<{ text: string | null; origin: string | null; reason?: string }> {
+  /** The English a card gets with the pipeline's choice, with why there's none: null and no reason when it gets none. */
+  async function cardEnglish(sentenceId: number, english: PipelineEnglish): Promise<{ text: string | null; origin: string | null; reason?: string }> {
     try {
-      const translation = await forCardTranslation(sentenceId);
+      const translation = await forCardWith(sentenceId, english);
       if (translation?.text) return { text: escapeFieldText(translation.text), origin: translation.origin };
       const mode = (await loadTranslationOptions())?.cardMode;
-      return mode === 'off' || !mode ? { text: null, origin: null } : { text: null, origin: null, reason: 'no subtitles or AI translation for this line' };
+      if (mode === 'off' || !mode || english === 'none') return { text: null, origin: null };
+      const allowed = english === 'subtitlesThenAi' && mode === 'subtitlesThenAi';
+      return { text: null, origin: null, reason: allowed ? 'no subtitles or AI translation for this line' : 'no subtitles for this line' };
     } catch (e) {
       // A failed translation leaves the sentence without English rather than losing it.
       return { text: null, origin: null, reason: failureReason('Translation', e) };
@@ -237,12 +235,13 @@ export function useMiningCards() {
    */
   async function buildSentence(
     sentence: ExampleSentence,
-    want: { audio: boolean; picture: boolean; english: boolean; video: boolean }
+    want: { audio: boolean; picture: boolean; english: boolean; video: boolean },
+    build: Pick<BuildChoice, 'english' | 'padStartMs' | 'padEndMs'>
   ): Promise<BuiltSentence> {
     const [media, english] = await Promise.all([
-      cardMedia(sentence.sentenceId, want.audio, want.picture, want.video),
+      cardMedia(sentence.sentenceId, want.audio, want.picture, want.video, build),
       want.english
-        ? cardEnglish(sentence.sentenceId)
+        ? cardEnglish(sentence.sentenceId, build.english)
         : Promise.resolve({ text: null, origin: null } as { text: string | null; origin: string | null; reason?: string }),
     ]);
     const reasons: EmptyReasons = { ...media.reasons };
@@ -280,11 +279,11 @@ export function useMiningCards() {
   }
 
   /**
-   * Whether mining cuts the clip for a note type: its video part is on, and something shows it, a field with the Video
-   * role or the rotation script's sentence list, from v2 (which plays it in the picture slot; v1 can't show it).
+   * Whether mining cuts the clip for a note type: the pipeline's video part is on, and something shows it, a field with
+   * the Video role or the rotation script's sentence list, from v2 (which plays it in the picture slot; v1 can't show it).
    */
-  function wantsVideo(modelName: string): boolean {
-    if (!miningFor(modelName).parts.video) return false;
+  function wantsVideo(modelName: string, parts: MiningParts): boolean {
+    if (!parts.video) return false;
     const setup = anki.setupFor(modelName);
     return !!setup && (!!fieldFor(setup.fieldRoles, 'video') || (setup.sentenceList === 'script' && (setup.scriptVersion ?? 0) >= 2));
   }
@@ -298,16 +297,16 @@ export function useMiningCards() {
    * The note type's roles reported after the writes: those that warn, and those that deny but still ended up empty.
    * Parts the note type turns off aren't reported.
    */
-  function warnRoles(modelName: string): readonly FieldRole[] {
+  function warnRoles(modelName: string, parts: MiningParts): readonly FieldRole[] {
     const m = miningFor(modelName);
-    const off = partsOffRoles(m.parts);
+    const off = partsOffRoles(parts);
     return rolesWith(m.emptyFields ?? DEFAULT_EMPTY_FIELDS, 'warn', 'deny').filter((r) => !off.includes(r));
   }
 
   /** The note type's roles that stop mining when they would be empty. */
-  function denyRoles(modelName: string): FieldRole[] {
+  function denyRoles(modelName: string, parts: MiningParts): FieldRole[] {
     const m = miningFor(modelName);
-    const off = partsOffRoles(m.parts);
+    const off = partsOffRoles(parts);
     return rolesWith(m.emptyFields ?? DEFAULT_EMPTY_FIELDS, 'deny').filter((r) => !off.includes(r));
   }
 
@@ -422,12 +421,12 @@ export function useMiningCards() {
    * Adds the sentence to the word's existing note instead of creating another: it joins the word's sentences in the
    * store, its media goes into Anki's collection, and the kept note's Sentences field is rewritten. Notes not in the
    * store yet (a Yomitan card never synced) are imported first, so their own sentence stays on the card, first in the
-   * rotation. The kept note's note type decides the parts built and the empty-field policies.
+   * rotation. The pipeline's Build step decides the parts built; the kept note's note type, the empty-field policies.
    */
-  async function addToExistingNote(sentence: ExampleSentence, noteIds: number[], keptInfo?: AnkiNoteInfo | null): Promise<MinedResult> {
+  async function addToExistingNote(sentence: ExampleSentence, noteIds: number[], keptInfo: AnkiNoteInfo | null | undefined, build: BuildChoice): Promise<MinedResult> {
     const kept = keptInfo !== undefined ? keptInfo : await keptNote(noteIds);
     const modelName = kept?.modelName ?? '';
-    const { parts } = miningFor(modelName);
+    const { parts } = build;
     const { ankiNoteIds, withoutSentence } = await $api<{ ankiNoteIds: number[]; withoutSentence?: number[] }>('mined/notes');
     const known = new Set(ankiNoteIds);
     const missing = noteIds.filter((id) => !known.has(id));
@@ -446,11 +445,11 @@ export function useMiningCards() {
       if (failed) throw new Error(failed.error ?? "Couldn't read the existing note");
     }
 
-    const built = await buildSentence(sentence, { ...parts, video: wantsVideo(modelName) });
-    const builtParts = builtPartRoles({ ...parts, video: wantsVideo(modelName) });
+    const built = await buildSentence(sentence, { ...parts, video: wantsVideo(modelName, parts) }, build);
+    const builtParts = builtPartRoles({ ...parts, video: wantsVideo(modelName, parts) });
 
     // Denied parts stop the sentence before the store or the note changes.
-    const deny = denyRoles(modelName);
+    const deny = denyRoles(modelName, parts);
     if (deny.length) {
       const lines = emptyFieldWarnings({ fieldRoles: {}, fields: {}, warn: deny, reasons: built.reasons, parts: builtParts });
       if (deny.includes('sentenceList') && kept && listFieldMissing(kept.modelName, kept.fields)) lines.push(missingListWarning(kept.modelName));
@@ -458,7 +457,7 @@ export function useMiningCards() {
     }
 
     const result = await $api<AddedSentence>('mined/sentences', { method: 'POST', body: { ankiNoteId: noteIds[0], ...built.body } });
-    const warnings = result.added ? await writeAndCheck(result.write, built.reasons, builtParts, modelName) : [];
+    const warnings = result.added ? await writeAndCheck(result.write, built.reasons, builtParts, modelName, parts) : [];
     return { ankiNoteId: result.ankiNoteId, added: result.added, sentences: result.sentences, warnings };
   }
 
@@ -466,8 +465,8 @@ export function useMiningCards() {
    * Writes the kept note and lists what was left empty: the list field, and the main fields when they were written. The
    * added sentence's English, audio and picture (`parts`) are stored with it, so their failures are listed by reason.
    */
-  async function writeAndCheck(write: NoteWrite | null, reasons: EmptyReasons, parts: FieldRole[], modelName: string): Promise<string[]> {
-    const warn = warnRoles(write?.modelName ?? modelName);
+  async function writeAndCheck(write: NoteWrite | null, reasons: EmptyReasons, parts: FieldRole[], modelName: string, built: MiningParts): Promise<string[]> {
+    const warn = warnRoles(write?.modelName ?? modelName, built);
     const partsOnly = () => emptyFieldWarnings({ fieldRoles: {}, fields: {}, warn, reasons, parts });
     if (!write) return partsOnly();
     let done: Awaited<ReturnType<typeof writeNote>>;
@@ -489,23 +488,28 @@ export function useMiningCards() {
 
   /**
    * Creates the note in Anki through AnkiConnect, then records it in the sentence store at once. Its sentence fields are
-   * the main fields Sync would write, from the same sentence the store keeps. The note goes to the target picked for the
-   * line, and its note type decides the parts built and the empty-field policies. `keptModelName` is the note type of the
-   * word's older note when it has one ("Create a new note"): that note gets the sentence list, so its note type decides
-   * whether a missing list field is denied.
+   * the main fields Sync would write, from the same sentence the store keeps. The note goes to the pipeline's target for
+   * the line with its tags; the Build step decides the parts built, and the note type the empty-field policies.
+   * `keptModelName` is the note type of the word's older note when it has one ("Create a new note"): that note gets the
+   * sentence list, so its note type decides whether a missing list field is denied.
    */
-  async function addCard(item: DeckIPlusOneSentence, keptModelName?: string | null): Promise<MinedResult> {
+  async function addCard(
+    item: DeckIPlusOneSentence,
+    keptModelName: string | null | undefined,
+    plan: { target: NewCardTarget; build: BuildChoice }
+  ): Promise<MinedResult> {
     const { sentence, word } = item;
+    const { target, build } = plan;
     await anki.load();
-    const target = targetFor(sentence);
     if (!targetReady(target))
-      throw new Error(`The card target for this line (${target.deckName || 'no deck'}, ${target.modelName || 'no note type'}) isn't set up. Check Card settings.`);
+      throw new Error(
+        `The target for this line (${target.deckName || 'no deck'}, ${target.modelName || 'no note type'}) isn't set up. Check the pipeline's Anki step and the note type's field roles.`
+      );
     const mapping = rolesOf(target.modelName);
-    const { parts } = miningFor(target.modelName);
+    const { parts } = build;
     const off = partsOffRoles(parts);
     const wanted = new Set(Object.values(mapping).filter((r) => !off.includes(r)));
-    // The stored sentence also joins an older kept note's list, so it gets the parts that note type builds too.
-    const keptParts = keptModelName ? miningFor(keptModelName).parts : null;
+    // The stored sentence also joins an older kept note's list, which may show a video the new note type doesn't.
     const reasons: EmptyReasons = {};
 
     const [details, built, { targetWordTemplate }] = await Promise.all([
@@ -516,12 +520,16 @@ export function useMiningCards() {
             return null;
           })
         : null,
-      buildSentence(sentence, {
-        audio: wanted.has('sentenceAudio') || !!keptParts?.audio,
-        picture: wanted.has('picture') || !!keptParts?.picture,
-        english: wanted.has('sentenceEnglish') || !!keptParts?.english,
-        video: wantsVideo(target.modelName) || (!!keptModelName && wantsVideo(keptModelName)),
-      }),
+      buildSentence(
+        sentence,
+        {
+          audio: wanted.has('sentenceAudio') || (!!keptModelName && parts.audio),
+          picture: wanted.has('picture') || (!!keptModelName && parts.picture),
+          english: wanted.has('sentenceEnglish') || (!!keptModelName && parts.english),
+          video: wantsVideo(target.modelName, parts) || (!!keptModelName && wantsVideo(keptModelName, parts)),
+        },
+        build
+      ),
       $api<{ targetWordTemplate: string }>('mined/settings'),
     ]);
     Object.assign(reasons, built.reasons);
@@ -558,9 +566,9 @@ export function useMiningCards() {
     Object.assign(fields, mainFieldValues(main, mapping));
 
     // Every field is known now, so a denied role that would be empty stops the card before Anki has it.
-    const deny = denyRoles(target.modelName);
+    const deny = denyRoles(target.modelName, parts);
     const listModel = keptModelName || target.modelName;
-    const denyList = denyRoles(listModel).includes('sentenceList');
+    const denyList = denyRoles(listModel, parts).includes('sentenceList');
     if (deny.length || denyList) {
       const planned = Object.fromEntries(Object.keys(mapping).map((name) => [name, { value: fields[name] ?? '' }]));
       const lines = emptyFieldWarnings({ fieldRoles: mapping, fields: planned, warn: deny, reasons, roles: [...wanted].filter((r) => r !== 'sentenceList') });
@@ -608,7 +616,7 @@ export function useMiningCards() {
       try {
         // The server has recorded the main fields already.
         const done = await writeNote(write, undefined, false);
-        if (done.missingList && warnRoles(write.modelName).includes('sentenceList')) warnings.push(missingListWarning(write.modelName));
+        if (done.missingList && warnRoles(write.modelName, parts).includes('sentenceList')) warnings.push(missingListWarning(write.modelName));
         listWritten = write.ankiNoteId === ankiNoteId && write.sentencesHtml != null && !done.missingList;
         if (write.ankiNoteId === ankiNoteId) current = done.fields;
       } catch (e) {
@@ -618,7 +626,7 @@ export function useMiningCards() {
     }
     current ??= await noteFields(ankiNoteId);
     const roles = [...wanted].filter((r) => r !== 'sentenceList' || listWritten);
-    warnings.push(...emptyFieldWarnings({ fieldRoles: mapping, fields: current, warn: warnRoles(target.modelName), reasons, roles }));
+    warnings.push(...emptyFieldWarnings({ fieldRoles: mapping, fields: current, warn: warnRoles(target.modelName, parts), reasons, roles }));
     return { ankiNoteId, added: true, sentences: recorded?.sentences ?? 1, warnings, target };
   }
 
@@ -631,8 +639,7 @@ export function useMiningCards() {
     addCard,
     existingNotes,
     keptNote,
-    miningFor,
-    targetFor,
+    targetReady,
     wordsInAnki,
     writeNote,
     recordMainWritten,
@@ -651,7 +658,7 @@ export function useMiningCards() {
     let failed = 0;
     for (const s of pending) {
       try {
-        const { body } = await buildSentence(s.sentence, { audio: false, picture: false, english: true });
+        const { body } = await buildSentence(s.sentence, { audio: false, picture: false, english: true, video: false }, { english: 'subtitlesThenAi', ...settings.value });
         await $api(`mined/sentences/${s.minedSentenceId}/rebuild`, {
           method: 'POST',
           body: { sentence: body.sentence, furigana: body.furigana, english: body.english, englishOrigin: body.englishOrigin },

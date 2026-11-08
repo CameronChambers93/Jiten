@@ -197,6 +197,7 @@ public class UserDbContext : IdentityDbContext<User>
                 entity.Property(us => us.DismissedNoticesJson).HasColumnType("jsonb").HasDefaultValue("[]");
                 entity.Property(us => us.GrantedNoticesJson).HasColumnType("jsonb").HasDefaultValue("[]");
                 entity.Property(us => us.AnkiCardTargetJson).HasColumnType("jsonb").HasDefaultValue("{}");
+                entity.Property(us => us.MiningPipelinesJson).HasColumnType("jsonb").HasDefaultValue("{}");
             }
             else
             {
@@ -206,6 +207,7 @@ public class UserDbContext : IdentityDbContext<User>
                 entity.Property(us => us.DismissedNoticesJson).HasDefaultValue("[]");
                 entity.Property(us => us.GrantedNoticesJson).HasDefaultValue("[]");
                 entity.Property(us => us.AnkiCardTargetJson).HasDefaultValue("{}");
+                entity.Property(us => us.MiningPipelinesJson).HasDefaultValue("{}");
             }
 
             entity.HasOne<User>()

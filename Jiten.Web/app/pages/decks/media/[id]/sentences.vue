@@ -478,7 +478,7 @@
                       :loading="audioLoading === sentence.sentenceId"
                       @click="playSentence(sentence.sentenceId, sentence.text)"
                     />
-                    <MineSentenceButton boxed :sentence="sentence" :word-id="group.word.wordId" :reading-index="group.word.readingIndex" />
+                    <MineSentenceButton boxed page="deckSentences" :sentence="sentence" :word-id="group.word.wordId" :reading-index="group.word.readingIndex" />
                   </div>
                 </div>
               </li>

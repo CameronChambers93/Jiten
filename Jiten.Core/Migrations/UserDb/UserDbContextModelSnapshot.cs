@@ -1686,6 +1686,12 @@ namespace Jiten.Core.Migrations.UserDb
                         .HasColumnType("jsonb")
                         .HasDefaultValue("{}");
 
+                    b.Property<string>("MiningPipelinesJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasDefaultValue("{}");
+
                     b.Property<string>("SmartDeckJson")
                         .IsRequired()
                         .ValueGeneratedOnAdd()

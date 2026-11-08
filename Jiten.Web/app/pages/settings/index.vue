@@ -83,6 +83,12 @@
           to="/settings/anki"
           description="Which note types Sync reads and writes, their field roles, known words from Anki and the card rotation script."
         />
+        <SettingsTile
+          icon="pi pi-sitemap"
+          title="Pipelines"
+          to="/settings/pipelines"
+          description="What the sentence button does: where new cards go, what's built for them, tags, and each page's default."
+        />
         <SettingsTile icon="pi pi-image" title="Card Media" to="/settings/card-media" description="Manage images and audio on your cards." plus />
       </div>
     </section>

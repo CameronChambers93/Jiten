@@ -64,9 +64,21 @@ export function useSentenceTranslation() {
     return (await translate(sentenceId, o.cardMode === 'subtitlesThenAi' && o.aiAvailable)) ?? null;
   }
 
+  /**
+   * The English a card gets with a pipeline's choice, which the site's card mode limits: AI only when the card mode allows
+   * it, and none when it is off. Null when it gets none.
+   */
+  async function forCardWith(sentenceId: number, english: 'subtitlesThenAi' | 'subtitlesOnly' | 'none'): Promise<SentenceTranslation | null> {
+    if (english === 'none') return null;
+    const o = await loadOptions();
+    if (!o || o.cardMode === 'off') return null;
+    const ai = english === 'subtitlesThenAi' && o.cardMode === 'subtitlesThenAi' && o.aiAvailable;
+    return (await translate(sentenceId, ai)) ?? null;
+  }
+
   async function forCard(sentenceId: number): Promise<string> {
     return (await forCardTranslation(sentenceId))?.text ?? '';
   }
 
-  return { options: readonly(options), translations: readonly(translations), loadOptions, translate, translateMany, forCard, forCardTranslation };
+  return { options: readonly(options), translations: readonly(translations), loadOptions, translate, translateMany, forCard, forCardTranslation, forCardWith };
 }
