@@ -115,6 +115,17 @@ public class SentenceFlagService(UserDbContext userContext, IDbContextFactory<Ji
         return new AdminSentenceFlagPage(items.Skip(offset).Take(limit).ToList(), items.Count);
     }
 
+    /// <summary>Closes the user's open flag on a line, if they have one, with this resolution.</summary>
+    public Task<int> CloseAsync(string userId, long sentenceId, string resolution, CancellationToken ct) =>
+        userContext.SentenceFlags.Where(f => f.UserId == userId && f.ExampleSentenceId == sentenceId && f.ResolvedAt == null)
+                   .ExecuteUpdateAsync(u => u.SetProperty(f => f.ResolvedAt, DateTime.UtcNow).SetProperty(f => f.Resolution, resolution), ct);
+
+    /// <summary>Closes every open flag on a line as "not a problem", bringing it back for everyone who flagged it; returns how many.</summary>
+    public Task<int> RejectAsync(long sentenceId, CancellationToken ct) =>
+        userContext.SentenceFlags.Where(f => f.ExampleSentenceId == sentenceId && f.ResolvedAt == null)
+                   .ExecuteUpdateAsync(u => u.SetProperty(f => f.ResolvedAt, DateTime.UtcNow)
+                                             .SetProperty(f => f.Resolution, SentenceFlagResolution.Rejected), ct);
+
     /// <summary>Closes every open flag on a line as fixed, bringing it back for everyone who flagged it; returns how many.</summary>
     public Task<int> MarkFixedAsync(long sentenceId, CancellationToken ct) =>
         userContext.SentenceFlags.Where(f => f.ExampleSentenceId == sentenceId && f.ResolvedAt == null)

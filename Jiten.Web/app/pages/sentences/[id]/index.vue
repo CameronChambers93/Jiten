@@ -67,7 +67,8 @@
   const picture = ref<string | null>(null);
 
   async function loadPicture() {
-    picture.value = detail.value?.sentence.hasVideo ? await loadSentencePicture(sentenceId.value) : null;
+    const sentence = detail.value?.sentence;
+    picture.value = sentence?.hasVideo ? await loadSentencePicture(sentenceId.value, sentence.pictureKey ?? '') : null;
   }
 
   // ---- Clip: the screenshot's place once it's cut, with the screenshot as its poster ----
@@ -78,7 +79,7 @@
     clip.value = null;
     const id = sentenceId.value;
     if (!detail.value?.sentence.hasVideo) return;
-    const url = await loadSentenceVideo(id);
+    const url = await loadSentenceVideo(id, detail.value.sentence.clipKey ?? '');
     // A link to another sentence may have loaded meanwhile.
     if (id === sentenceId.value) clip.value = url;
   }
@@ -253,9 +254,17 @@
             <p v-if="english" class="text-gray-600 dark:text-gray-300">
               {{ english.text }}
               <i v-if="english.origin === 'ai'" class="pi pi-sparkles text-xs text-gray-400" aria-label="AI translation" />
+              <i v-else-if="english.origin === 'user'" class="pi pi-pencil text-xs text-gray-400" aria-label="Fixed English" />
             </p>
-            <div class="flex flex-wrap gap-2">
+            <div class="flex flex-wrap items-center gap-2">
               <Button label="Listen" icon="pi pi-play" size="small" severity="secondary" outlined :loading="audioLoading" @click="play" />
+              <Button label="Fix" icon="pi pi-pencil" size="small" severity="secondary" outlined @click="navigateTo(`/sentences/${sentenceId}/fix`)" />
+              <Tag
+                v-if="detail.sentence.fixed"
+                v-tooltip.top="detail.sentence.fixed === 'mine' ? 'You fixed this line; only you see your version.' : 'This line was fixed for everyone.'"
+                :value="detail.sentence.fixed === 'mine' ? 'Your fix' : 'Fixed'"
+                severity="success"
+              />
               <Button
                 v-if="!english && translationOptions?.aiAvailable && translationOptions.pageMode !== 'off'"
                 label="Translate"

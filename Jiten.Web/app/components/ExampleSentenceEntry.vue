@@ -30,7 +30,7 @@
     { showActions: true, showTts: true, showMine: true, showPicture: true, showPageLink: true }
   );
 
-  const emit = defineEmits<{
+  defineEmits<{
     favourited: [];
   }>();
 
@@ -38,8 +38,6 @@
   const localiseTitle = useLocaliseTitle();
   const store = useJitenStore();
   const isNsfw = isTextNsfw(props.exampleSentence.text);
-  const { limits: planLimits } = useJitenPlus();
-  const sentenceLimitMessage = computed(() => `Maximum of ${planLimits.value.customSentencesPerWord} custom sentences reached`);
   const revealedLocally = ref(false);
   const isRevealed = computed(() => store.displayAllNsfw || revealedLocally.value);
 
@@ -97,53 +95,21 @@
     return `/sentences/${props.exampleSentence.sentenceId}${query}`;
   });
 
-  const canEdit = computed(() => authStore.isAuthenticated && props.wordId != null && props.readingIndex != null);
-  const editing = ref(false);
-
-  const markedText = computed(() => {
-    const { text, wordPosition, wordLength } = props.exampleSentence;
-    if (wordPosition < 0 || wordLength <= 0 || wordPosition >= text.length) return text;
-    const before = text.substring(0, wordPosition);
-    const word = text.substring(wordPosition, wordPosition + wordLength);
-    const after = text.substring(wordPosition + wordLength);
-    return `${before}**${word}**${after}`;
-  });
+  // Fix opens the fix screen (the pencil used to copy the line into a custom sentence; typed ones keep the heading's pencil).
+  const fixLink = computed(() => `/sentences/${props.exampleSentence.sentenceId}/fix`);
+  const fixTitle = computed(() =>
+    props.exampleSentence.fixed === 'mine' ? 'Your fix: change it' : props.exampleSentence.fixed === 'shared' ? 'Fixed for everyone: fix it again' : 'Fix this sentence'
+  );
 
   const flagging = ref(false);
   const sentenceFlags = useSentenceFlags();
   const flag = computed(() => sentenceFlags.flagFor(props.exampleSentence.sentenceId));
   const flagged = computed(() => flag.value != null);
   onMounted(sentenceFlags.ensureLoaded);
-
-  const sentenceSource = computed(() => {
-    const { sourceDeckParent, sourceDeck } = props.exampleSentence;
-    let source = '';
-    if (sourceDeckParent) source += localiseTitle(sourceDeckParent) + ' - ';
-    if (sourceDeck) source += localiseTitle(sourceDeck);
-    return clampSentenceSource(source);
-  });
-
-  // Editing a corpus sentence creates a new custom sentence from the edited copy.
-  function onEdited() {
-    editing.value = false;
-    emit('favourited');
-  }
 </script>
 
 <template>
   <div class="flex flex-col">
-    <InlineSentenceEditor
-      v-if="editing"
-      :word-id="wordId"
-      :reading-index="readingIndex"
-      :initial-text="markedText"
-      :initial-source="sentenceSource"
-      :user-sentence-id="null"
-      class="mb-2"
-      @saved="onEdited"
-      @cancel="editing = false"
-    />
-    <template v-else>
       <div class="flex items-start gap-2">
         <blockquote
           class="relative min-w-0 flex-1 border-l-4 border-primary-500 pl-5 pr-3 py-3 bg-gray-50 dark:bg-gray-900 rounded-r shadow-sm overflow-hidden"
@@ -159,16 +125,16 @@
               :word-id="wordId"
               :reading-index="readingIndex"
             />
-            <button
-              v-if="canEdit && actionsVisible"
+            <NuxtLink
+              v-if="actionsVisible && authStore.isAuthenticated && exampleSentence.sentenceId > 0"
+              :to="fixLink"
               class="inline-flex items-center justify-center transition-colors"
-              :class="atLimit ? 'text-surface-300 dark:text-surface-400 cursor-not-allowed' : 'text-surface-400 hover:text-primary-500 cursor-pointer'"
-              :disabled="atLimit"
-              :title="atLimit ? sentenceLimitMessage : 'Edit sentence'"
-              @click="editing = true"
+              :class="exampleSentence.fixed ? 'text-primary-500' : 'text-surface-400 hover:text-primary-500'"
+              :title="fixTitle"
+              :aria-label="fixTitle"
             >
               <i class="pi pi-pencil text-sm" />
-            </button>
+            </NuxtLink>
             <button
               v-if="actionsVisible && authStore.isAuthenticated && exampleSentence.sentenceId > 0"
               class="inline-flex items-center justify-center transition-colors"
@@ -212,7 +178,14 @@
             </div>
           </div>
         </blockquote>
-        <SentenceThumbnail v-if="pictureVisible" :key="exampleSentence.sentenceId" :sentence-id="exampleSentence.sentenceId" class="w-24 sm:w-32 shrink-0" />
+        <SentenceThumbnail
+          v-if="pictureVisible"
+          :key="`${exampleSentence.sentenceId}${exampleSentence.pictureKey ?? ''}`"
+          :sentence-id="exampleSentence.sentenceId"
+          :clip-key="exampleSentence.clipKey ?? ''"
+          :picture-key="exampleSentence.pictureKey ?? ''"
+          class="w-24 sm:w-32 shrink-0"
+        />
       </div>
       <div v-if="sourceVisible && hasSource" class="flex items-center mb-2">
         <span class="text-xs italic mr-2 ml-4">Source:</span>
@@ -237,7 +210,6 @@
           &nbsp; ({{ getMediaTypeText(exampleSentence.sourceDeck.mediaType) }})
         </div>
       </div>
-    </template>
     <SentenceFlagDialog
       v-if="flagging"
       :sentence-id="exampleSentence.sentenceId"

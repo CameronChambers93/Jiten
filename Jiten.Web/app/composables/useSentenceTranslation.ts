@@ -1,7 +1,7 @@
-/** A sentence's English, from the episode's English subtitles or an AI translation. */
+/** A sentence's English, from the episode's English subtitles, an AI translation, or a fix ('user'). */
 export interface SentenceTranslation {
   text: string;
-  origin: 'subtitles' | 'ai';
+  origin: 'subtitles' | 'ai' | 'user';
   provider: string | null;
   model: string | null;
   /** For subtitles, the release they came from. */
@@ -76,9 +76,15 @@ export function useSentenceTranslation() {
     return (await translate(sentenceId, ai)) ?? null;
   }
 
+  /** Drops a sentence's English, so it's read again (after a fix). */
+  function forget(sentenceId: number) {
+    const { [sentenceId]: _, ...rest } = translations.value;
+    translations.value = rest;
+  }
+
   async function forCard(sentenceId: number): Promise<string> {
     return (await forCardTranslation(sentenceId))?.text ?? '';
   }
 
-  return { options: readonly(options), translations: readonly(translations), loadOptions, translate, translateMany, forCard, forCardTranslation, forCardWith };
+  return { options: readonly(options), translations: readonly(translations), loadOptions, translate, translateMany, forCard, forCardTranslation, forCardWith, forget };
 }

@@ -303,10 +303,15 @@ public class MinedSyncService(UserDbContext userContext, IDbContextFactory<Jiten
         return kept.Count > 0 ? kept : sentences.OrderBy(s => s.SortOrder).Take(1).ToList();
     }
 
+    /// <summary>Fills in what the user's sentences read from their occurrences, with the user's own fixed texts.</summary>
     public async Task FillAsync(string userId, IReadOnlyCollection<MinedSentence> sentences, CancellationToken ct)
     {
+        var ids = sentences.Where(s => s.ExampleSentenceId != null).Select(s => s.ExampleSentenceId!.Value).Distinct().ToList();
+        var fixedTexts = await userContext.SentenceFixes.AsNoTracking()
+                                          .Where(f => f.UserId == userId && f.Text != null && ids.Contains(f.ExampleSentenceId))
+                                          .ToDictionaryAsync(f => f.ExampleSentenceId, f => f.Text!, ct);
         await using var context = await contextFactory.CreateDbContextAsync(ct);
-        await MinedLineStore.FillAsync(context, userId, sentences, ct);
+        await MinedLineStore.FillAsync(context, userId, sentences, ct, fixedTexts);
     }
 
     public async Task<string> TargetTemplateAsync(string userId, CancellationToken ct) =>

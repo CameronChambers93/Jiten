@@ -65,7 +65,7 @@
   const confirm = useConfirm();
   const anki = useAnkiSetups();
   const { importNotes } = useMinedImport();
-  const { writeNote, recordMainWritten, rebuildMovedSentences } = useMiningCards();
+  const { writeNote, recordMainWritten, rebuildMovedSentences, updateFixedMedia } = useMiningCards();
   const knownWords = useAnkiKnownWords();
 
   const running = ref(false);
@@ -216,6 +216,17 @@
           severity: 'warn',
           summary: `${moved.failed} sentence${moved.failed === 1 ? '' : 's'} not updated`,
           detail: 'They keep their current text and are tried again on the next Sync.',
+          life: 6000,
+        });
+      step.value = 'Cutting fixed clips again…';
+      const media = await updateFixedMedia();
+      if (media.updated)
+        toast.add({ severity: 'success', summary: `${media.updated} clip${media.updated === 1 ? '' : 's'} updated`, life: 4000 });
+      if (media.failed)
+        toast.add({
+          severity: 'warn',
+          summary: `${media.failed} clip${media.failed === 1 ? '' : 's'} not updated`,
+          detail: 'Their cards keep the old clip; they are tried again on the next Sync.',
           life: 6000,
         });
       step.value = 'Writing sentences to notes…';

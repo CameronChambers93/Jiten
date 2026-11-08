@@ -50,6 +50,11 @@
     isMain: boolean;
     sortOrder: number;
     flagged: boolean;
+    /** False when it's the only sentence the word's Anki card shows. */
+    removable: boolean;
+    /** Fixed clip and frame keys, for their URLs (see ExampleSentence.clipKey). */
+    clipKey: string;
+    pictureKey: string;
   }
 
   interface MinedNote {
@@ -84,6 +89,7 @@
 
   const { $api } = useNuxtApp();
   const toast = useToast();
+  const confirm = useConfirm();
   const { fetchAudio, fetchPicture, fetchVideo } = useMiningCards();
   const { importNotes } = useMinedImport();
   const flagList = ref<{ load: () => Promise<void> } | null>(null);
@@ -157,6 +163,24 @@
   }
 
   const flagging = ref<MinedSentence | null>(null);
+
+  function removeSentence(s: MinedSentence, expression: string) {
+    confirm.require({
+      header: `Remove from ${expression}`,
+      message: `Take this sentence off ${expression}'s list? The next Sync takes it off the card too.`,
+      acceptProps: { label: 'Remove', severity: 'danger' },
+      rejectProps: { label: 'Cancel', severity: 'secondary', outlined: true },
+      accept: async () => {
+        try {
+          await $api(`mined/sentences/${s.minedSentenceId}`, { method: 'DELETE' });
+          toast.add({ severity: 'success', summary: `Removed from ${expression}`, life: 4000 });
+          await refresh();
+        } catch (e) {
+          toast.add({ severity: 'error', summary: "Couldn't remove it", detail: extractApiError(e, 'The request failed'), life: 6000 });
+        }
+      },
+    });
+  }
 
   // Words
   const search = ref('');
@@ -280,14 +304,14 @@
   async function showClip(s: MinedSentence) {
     if (!canCut(s)) return;
     try {
-      const url = URL.createObjectURL(await fetchVideo(s.exampleSentenceId));
+      const url = URL.createObjectURL(await fetchVideo(s.exampleSentenceId, undefined, s.clipKey));
       cutMedia.value[s.minedSentenceId] = { ...cutMedia.value[s.minedSentenceId], video: url };
       return;
     } catch {
       // The screenshot below, or why there's neither
     }
     try {
-      const url = URL.createObjectURL(await fetchPicture(s.exampleSentenceId));
+      const url = URL.createObjectURL(await fetchPicture(s.exampleSentenceId, s.pictureKey));
       cutMedia.value[s.minedSentenceId] = { ...cutMedia.value[s.minedSentenceId], picture: url };
     } catch (e) {
       toast.add({ severity: 'warn', summary: 'No clip', detail: extractApiError(e, "Couldn't cut the clip"), life: 4000 });
@@ -406,6 +430,14 @@
                     <Tag v-if="s.isMain" value="Main" severity="info" />
                     <Tag v-if="s.flagged" value="Flagged" severity="danger" />
                     <button v-else-if="s.exampleSentenceId" class="underline hover:text-red-500" @click="flagging = s">Flag</button>
+                    <NuxtLink v-if="s.exampleSentenceId" :to="`/sentences/${s.exampleSentenceId}/fix`" class="underline hover:text-primary-500">Fix</NuxtLink>
+                    <button
+                      v-if="s.removable"
+                      class="underline hover:text-red-500"
+                      @click="removeSentence(s, (open[w.minedWordId] as MinedWord).expression)"
+                    >
+                      Remove
+                    </button>
                     <a v-if="s.sourceUrl && s.origin === 'web'" :href="s.sourceUrl" target="_blank" rel="noopener" class="underline">{{ s.sourceTitle }}</a>
                     <span v-else-if="s.sourceTitle">{{ s.sourceTitle }}</span>
                     <span v-if="s.minedAt">{{ new Date(s.minedAt).toLocaleDateString() }}</span>

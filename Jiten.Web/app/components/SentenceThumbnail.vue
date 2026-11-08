@@ -5,7 +5,7 @@
    * A sentence's screenshot, loaded when it scrolls into view. Clicking it opens the clip with sound, playing once, or the
    * enlarged screenshot when there's no clip. Renders nothing when there's no picture.
    */
-  const props = defineProps<{ sentenceId: number }>();
+  const props = withDefaults(defineProps<{ sentenceId: number; clipKey?: string; pictureKey?: string }>(), { clipKey: '', pictureKey: '' });
 
   const { load } = useSentencePicture();
   const { load: loadVideo } = useSentenceVideo();
@@ -22,7 +22,7 @@
       async (entries) => {
         if (!entries.some((e) => e.isIntersecting)) return;
         observer?.disconnect();
-        url.value = await load(props.sentenceId);
+        url.value = await load(props.sentenceId, props.pictureKey);
         missing.value = url.value == null;
       },
       { rootMargin: '200px' }
@@ -37,7 +37,7 @@
     if (video.value) return;
     videoLoading.value = true;
     try {
-      video.value = await loadVideo(props.sentenceId);
+      video.value = await loadVideo(props.sentenceId, props.clipKey);
     } finally {
       videoLoading.value = false;
     }

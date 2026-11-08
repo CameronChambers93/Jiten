@@ -135,6 +135,9 @@ public class JitenWebApplicationFactory : WebApplicationFactory<ApiProgram>, IAs
                     policy.AddAuthenticationSchemes(TestAuthHandler.SchemeName)
                           .RequireRole("Administrator"));
 
+            services.RemoveAll<Jiten.Api.Helpers.ISentenceTextParser>();
+            services.AddSingleton<Jiten.Api.Helpers.ISentenceTextParser, StubSentenceTextParser>();
+
             // Replace debounce service with no-op for testing
             services.RemoveAll<Jiten.Api.Services.ISrsDebounceService>();
             services.AddSingleton<Jiten.Api.Services.ISrsDebounceService, NoOpSrsDebounceService>();

@@ -177,8 +177,9 @@ public class MinedWordsController(MinedSentenceService mined, MinedSyncService s
             foreach (var s in group)
             {
                 var dto = dtos.GetValueOrDefault(s.ExampleSentenceId);
-                // The stored place is the occurrence that was mined, when a line holds the word twice
-                if (dto != null && s.TargetPosition is { } position && s.TargetLength is { } length && position + length <= dto.Text.Length)
+                // The stored place is the occurrence that was mined, when a line holds the word twice. It's a place in the line's
+                // text, so not in the user's own fixed text, where the word is found from that text's tokens instead.
+                if (dto is { Fixed: not "mine" } && s.TargetPosition is { } position && s.TargetLength is { } length && position + length <= dto.Text.Length)
                     dto = dto.ForWord(position, length);
                 s.Sentence = dto;
             }
@@ -301,5 +302,41 @@ public class MinedWordsController(MinedSentenceService mined, MinedSyncService s
     {
         if (userService.UserId is not { } userId) return Unauthorized();
         return await mined.GetAsync(userId, minedWordId, ct) is { } word ? Ok(word) : NotFound();
+    }
+
+    [HttpGet("media")]
+    [SwaggerOperation(Summary = "The caller's mined sentences whose cut media in Anki is behind their line's fix, with the names to store new cuts under")]
+    public async Task<IActionResult> MediaBehind(CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        return Ok(await mined.MediaBehindAsync(userId, ct));
+    }
+
+    [HttpPost("sentences/{minedSentenceId:long}/media")]
+    [SwaggerOperation(Summary = "Records the names re-cut media was stored under in Anki")]
+    public async Task<IActionResult> MediaStored(long minedSentenceId, [FromBody] MediaStoredRequest request, CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        try
+        {
+            return await mined.MediaStoredAsync(userId, minedSentenceId, request, ct) ? NoContent() : NotFound();
+        }
+        catch (ArgumentException e)
+        {
+            return BadRequest(new { message = e.Message });
+        }
+    }
+
+    [HttpDelete("sentences/{minedSentenceId:long}")]
+    [SwaggerOperation(Summary = "Removes a sentence from its word's list; the next Sync takes it off the card. Refused for the only sentence on the card.")]
+    public async Task<IActionResult> RemoveSentence(long minedSentenceId, CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        return await mined.RemoveSentenceAsync(userId, minedSentenceId, ct) switch
+        {
+            null => NotFound(),
+            false => Conflict(new { message = "It's the only sentence on the word's Anki card, or the sentence its Anki note was made with, so it can't be removed. Flag it to keep it off the card." }),
+            true => NoContent(),
+        };
     }
 }

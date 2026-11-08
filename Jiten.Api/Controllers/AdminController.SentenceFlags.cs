@@ -24,4 +24,14 @@ public partial class AdminController
         logger.LogInformation("Admin marked sentence {SentenceId} fixed, closing {Count} flags", sentenceId, closed);
         return Results.Ok(new { closed });
     }
+
+    /// <summary>Closes every open flag on a line as "not a problem": nothing was wrong, and the line comes back for everyone who flagged it.</summary>
+    [HttpPost("sentence-flags/{sentenceId:long}/reject")]
+    public async Task<IResult> RejectSentenceFlags([FromServices] SentenceFlagService flags, long sentenceId, CancellationToken ct)
+    {
+        var closed = await flags.RejectAsync(sentenceId, ct);
+        if (closed == 0) return Results.NotFound(new { message = "This line has no open flags." });
+        logger.LogInformation("Admin found nothing wrong with sentence {SentenceId}, closing {Count} flags", sentenceId, closed);
+        return Results.Ok(new { closed });
+    }
 }

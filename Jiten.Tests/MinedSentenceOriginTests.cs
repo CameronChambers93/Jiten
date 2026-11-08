@@ -19,6 +19,13 @@ public class MinedSentenceOriginTests
     }
 
     [Fact]
+    public void AFixedClipsNameStillNamesItsExampleSentence()
+    {
+        var origin = DetectedOrigin.From(Note(["jiten"], audio: "jiten_6954_0a1b2c3d.mp3"));
+        origin.ExampleSentenceId.Should().Be(6954);
+    }
+
+    [Fact]
     public void GsmGameTagNamesTheGame()
     {
         var origin = DetectedOrigin.From(Note(["Game::Example_Game", "GSM", "yomitan"], url: "<a href=\"http://localhost:55000/texthooker\">x</a>",

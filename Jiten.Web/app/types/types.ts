@@ -680,6 +680,12 @@ export interface ExampleSentence {
   words?: SentenceWord[] | null;
   /** The sentence's deck has a linked video, so it may have a screenshot and audio. */
   hasVideo?: boolean;
+  /** 'mine' when the caller fixed the line (text is their version), 'shared' when a fix was submitted to it. */
+  fixed?: 'mine' | 'shared' | null;
+  /** What a fixed clip adds to its Anki file names (jiten_{id}{clipKey}.mp3 and .webm); '' for the cues' clip. */
+  clipKey?: string;
+  /** The same for the screenshot (jiten_{id}{pictureKey}.jpg). */
+  pictureKey?: string;
 }
 
 export type ReadableSentenceSort = 'Random' | 'EasiestFirst' | 'HardestFirst';

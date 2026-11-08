@@ -61,6 +61,7 @@ public class UserDbContext : IdentityDbContext<User>
     public DbSet<MinedNote> MinedNotes { get; set; }
     public DbSet<MinedSentence> MinedSentences { get; set; }
     public DbSet<SentenceFlag> SentenceFlags { get; set; }
+    public DbSet<SentenceFix> SentenceFixes { get; set; }
     public DbSet<AnkiNoteTypeSetup> AnkiNoteTypeSetups { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -824,6 +825,20 @@ public class UserDbContext : IdentityDbContext<User>
             entity.HasOne<User>().WithMany().HasForeignKey(f => f.UserId).OnDelete(DeleteBehavior.Cascade);
 
             entity.HasIndex(f => new { f.UserId, f.ExampleSentenceId }).IsUnique().HasFilter("\"ResolvedAt\" IS NULL");
+            entity.HasIndex(f => f.ExampleSentenceId);
+        });
+
+        modelBuilder.Entity<SentenceFix>(entity =>
+        {
+            entity.HasKey(f => f.SentenceFixId);
+            if (isNpgsql)
+                entity.Property(f => f.UserId).HasConversion(guidToString).HasColumnType("uuid").IsRequired();
+            entity.Property(f => f.Text).HasMaxLength(1000);
+            entity.Property(f => f.English).HasMaxLength(2000);
+
+            entity.HasOne<User>().WithMany().HasForeignKey(f => f.UserId).OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasIndex(f => new { f.UserId, f.ExampleSentenceId }).IsUnique();
             entity.HasIndex(f => f.ExampleSentenceId);
         });
 

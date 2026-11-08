@@ -63,6 +63,7 @@
             <p v-if="f.note" class="text-sm text-gray-600 dark:text-gray-300 mt-1">{{ f.note }}</p>
           </div>
           <span class="flex items-center gap-1 shrink-0">
+            <Button v-if="f.text" label="Fix" icon="pi pi-pencil" size="small" text @click="navigateTo(`/sentences/${f.sentenceId}/fix`)" />
             <Button v-if="f.text" :label="f.reason ? 'Edit' : 'Add reason'" size="small" severity="secondary" text @click="editing = f" />
             <Button label="Dismiss" size="small" severity="secondary" text :loading="dismissing === f.sentenceFlagId" @click="dismiss(f)" />
           </span>

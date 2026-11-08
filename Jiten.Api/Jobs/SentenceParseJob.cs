@@ -37,7 +37,7 @@ public class SentenceParseJob(
             var tokensOf = new Dictionary<long, IReadOnlyList<SentenceToken>>();
             for (var i = 0; i < batch.Count; i++)
             {
-                var tokens = Locate(batch[i].Text, paragraphs[i]);
+                var tokens = SentenceTextParser.Locate(batch[i].Text, paragraphs[i]);
                 batch[i].Tokens = ExampleSentenceTokens.Encode(tokens);
                 batch[i].WordKeys = ExampleSentenceTokens.WordKeys(tokens, Random.Shared.Next(ExampleSentenceTokens.FineBucketCount));
                 tokensOf[batch[i].Id] = tokens;
@@ -49,25 +49,6 @@ public class SentenceParseJob(
         }
 
         if (parsed > 0) logger.LogInformation("Parsed {Parsed} private lines and marked the word on {Marked} mined sentences", parsed, marked);
-    }
-
-    /// <summary>The parsed words with their places in the text; a word that can't be placed or encoded is left out.</summary>
-    private static List<SentenceToken> Locate(string text, IEnumerable<DeckWord> words)
-    {
-        var tokens = new List<SentenceToken>();
-        var from = 0;
-        foreach (var word in words)
-        {
-            var (position, length) = TokenPositionHelper.FindTokenInSource(text, word.OriginalText, from);
-            if (position < 0) continue;
-            from = position + length;
-            if (!ExampleSentenceTokens.CanEncode(word.WordId, position, length)) continue;
-
-            tokens.Add(new SentenceToken(word.WordId, word.ReadingIndex, (byte)position, (byte)length, IsTarget: false,
-                                         IsFunctionWord: word.PartsOfSpeech.Any(p => p is PartOfSpeech.Particle or PartOfSpeech.Auxiliary)));
-        }
-
-        return tokens;
     }
 
     private async Task<int> MarkTargetsAsync(JitenDbContext context, List<Sentence> batch, Dictionary<long, IReadOnlyList<SentenceToken>> tokensOf,

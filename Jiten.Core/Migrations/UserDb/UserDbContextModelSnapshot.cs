@@ -978,6 +978,56 @@ namespace Jiten.Core.Migrations.UserDb
                     b.ToTable("MinedWords", "user");
                 });
 
+            modelBuilder.Entity("Jiten.Core.Data.User.SentenceFix", b =>
+                {
+                    b.Property<long>("SentenceFixId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("SentenceFixId"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("EndMs")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("English")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<long>("ExampleSentenceId")
+                        .HasColumnType("bigint");
+
+                    b.Property<int?>("PictureMs")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("StartMs")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Text")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<byte[]>("Tokens")
+                        .HasColumnType("bytea");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("SentenceFixId");
+
+                    b.HasIndex("ExampleSentenceId");
+
+                    b.HasIndex("UserId", "ExampleSentenceId")
+                        .IsUnique();
+
+                    b.ToTable("SentenceFixes", "user");
+                });
+
             modelBuilder.Entity("Jiten.Core.Data.User.SentenceFlag", b =>
                 {
                     b.Property<long>("SentenceFlagId")
@@ -1988,6 +2038,15 @@ namespace Jiten.Core.Migrations.UserDb
                 });
 
             modelBuilder.Entity("Jiten.Core.Data.User.MinedWord", b =>
+                {
+                    b.HasOne("Jiten.Core.Data.Authentication.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Jiten.Core.Data.User.SentenceFix", b =>
                 {
                     b.HasOne("Jiten.Core.Data.Authentication.User", null)
                         .WithMany()
