@@ -23,6 +23,12 @@ public class UserSettings
     /// <summary>Where new mined cards go: deck, note type, tags and audio padding (JSON, see the Anki sync card target).</summary>
     public string AnkiCardTargetJson { get; set; } = "{}";
 
+    /// <summary>
+    /// The user's sentence pipelines and each page's default (JSON, see the mining pipelines service). "{}" until the first
+    /// save; reads build them from <see cref="AnkiCardTargetJson"/> and the note type setups' mining settings until then.
+    /// </summary>
+    public string MiningPipelinesJson { get; set; } = "{}";
+
     /// <summary>When Sync last sent known words; cards unchanged since aren't sent again. Cleared when a setup's known words change.</summary>
     public DateTime? AnkiKnownWordsSyncedAt { get; set; }
 }

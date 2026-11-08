@@ -143,6 +143,7 @@
   // ---- Mining: the same flow as the Mine page, for any word of the sentence ----
   const cardSettingsVisible = ref(false);
   const { mine, choice: mineChoice, answer: answerMine } = useMineSentence();
+  const pipelines = usePipelines();
   const cardState = ref<Record<string, 'adding' | 'added'>>({});
 
   async function mineWord({ word, position, length }: SentenceDetailWord) {
@@ -154,10 +155,19 @@
     }
     const key = wordKey(word);
     cardState.value = { ...cardState.value, [key]: 'adding' };
-    const outcome = await mine(word, { ...sentence, wordPosition: position, wordLength: length });
-    if (outcome) {
+    // The sentence page's default pipeline; saving to the word's list comes with the sentence page's own button.
+    const pipeline = (await pipelines.load().then(() => pipelines.forPage('sentence')[0]).catch(() => undefined)) ?? null;
+    if (!pipeline) {
+      const { [key]: _, ...rest } = cardState.value;
+      cardState.value = rest;
+      toast.add({ severity: 'error', summary: "Couldn't load your pipelines", life: 5000, group: 'bottom' });
+      return;
+    }
+    const outcome = await mine(word, { ...sentence, wordPosition: position, wordLength: length }, pipeline);
+    if (outcome && outcome.kind !== 'kept') {
       cardState.value = { ...cardState.value, [key]: 'added' };
     } else {
+      if (outcome?.kind === 'kept') toast.add({ severity: 'info', summary: `${pipeline.name} didn't add ${word.reading} to Anki`, detail: 'No Anki step matched, or it skips this word.', life: 4000, group: 'bottom' });
       const { [key]: _, ...rest } = cardState.value;
       cardState.value = rest;
     }

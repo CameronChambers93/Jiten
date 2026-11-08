@@ -2,9 +2,17 @@ import { useToast } from 'primevue/usetoast';
 import type { ExampleSentence, WordSummary } from '~/types';
 import { MineDenied } from '~/utils/miningWarnings';
 import type { NewCardTarget } from '~/utils/ankiSetups';
+import { buildChoice, firstStep, hasAnkiStep, pipelineTags, stepTarget, type Pipeline, type PipelineContext } from '~/utils/pipelines';
+import { getMediaTypeText } from '~/utils/mediaTypeMapper';
 
-/** What adding a sentence did: a new note, or the sentence joined the word's existing card. `warnings` lists fields left empty. */
-export type MineOutcome = { kind: 'created'; warnings: string[] } | { kind: 'existing'; added: boolean; sentences: number; warnings: string[] };
+/**
+ * What running a pipeline did in Anki: a new note, the sentence joined the word's existing card, or nothing (no Anki step
+ * matched, or it skipped), so the sentence stays kept for Jiten. `warnings` lists fields left empty.
+ */
+export type MineOutcome =
+  | { kind: 'created'; warnings: string[] }
+  | { kind: 'existing'; added: boolean; sentences: number; warnings: string[] }
+  | { kind: 'kept' };
 
 /** A word already in Anki, waiting for the user to choose between its existing card and a new note. */
 export interface MineChoice {
@@ -17,13 +25,13 @@ export interface MineChoice {
 }
 
 /**
- * Adding a sentence to Anki, the same on every page (n1miner). When the word already has a note, its note type's
- * mining settings decide: add the sentence to that card without asking, or ask the user, defaulting to the card. Render
- * `MineChoiceDialog` with `choice` and `answer`.
+ * Running a pipeline's Anki, Build and Tags steps on a sentence, the same on every page (n1miner); saving to the word's
+ * list is the sentence button's. The first matching Anki step decides: add to the word's card, ask, make a new note
+ * from its targets, or skip. Render `MineChoiceDialog` with `choice` and `answer`.
  */
 export function useMineSentence() {
   const toast = useToast();
-  const { addCard, existingNotes, keptNote, miningFor, targetFor, addToExistingNote } = useMiningCards();
+  const { addCard, existingNotes, keptNote, addToExistingNote } = useMiningCards();
 
   const choice = ref<MineChoice | null>(null);
   let resolveChoice: ((answer: 'existing' | 'new' | null) => void) | null = null;
@@ -64,10 +72,11 @@ export function useMineSentence() {
   }
 
   /**
-   * Adds the sentence for the word (the sentence's wordPosition/wordLength mark the word). Null when the user cancelled
-   * or it failed; a failure has been shown as a toast.
+   * Runs the pipeline's Anki steps for the word (the sentence's wordPosition/wordLength mark the word). Null when the user
+   * cancelled or it failed; a failure has been shown as a toast.
    */
-  async function mine(word: WordSummary, sentence: ExampleSentence): Promise<MineOutcome | null> {
+  async function mine(word: WordSummary, sentence: ExampleSentence, pipeline: Pipeline): Promise<MineOutcome | null> {
+    if (!hasAnkiStep(pipeline)) return { kind: 'kept' };
     let notes: number[];
     let kept: Awaited<ReturnType<typeof keptNote>> = null;
     try {
@@ -79,11 +88,32 @@ export function useMineSentence() {
     }
 
     const modelName = kept?.modelName ?? '';
-    let pick: 'existing' | 'new' | null = 'new';
-    if (notes.length) pick = modelName && miningFor(modelName).existing === 'auto' ? 'existing' : await ask({ word, notes, modelName, target: targetFor(sentence) });
+    const ctx: PipelineContext = { sentence, cardNoteType: modelName || null };
+    const step = firstStep(pipeline, 'anki', ctx);
+    if (!step) return { kind: 'kept' };
+    const buildStep = firstStep(pipeline, 'build', ctx);
+    const build = buildChoice(buildStep);
+    const target = stepTarget(step, sentence, pipelineTags(pipeline, ctx, (t) => getMediaTypeText(t)));
+    const noBuild = buildStep ? [] : [`No Build step in ${pipeline.name} matched this line, so the card has text only.`];
+
+    let pick: 'existing' | 'new' | null;
+    if (notes.length) {
+      if (step.hasCard === 'skip') return { kind: 'kept' };
+      // A step with no targets can't make a new note, so asking would offer nothing.
+      pick = step.hasCard === 'add' || (step.hasCard === 'ask' && !target) ? 'existing' : step.hasCard === 'new' ? 'new' : null;
+      if (pick == null) pick = await ask({ word, notes, modelName, target: target! });
+    } else {
+      if (step.noCard === 'skip') return { kind: 'kept' };
+      pick = 'new';
+    }
     if (pick === 'new') {
+      if (!target) {
+        failed(new Error(`${pipeline.name}'s Anki step has no target for new cards.`), "Couldn't add the card");
+        return null;
+      }
       try {
-        const result = await addCard({ word, sentence, wordSentences: 0 }, modelName || null);
+        const result = await addCard({ word, sentence, wordSentences: 0 }, modelName || null, { target, build });
+        result.warnings.push(...noBuild);
         done(`Added ${word.reading} to Anki`, result.warnings);
         return { kind: 'created', warnings: result.warnings };
       } catch (e) {
@@ -93,7 +123,8 @@ export function useMineSentence() {
     }
     if (pick === 'existing') {
       try {
-        const result = await addToExistingNote(sentence, notes, kept);
+        const result = await addToExistingNote(sentence, notes, kept, build);
+        result.warnings.push(...noBuild);
         done(
           result.added
             ? `Added to ${word.reading}${modelName ? ` on ${modelName}` : ''}, now ${result.sentences} sentences`
