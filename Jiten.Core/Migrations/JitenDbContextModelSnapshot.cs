@@ -892,12 +892,21 @@ namespace Jiten.Core.Migrations
                     b.Property<float>("Difficulty")
                         .HasColumnType("real");
 
+                    b.Property<int?>("EndMs")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("English")
+                        .HasColumnType("text");
+
                     b.Property<string>("OwnerId")
                         .HasColumnType("text");
 
                     b.Property<string>("PictureContentType")
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
+
+                    b.Property<int?>("PictureMs")
+                        .HasColumnType("integer");
 
                     b.Property<string>("PicturePath")
                         .HasMaxLength(512)
@@ -908,6 +917,9 @@ namespace Jiten.Core.Migrations
 
                     b.Property<bool>("RemovedFromDeck")
                         .HasColumnType("boolean");
+
+                    b.Property<string>("SourceText")
+                        .HasColumnType("text");
 
                     b.Property<string>("SourceTitle")
                         .HasMaxLength(300)
@@ -920,6 +932,9 @@ namespace Jiten.Core.Migrations
                     b.Property<string>("Speaker")
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)");
+
+                    b.Property<int?>("StartMs")
+                        .HasColumnType("integer");
 
                     b.Property<string>("Text")
                         .IsRequired()
@@ -2443,6 +2458,59 @@ namespace Jiten.Core.Migrations
                         .IsUnique();
 
                     b.ToTable("Sentences", "jiten");
+                });
+
+            modelBuilder.Entity("Jiten.Core.Data.SentenceCorrection", b =>
+                {
+                    b.Property<long>("SentenceCorrectionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("SentenceCorrectionId"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("DeckId")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("EndMs")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("English")
+                        .HasColumnType("text");
+
+                    b.Property<long>("ExampleSentenceId")
+                        .HasColumnType("bigint");
+
+                    b.Property<int?>("PictureMs")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Position")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("SourceText")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int?>("StartMs")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Text")
+                        .HasColumnType("text");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.HasKey("SentenceCorrectionId");
+
+                    b.HasIndex("DeckId");
+
+                    b.HasIndex("ExampleSentenceId");
+
+                    b.ToTable("SentenceCorrections", "jiten");
                 });
 
             modelBuilder.Entity("Jiten.Core.Data.Series", b =>

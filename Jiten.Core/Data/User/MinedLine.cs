@@ -36,6 +36,21 @@ public readonly record struct MinedLine(string Text, string? Speaker, int? Targe
         return found < 0 ? new MinedLine(text, speaker, null, null) : new MinedLine(text, speaker, found, word.Length);
     }
 
+    /// <summary>
+    /// This line with a fixed text: the word marked where the text it marked in <paramref name="originalText"/> appears in
+    /// <paramref name="fixedText"/> (the first time), else unmarked.
+    /// </summary>
+    public MinedLine MovedTo(string originalText, string fixedText)
+    {
+        if (TargetPosition is not { } start || TargetLength is not { } length || start + length > originalText.Length)
+            return this with { Text = fixedText, TargetPosition = null, TargetLength = null };
+
+        var found = fixedText.IndexOf(originalText.Substring(start, length), StringComparison.Ordinal);
+        return found < 0
+            ? this with { Text = fixedText, TargetPosition = null, TargetLength = null }
+            : this with { Text = fixedText, TargetPosition = found, TargetLength = length };
+    }
+
     /// <summary>The line as a card field shows it, the word in <c>&lt;b&gt;</c>.</summary>
     public string ToHtml()
     {

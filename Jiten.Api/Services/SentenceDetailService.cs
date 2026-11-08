@@ -36,7 +36,8 @@ public class SentenceDetailService(
     ICurrentUserService currentUser,
     IExampleSentenceQueryService exampleSentences,
     ISentenceStatsService sentenceStats,
-    SentenceCueLookup cueLookup)
+    SentenceCueLookup cueLookup,
+    SentenceFixStore fixes)
 {
     private const int ContextLines = 3;
     private const int MaxElsewhere = 20;
@@ -73,10 +74,13 @@ public class SentenceDetailService(
         {
             before = cues.Cues.Take(cues.First).TakeLast(ContextLines).Select(Line).ToList();
             after = cues.Cues.Skip(cues.Last + 1).Take(ContextLines).Select(Line).ToList();
-            clip = await ClipAsync(cues, sentenceId, row.DeckId, row.Position, ct);
+            // The sentence shows as the user sees it, fixed or not
+            clip = await ClipAsync(cues with { Text = sentence.Text }, sentenceId, row.DeckId, row.Position, ct);
         }
 
-        return new SentenceDetailDto(sentence, await WordsAsync(row.Tokens), before, clip, after,
+        // The user's own fixed text has its own words
+        var tokens = (await fixes.ForUserAsync(currentUser.UserId, sentenceId, ct))?.Tokens ?? row.Tokens;
+        return new SentenceDetailDto(sentence, await WordsAsync(tokens), before, clip, after,
                                      await exampleSentences.BuildDtosAsync(elsewhereIds, 0, 0));
 
         static SentenceContextLineDto Line(SubtitleCue cue) => new(cue.StartMs, cue.Text);

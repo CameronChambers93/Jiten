@@ -19,6 +19,9 @@ public static class SentenceFlagResolution
 
     /// <summary>An admin fixed the line, which closes every user's flag on it.</summary>
     public const string Fixed = "fixed";
+
+    /// <summary>An admin found nothing wrong with the line ("Not a problem").</summary>
+    public const string Rejected = "rejected";
 }
 
 /// <summary>

@@ -152,16 +152,49 @@ export function useMiningCards() {
     });
   }
 
-  function fetchPicture(sentenceId: number): Promise<Blob> {
-    return $api<Blob>(`sentence-media/${sentenceId}/picture`, { responseType: 'blob' });
+  /** The screenshot; pictureKey (the sentence's, for a fixed frame) skips the day-long browser cache of another frame. */
+  function fetchPicture(sentenceId: number, pictureKey = ''): Promise<Blob> {
+    return $api<Blob>(`sentence-media/${sentenceId}/picture`, { responseType: 'blob', query: pictureKey ? { v: pictureKey } : undefined });
   }
 
-  /** The clip with sound, padded like the audio. */
-  function fetchVideo(sentenceId: number, pad: Padding = settings.value): Promise<Blob> {
+  /** The clip with sound, padded like the audio (a fixed clip already holds its padding); clipKey as pictureKey above. */
+  function fetchVideo(sentenceId: number, pad: Padding = settings.value, clipKey = ''): Promise<Blob> {
     return $api<Blob>(`sentence-media/${sentenceId}/video`, {
       responseType: 'blob',
-      query: { padStartMs: pad.padStartMs, padEndMs: pad.padEndMs },
+      query: { padStartMs: pad.padStartMs, padEndMs: pad.padEndMs, ...(clipKey ? { v: clipKey } : {}) },
     });
+  }
+
+  /**
+   * Cuts again the media of mined sentences whose line's clip or frame was fixed (or reset) since their card got it,
+   * stores it in Anki under its new name and records that, so the Sentences field written next points at it. Old files
+   * stay until Anki's Check Media. One that fails is left for the next Sync; a lost connection stops the Sync.
+   */
+  async function updateFixedMedia(): Promise<{ updated: number; failed: number }> {
+    const behind = await $api<{ minedSentenceId: number; exampleSentenceId: number; audio: string | null; picture: string | null; video: string | null }[]>(
+      'mined/media'
+    );
+    let updated = 0;
+    let failed = 0;
+    for (const s of behind) {
+      try {
+        const keyOf = (name: string | null) => name?.match(/^jiten_\d+(_[0-9a-f]{8})?\./)?.[1] ?? '';
+        const parts: [string | null, () => Promise<Blob>][] = [
+          [s.audio, () => fetchAudio(s.exampleSentenceId)],
+          [s.picture, () => fetchPicture(s.exampleSentenceId, keyOf(s.picture))],
+          [s.video, () => fetchVideo(s.exampleSentenceId, settings.value, keyOf(s.video))],
+        ];
+        for (const [name, cut] of parts) {
+          if (name) await ankiConnect('storeMediaFile', { filename: name, data: await blobToBase64(await cut()) });
+        }
+        await $api(`mined/sentences/${s.minedSentenceId}/media`, { method: 'POST', body: { audio: s.audio, picture: s.picture, video: s.video } });
+        updated++;
+      } catch (e) {
+        if (e instanceof TypeError) throw e;
+        failed++;
+      }
+    }
+    return { updated, failed };
   }
 
   /**
@@ -169,16 +202,18 @@ export function useMiningCards() {
    * there is no screenshot. A part that fails is left out, with the reason.
    */
   async function cardMedia(
-    sentenceId: number,
+    sentence: Pick<ExampleSentence, 'sentenceId' | 'clipKey' | 'pictureKey'>,
     wantAudio: boolean,
     wantPicture: boolean,
     wantVideo: boolean,
     pad: Padding
   ): Promise<{ audio: CardFile | null; picture: CardFile | null; video: CardFile | null; reasons: EmptyReasons }> {
+    // A fixed clip or frame is stored under a name of its own, which Sync compares to find cards that are behind
+    const { sentenceId, clipKey = '', pictureKey = '' } = sentence;
     const reasons: EmptyReasons = {};
     const audio = async (): Promise<CardFile | null> => {
       try {
-        return { blob: await fetchAudio(sentenceId, pad), filename: `jiten_${sentenceId}.mp3` };
+        return { blob: await fetchAudio(sentenceId, pad), filename: `jiten_${sentenceId}${clipKey}.mp3` };
       } catch (e) {
         if (!isNotFound(e)) {
           reasons.sentenceAudio = failureReason('Cutting the audio', e);
@@ -196,7 +231,7 @@ export function useMiningCards() {
     };
     const picture = async (): Promise<CardFile | null> => {
       try {
-        return { blob: await fetchPicture(sentenceId), filename: `jiten_${sentenceId}.jpg` };
+        return { blob: await fetchPicture(sentenceId, pictureKey), filename: `jiten_${sentenceId}${pictureKey}.jpg` };
       } catch (e) {
         reasons.picture = isNotFound(e) ? 'this title has no linked video' : failureReason('Cutting the screenshot', e);
         return null;
@@ -204,7 +239,7 @@ export function useMiningCards() {
     };
     const video = async (): Promise<CardFile | null> => {
       try {
-        return { blob: await fetchVideo(sentenceId, pad), filename: `jiten_${sentenceId}.webm` };
+        return { blob: await fetchVideo(sentenceId, pad, clipKey), filename: `jiten_${sentenceId}${clipKey}.webm` };
       } catch (e) {
         reasons.video = isNotFound(e) ? 'this title has no linked video' : failureReason('Cutting the video clip', e);
         return null;
@@ -239,7 +274,7 @@ export function useMiningCards() {
     build: Pick<BuildChoice, 'english' | 'padStartMs' | 'padEndMs'>
   ): Promise<BuiltSentence> {
     const [media, english] = await Promise.all([
-      cardMedia(sentence.sentenceId, want.audio, want.picture, want.video, build),
+      cardMedia(sentence, want.audio, want.picture, want.video, build),
       want.english
         ? cardEnglish(sentence.sentenceId, build.english)
         : Promise.resolve({ text: null, origin: null } as { text: string | null; origin: string | null; reason?: string }),
@@ -645,6 +680,7 @@ export function useMiningCards() {
     recordMainWritten,
     addToExistingNote,
     rebuildMovedSentences,
+    updateFixedMedia,
   };
 
   /**

@@ -19,7 +19,10 @@ public static class MinedLineStore
         WebUtility.HtmlDecode(Tags.Replace(html.Replace("<br>", " "), "")).Replace(' ', ' ').Trim();
 
     /// <summary>Fills in what a user's sentences read from their occurrences. A private line of another user is never read.</summary>
-    public static async Task FillAsync(JitenDbContext context, string userId, IReadOnlyCollection<MinedSentence> sentences, CancellationToken ct)
+    /// <param name="fixedTexts">The user's own text for fixed lines, by occurrence; it replaces the line's, with the word marked where
+    /// the same text is found in it.</param>
+    public static async Task FillAsync(JitenDbContext context, string userId, IReadOnlyCollection<MinedSentence> sentences, CancellationToken ct,
+                                       IReadOnlyDictionary<long, string>? fixedTexts = null)
     {
         var ids = sentences.Where(s => s.ExampleSentenceId != null).Select(s => s.ExampleSentenceId!.Value).Distinct().ToList();
         var occurrences = await context.ExampleSentences.AsNoTracking().IgnoreQueryFilters()
@@ -29,7 +32,9 @@ public static class MinedLineStore
         foreach (var sentence in sentences)
         {
             if (sentence.ExampleSentenceId is not { } id || !occurrences.TryGetValue(id, out var occurrence)) continue;
-            sentence.OccurrenceHtml = new MinedLine(occurrence.Text, occurrence.Speaker, sentence.TargetPosition, sentence.TargetLength).ToHtml();
+            sentence.OccurrenceHtml = fixedTexts?.GetValueOrDefault(id) is { } fixedText
+                ? new MinedLine(occurrence.Text, occurrence.Speaker, sentence.TargetPosition, sentence.TargetLength).MovedTo(occurrence.Text, fixedText).ToHtml()
+                : new MinedLine(occurrence.Text, occurrence.Speaker, sentence.TargetPosition, sentence.TargetLength).ToHtml();
             sentence.SourceTitle = occurrence.SourceTitle;
             sentence.SourceUrl = occurrence.SourceUrl;
             sentence.AudioPath = occurrence.AudioPath;

@@ -43,5 +43,22 @@ public class ExampleSentence
     public string? PicturePath { get; set; }
     public string? PictureContentType { get; set; }
 
+    /// <summary>
+    /// The subtitle's text when a submitted fix changed <see cref="Text"/>; null otherwise. The cue lookup and re-parsing
+    /// read it, since only it matches the subtitles.
+    /// </summary>
+    public string? SourceText { get; set; }
+
+    /// <summary>English from a submitted fix, shown before subtitle and AI English.</summary>
+    public string? English { get; set; }
+
+    /// <summary>The clip from a submitted fix, in subtitle time, padding included: both set or neither.</summary>
+    public int? StartMs { get; set; }
+
+    public int? EndMs { get; set; }
+
+    /// <summary>The screenshot's frame from a submitted fix, in subtitle time.</summary>
+    public int? PictureMs { get; set; }
+
     public Deck? Deck { get; set; }
 }

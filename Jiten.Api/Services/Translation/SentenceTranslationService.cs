@@ -11,9 +11,12 @@ public static class TranslationOrigin
 {
     public const string Subtitles = "subtitles";
     public const string Ai = "ai";
+
+    /// <summary>A fix's English, the user's own or the shared one. Cards store it as "user", like English typed on the card.</summary>
+    public const string Fix = "user";
 }
 
-/// <param name="Origin">"subtitles" or "ai".</param>
+/// <param name="Origin">"subtitles", "ai" or "user" (a fix).</param>
 /// <param name="Source">For subtitles, the release they came from.</param>
 public record SentenceTranslationDto(string Text, string Origin, string? Provider, string? Model, string? Source);
 
@@ -71,7 +74,7 @@ public class SentenceTranslationService(
     public async Task<DeckCoverage> CoverageAsync(int deckId, CancellationToken ct)
     {
         var sentences = await context.ExampleSentences.AsNoTracking().Where(s => s.DeckId == deckId)
-                                     .Select(s => new { s.SentenceId, s.Text, s.Position }).ToListAsync(ct);
+                                     .Select(s => new { s.SentenceId, Text = s.SourceText ?? s.Text, s.Position }).ToListAsync(ct);
         var sentenceCount = await context.Decks.AsNoTracking().Where(d => d.DeckId == deckId).Select(d => d.SentenceCount).FirstOrDefaultAsync(ct);
         var cached = (await CachedAsync(s => s.DeckId == deckId, ct)).Select(c => c.SentenceId).ToHashSet();
         var matcher = await cueLookup.MatcherAsync(deckId, ct);
@@ -167,6 +170,23 @@ public class SentenceTranslationService(
         var english = await EnglishAsync(cues.DeckId, ct);
         var text = english?.Aligner.TextFor(cues.StartMs, cues.EndMs, cues.From, cues.To);
         return text == null ? null : new SentenceTranslationDto(text, TranslationOrigin.Subtitles, null, null, english!.Source);
+    }
+
+    /// <summary>
+    /// The subtitle English for a clip in subtitle time, as the fix screen suggests it: the English over the Japanese cues
+    /// the clip mostly covers (so its padding doesn't pull in a neighbour's line), else over the clip itself.
+    /// </summary>
+    public async Task<string?> EnglishForRangeAsync(int deckId, int startMs, int endMs, CancellationToken ct)
+    {
+        var english = await EnglishAsync(deckId, ct);
+        if (english == null) return null;
+
+        var covered = (await cueLookup.MatcherAsync(deckId, ct))?.Cues
+                      .Where(c => Math.Min(c.EndMs, endMs) - Math.Max(c.StartMs, startMs) >= 0.5 * (c.EndMs - c.StartMs))
+                      .ToList();
+        return covered is { Count: > 0 }
+            ? english.Aligner.TextFor(covered[0].StartMs, covered[^1].EndMs)
+            : english.Aligner.TextFor(startMs, endMs);
     }
 
     private Task<EnglishTrackCache?> EnglishAsync(int deckId, CancellationToken ct) =>

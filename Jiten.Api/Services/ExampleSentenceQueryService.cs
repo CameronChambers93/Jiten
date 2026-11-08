@@ -23,7 +23,8 @@ public interface IExampleSentenceQueryService
     Task<List<ExampleSentenceDto>> BuildDtosAsync(IReadOnlyList<long> sentenceIds, int wordId, int readingIndex);
 }
 
-public class ExampleSentenceQueryService(JitenDbContext context, ISentenceTokenService sentenceTokens) : IExampleSentenceQueryService
+public class ExampleSentenceQueryService(JitenDbContext context, ISentenceTokenService sentenceTokens, SentenceFixStore fixes,
+                                         ICurrentUserService currentUser) : IExampleSentenceQueryService
 {
     private const float BandSize = 0.5f;
 
@@ -325,6 +326,12 @@ public class ExampleSentenceQueryService(JitenDbContext context, ISentenceTokenS
 
     private async Task<List<ExampleSentenceDto>> BuildExampleSentenceDtos(List<PickedSentence> picked, int wordId, int readingIndex)
     {
+        // The caller's own fixed text replaces the line's, with its own tokens for furigana and the word's place
+        var lineFixes = await fixes.ForUserAsync(currentUser.UserId, picked.Select(p => p.SentenceId).ToList());
+        picked = picked.Select(p => lineFixes.GetValueOrDefault(p.SentenceId) is { Text: { } text } fix
+                                        ? p with { Text = text, Tokens = fix.Tokens ?? ExampleSentenceTokens.Encode([]) }
+                                        : p).ToList();
+
         var positionMap = new Dictionary<long, (byte Position, byte Length)>();
         foreach (var p in picked)
         {
@@ -360,8 +367,12 @@ public class ExampleSentenceQueryService(JitenDbContext context, ISentenceTokenS
             if (p.ParentDeckId.HasValue)
                 decks.TryGetValue(p.ParentDeckId.Value, out parentDeck);
 
+            var fix = lineFixes.GetValueOrDefault(p.SentenceId);
             return new ExampleSentenceDto
             {
+                Fixed = fix?.Label,
+                ClipKey = SentenceMediaNames.RangeSuffix(fix),
+                PictureKey = SentenceMediaNames.PictureSuffix(fix),
                 SentenceId = p.SentenceId,
                 Text = p.Text,
                 Difficulty = p.Difficulty,

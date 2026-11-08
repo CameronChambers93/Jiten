@@ -35,6 +35,15 @@ public class ExampleSentenceDto
     /// <summary>The sentence's deck has a linked video, so it may have a screenshot and audio.</summary>
     public bool HasVideo { get; set; }
 
+    /// <summary>"mine" when the caller fixed the line (Text is their version), "shared" when a fix was submitted to it; else null.</summary>
+    public string? Fixed { get; set; }
+
+    /// <summary>What a fixed clip adds to its Anki file names (<c>jiten_{id}{ClipKey}.mp3</c>, and the .webm); "" for the cues' clip.</summary>
+    public string ClipKey { get; set; } = "";
+
+    /// <summary>The same for the screenshot (<c>jiten_{id}{PictureKey}.jpg</c>); it also changes the picture's URL, which is cached for a day.</summary>
+    public string PictureKey { get; set; } = "";
+
     /// <summary>A copy with this word marked.</summary>
     public ExampleSentenceDto ForWord(int position, int length)
     {

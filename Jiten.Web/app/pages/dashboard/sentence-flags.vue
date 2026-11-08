@@ -61,16 +61,22 @@
     }
   }
 
-  async function markFixed(line: FlaggedLine) {
+  /** Closes every flag on the line: "fixed" once it was fixed elsewhere, "reject" when nothing was wrong (Not a problem). */
+  async function close(line: FlaggedLine, how: 'fixed' | 'reject') {
     fixing.value = line.sentenceId;
     try {
-      const { closed } = await $api<{ closed: number }>(`admin/sentence-flags/${line.sentenceId}/fixed`, { method: 'POST' });
-      toast.add({ severity: 'success', summary: 'Marked fixed', detail: `Closed ${closed} flag${closed === 1 ? '' : 's'}.`, life: 3000 });
+      const { closed } = await $api<{ closed: number }>(`admin/sentence-flags/${line.sentenceId}/${how}`, { method: 'POST' });
+      toast.add({
+        severity: 'success',
+        summary: how === 'fixed' ? 'Marked fixed' : 'Marked not a problem',
+        detail: `Closed ${closed} flag${closed === 1 ? '' : 's'}.`,
+        life: 3000,
+      });
       // The last line on a page leaves it empty: step back.
       if (items.value.length === 1 && page.value > 0) page.value--;
       await load();
     } catch (e) {
-      toast.add({ severity: 'error', summary: "Couldn't mark it fixed", detail: extractApiError(e, 'The request failed'), life: 5000 });
+      toast.add({ severity: 'error', summary: "Couldn't close the flags", detail: extractApiError(e, 'The request failed'), life: 5000 });
     } finally {
       fixing.value = null;
     }
@@ -91,8 +97,9 @@
       <h1 class="text-3xl font-bold">Flagged Sentences</h1>
     </div>
     <p class="text-sm text-gray-600 dark:text-gray-300 mb-4">
-      Lines users have flagged as wrong, hidden for each of them until it's fixed. Fix the line at its source, then mark it fixed: that closes every
-      flag on it and brings it back for those users. Users' private lines aren't listed.
+      Lines users have flagged as wrong, hidden for each of them until it's fixed. Fix opens the fix screen, where Submit fixes the line for
+      everyone and closes every flag on it. Mark fixed closes them after a fix made some other way, and Not a problem closes them when nothing was
+      wrong. Either brings the line back for those users. Users' private lines aren't listed.
     </p>
 
     <div class="mb-4 flex flex-wrap items-center gap-4">
@@ -131,15 +138,11 @@
           </ul>
         </div>
 
-        <Button
-          label="Mark fixed"
-          icon="pi pi-check"
-          size="small"
-          severity="success"
-          class="shrink-0 self-start"
-          :loading="fixing === line.sentenceId"
-          @click="markFixed(line)"
-        />
+        <div class="flex flex-wrap gap-2 shrink-0 self-start">
+          <Button label="Fix" icon="pi pi-pencil" size="small" @click="navigateTo(`/sentences/${line.sentenceId}/fix`)" />
+          <Button label="Mark fixed" icon="pi pi-check" size="small" severity="success" outlined :loading="fixing === line.sentenceId" @click="close(line, 'fixed')" />
+          <Button label="Not a problem" icon="pi pi-times" size="small" severity="secondary" outlined :disabled="fixing === line.sentenceId" @click="close(line, 'reject')" />
+        </div>
       </div>
     </div>
 

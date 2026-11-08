@@ -27,13 +27,14 @@ public class SentenceCueLookup(JitenDbContext context, IMemoryCache cache)
         // IgnoreQueryFilters: a mined line a reparse dropped still gets its media
         var sentence = await context.ExampleSentences.AsNoTracking().IgnoreQueryFilters()
                                     .Where(s => s.SentenceId == sentenceId)
-                                    .Select(s => new { s.DeckId, s.Text, s.Position, s.Deck!.SentenceCount })
+                                    .Select(s => new { s.DeckId, s.Text, s.SourceText, s.Position, s.Deck!.SentenceCount })
                                     .FirstOrDefaultAsync(ct);
         if (sentence?.DeckId is not { } deckId) return null;
 
         var matcher = await MatcherAsync(deckId, ct);
         var relative = sentence.SentenceCount > 0 ? Math.Clamp(sentence.Position / (double)sentence.SentenceCount, 0, 1) : 0;
-        return matcher?.Locate(sentence.Text, relative) is { } match
+        // A fixed line is found by the subtitle's own text
+        return matcher?.Locate(sentence.SourceText ?? sentence.Text, relative) is { } match
             ? new SentenceCues(deckId, sentence.Text, matcher.Cues, match.First, match.Last, match.From, match.To,
                                match.FirstLine, match.LastLine)
             : null;

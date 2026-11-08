@@ -71,6 +71,7 @@ public class JitenDbContext : DbContext
     public DbSet<DeckVideoSource> DeckVideoSources { get; set; }
     public DbSet<DeckEnglishTrack> DeckEnglishTracks { get; set; }
     public DbSet<ExampleSentenceTranslation> ExampleSentenceTranslations { get; set; }
+    public DbSet<SentenceCorrection> SentenceCorrections { get; set; }
     public DbSet<AppSetting> AppSettings { get; set; }
     public DbSet<FrequencyDictionary> FrequencyDictionaries { get; set; }
     public DbSet<FrequencyDictionaryRank> FrequencyDictionaryRanks { get; set; }
@@ -937,6 +938,16 @@ public class JitenDbContext : DbContext
             entity.Property(e => e.PicturePath).HasMaxLength(512);
             entity.Property(e => e.PictureContentType).HasMaxLength(100);
             entity.HasIndex(e => e.OwnerId);
+        });
+
+        modelBuilder.Entity<SentenceCorrection>(entity =>
+        {
+            entity.ToTable("SentenceCorrections", "jiten");
+            entity.HasKey(c => c.SentenceCorrectionId);
+            entity.Property(c => c.SourceText).IsRequired();
+            entity.Property(c => c.UserId).HasMaxLength(64).IsRequired();
+            entity.HasIndex(c => c.ExampleSentenceId);
+            entity.HasIndex(c => c.DeckId);
         });
 
         modelBuilder.Entity<Tag>(entity =>

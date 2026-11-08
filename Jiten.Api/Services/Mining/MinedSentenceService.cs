@@ -58,7 +58,7 @@ public record SetNoteWordResult(long MinedWordId, bool Moved);
 /// <param name="AudioUrl">The stored copy's URL; null for Jiten sentences (cut from the episode on demand) and sentences without audio.</param>
 public record MinedSentenceDto(long MinedSentenceId, string Text, string? English, string? EnglishOrigin, string Origin, long? ExampleSentenceId,
                                string? SourceTitle, string? SourceUrl, string? PreviousLine, DateTime? MinedAt, string? AudioUrl, string? PictureUrl,
-                               bool IsMain, int SortOrder, bool Flagged);
+                               bool IsMain, int SortOrder, bool Flagged, bool Removable = true, string ClipKey = "", string PictureKey = "");
 
 public record MinedWordDto(long MinedWordId, int? WordId, byte? ReadingIndex, string Expression, string Reading, List<MinedNoteDto> Notes,
                            List<MinedSentenceDto> Sentences);
@@ -66,7 +66,7 @@ public record MinedWordDto(long MinedWordId, int? WordId, byte? ReadingIndex, st
 /// <summary>One of Jiten's example sentences to add to a word's existing Anki note, its media already stored in Anki.</summary>
 /// <param name="AnkiNoteId">A note of the word, as found in Anki; the sentence goes to the word, so any of its notes will do.</param>
 /// <param name="Sentence">The sentence as card HTML, the word in bold.</param>
-/// <param name="EnglishOrigin">"subtitles" or "ai".</param>
+/// <param name="EnglishOrigin">"subtitles", "ai" or "user" (a fix's English).</param>
 public record AddSentenceRequest(long AnkiNoteId, long ExampleSentenceId, string Sentence, string? Furigana, string? English, string? EnglishOrigin,
                                  string? SourceTitle, string? AudioFilename, string? PictureFilename, string? VideoFilename = null);
 
@@ -90,6 +90,12 @@ public record SaveToListResult(long MinedSentenceId, bool Added, string State);
 
 /// <param name="State">A <see cref="ListSentenceState"/> value; lines in no list aren't returned.</param>
 public record ListStateDto(int WordId, byte ReadingIndex, long SentenceId, string State);
+
+/// <summary>A mined sentence whose media in Anki is behind its line's fix: the parts to cut again, each with the name to store it under.</summary>
+public record MediaBehindDto(long MinedSentenceId, long ExampleSentenceId, string? Audio, string? Picture, string? Video);
+
+/// <summary>The names the browser stored re-cut media under; a null part wasn't re-cut.</summary>
+public record MediaStoredRequest(string? Audio, string? Picture, string? Video);
 
 /// <summary>A mined sentence whose line changed, to rebuild with the card code: its line, with the word marked.</summary>
 public record RebuildSentenceDto(long MinedSentenceId, long ExampleSentenceId, int? WordId, byte? ReadingIndex, int? TargetPosition, int? TargetLength)
@@ -122,7 +128,7 @@ public record AddSentenceResult(long AnkiNoteId, long MinedSentenceId, bool Adde
 /// <summary>Where an imported note's sentence came from, read from its tags, media file names and URL.</summary>
 public record DetectedOrigin(string Origin, long? ExampleSentenceId, string? SourceTitle, string? SourceUrl)
 {
-    private static readonly Regex JitenMedia = new(@"^jiten_(\d+)\.", RegexOptions.Compiled);
+    private static readonly Regex JitenMedia = new(@"^jiten_(\d+)[._]", RegexOptions.Compiled);
 
     public static DetectedOrigin From(ImportNoteDto note)
     {
@@ -159,6 +165,7 @@ public class MinedSentenceService(
     ICdnService cdn,
     IBackgroundJobClient backgroundJobs,
     WordMatchService wordMatch,
+    SentenceFixStore fixStore,
     ILogger<MinedSentenceService> logger)
 {
     public const int MaxNotesPerImport = 20;
@@ -556,7 +563,7 @@ public class MinedSentenceService(
             Text = Truncate(request.Sentence.Trim(), 4000),
             Furigana = PlainText(request.Furigana ?? "").Length > 0 ? Truncate(request.Furigana!.Trim(), 8000) : null,
             English = english,
-            EnglishOrigin = english != null && request.EnglishOrigin is "subtitles" or "ai" ? request.EnglishOrigin : null,
+            EnglishOrigin = english != null && request.EnglishOrigin is "subtitles" or "ai" or "user" ? request.EnglishOrigin : null,
             Origin = MinedSentenceOrigin.Jiten, ExampleSentenceId = request.ExampleSentenceId,
             SourceTitle = string.IsNullOrWhiteSpace(request.SourceTitle) ? null : Truncate(request.SourceTitle.Trim(), 300),
             MinedAt = DateTime.UtcNow,
@@ -598,10 +605,110 @@ public class MinedSentenceService(
         if (PlainText(request.English ?? "").Length > 0)
         {
             sentence.English = Truncate(request.English!.Trim(), 4000);
-            sentence.EnglishOrigin = request.EnglishOrigin is "subtitles" or "ai" ? request.EnglishOrigin : null;
+            sentence.EnglishOrigin = request.EnglishOrigin is "subtitles" or "ai" or "user" ? request.EnglishOrigin : null;
         }
 
         sentence.NeedsRebuild = false;
+        await userContext.SaveChangesAsync(ct);
+        return true;
+    }
+
+    private static readonly Regex CutName = new(@"^jiten_(\d+)(_[0-9a-f]{8})?\.(mp3|jpg|webm)$", RegexOptions.Compiled);
+
+    /// <summary>
+    /// The user's mined sentences on Anki cards whose cut media isn't the cut their line's fix gives now (a fixed clip or
+    /// frame, or one reset to the cues'). Only files Jiten cut are compared; text-to-speech audio and imported media aren't.
+    /// </summary>
+    public async Task<List<MediaBehindDto>> MediaBehindAsync(string userId, CancellationToken ct)
+    {
+        var rows = await userContext.MinedSentences.AsNoTracking()
+                                    .Where(s => s.UserId == userId && !s.JitenOnly && s.ExampleSentenceId != null &&
+                                                (s.AnkiAudioFilename!.StartsWith("jiten_") || s.AnkiPictureFilename!.StartsWith("jiten_") ||
+                                                 s.AnkiVideoFilename!.StartsWith("jiten_")))
+                                    .Select(s => new { s.MinedSentenceId, s.ExampleSentenceId, s.AnkiAudioFilename, s.AnkiPictureFilename, s.AnkiVideoFilename })
+                                    .OrderBy(s => s.MinedSentenceId)
+                                    .ToListAsync(ct);
+        // A card is behind when its line's clip or frame is fixed, or when it holds a fixed cut (the fix since reset)
+        var fixedLines = await userContext.SentenceFixes.AsNoTracking()
+                                          .Where(f => f.UserId == userId && (f.StartMs != null || f.PictureMs != null))
+                                          .Select(f => f.ExampleSentenceId).ToListAsync(ct);
+        await using (var jiten = await contextFactory.CreateDbContextAsync(ct))
+            // Shared times only come from a submitted fix, and the corrections table is small where the lines aren't
+            fixedLines.AddRange(await jiten.SentenceCorrections.AsNoTracking()
+                                           .Where(c => c.StartMs != null || c.PictureMs != null).Select(c => c.ExampleSentenceId).ToListAsync(ct));
+        var fixedSet = fixedLines.ToHashSet();
+        rows = rows.Where(r => fixedSet.Contains(r.ExampleSentenceId!.Value) ||
+                               new[] { r.AnkiAudioFilename, r.AnkiPictureFilename, r.AnkiVideoFilename }.Any(n => n != null && CutName.Match(n).Groups[2].Success))
+                   .ToList();
+        var fixes = await fixStore.ForUserAsync(userId, rows.Select(r => r.ExampleSentenceId!.Value).ToList(), ct);
+
+        var behind = new List<MediaBehindDto>();
+        foreach (var row in rows)
+        {
+            var id = row.ExampleSentenceId!.Value;
+            var fix = fixes.GetValueOrDefault(id);
+            var audio = Behind(id, row.AnkiAudioFilename, SentenceMediaNames.Audio(id, fix));
+            var picture = Behind(id, row.AnkiPictureFilename, SentenceMediaNames.Picture(id, fix));
+            var video = Behind(id, row.AnkiVideoFilename, SentenceMediaNames.Video(id, fix));
+            if (audio != null || picture != null || video != null) behind.Add(new MediaBehindDto(row.MinedSentenceId, id, audio, picture, video));
+        }
+
+        return behind;
+
+        // The expected name when the stored one is a cut of this line under another name
+        static string? Behind(long id, string? stored, string expected) =>
+            stored != null && stored != expected && CutName.Match(stored) is { Success: true } m && m.Groups[1].Value == id.ToString()
+            && expected.EndsWith("." + m.Groups[3].Value) ? expected : null;
+    }
+
+    /// <summary>Records the names re-cut media was stored under in Anki. False when it isn't the user's sentence.</summary>
+    public async Task<bool> MediaStoredAsync(string userId, long minedSentenceId, MediaStoredRequest request, CancellationToken ct)
+    {
+        foreach (var name in new[] { request.Audio, request.Picture, request.Video })
+            if (name != null && !CutName.IsMatch(name)) throw new ArgumentException($"{name} isn't a name Jiten gives media.");
+
+        var sentence = await userContext.MinedSentences.FirstOrDefaultAsync(s => s.MinedSentenceId == minedSentenceId && s.UserId == userId, ct);
+        if (sentence == null) return false;
+
+        sentence.AnkiAudioFilename = request.Audio ?? sentence.AnkiAudioFilename;
+        sentence.AnkiPictureFilename = request.Picture ?? sentence.AnkiPictureFilename;
+        sentence.AnkiVideoFilename = request.Video ?? sentence.AnkiVideoFilename;
+        sentence.UpdatedAt = DateTime.UtcNow;
+        await userContext.SaveChangesAsync(ct);
+        return true;
+    }
+
+    /// <summary>
+    /// Whether a mined sentence can be removed from its word: not when it's the only sentence the word's Anki card shows,
+    /// since the card would have nothing to show, nor when it's the sentence of an Anki note of the word, which the next
+    /// Sync would import again (flag it instead, to keep it off the card).
+    /// </summary>
+    public static async Task<bool> CanRemoveAsync(UserDbContext userContext, long minedSentenceId, CancellationToken ct)
+    {
+        var sentence = await userContext.MinedSentences.AsNoTracking().FirstOrDefaultAsync(s => s.MinedSentenceId == minedSentenceId, ct);
+        if (sentence == null) return false;
+        if (sentence.JitenOnly) return true;
+        if (sentence.SourceAnkiNoteId is { } noteId && await userContext.MinedNotes.AnyAsync(n => n.AnkiNoteId == noteId && n.UserId == sentence.UserId, ct))
+            return false;
+
+        var onCard = await userContext.MinedNotes.AnyAsync(n => n.MinedWordId == sentence.MinedWordId, ct);
+        return !onCard || await userContext.MinedSentences.AnyAsync(s => s.MinedWordId == sentence.MinedWordId && !s.JitenOnly &&
+                                                                         s.MinedSentenceId != minedSentenceId, ct);
+    }
+
+    /// <summary>
+    /// Removes a sentence from its word's list; the next Sync takes it off the card. Null when it isn't the user's, false
+    /// when it can't be removed (see <see cref="CanRemoveAsync"/>).
+    /// </summary>
+    public async Task<bool?> RemoveSentenceAsync(string userId, long minedSentenceId, CancellationToken ct)
+    {
+        var sentence = await userContext.MinedSentences.FirstOrDefaultAsync(s => s.MinedSentenceId == minedSentenceId && s.UserId == userId, ct);
+        if (sentence == null) return null;
+        if (!await CanRemoveAsync(userContext, minedSentenceId, ct)) return false;
+
+        userContext.MinedSentences.Remove(sentence);
+        await userContext.MinedWords.Where(w => w.MinedWordId == sentence.MinedWordId)
+                         .ExecuteUpdateAsync(u => u.SetProperty(w => w.UpdatedAt, DateTime.UtcNow), ct);
         await userContext.SaveChangesAsync(ct);
         return true;
     }
@@ -689,6 +796,7 @@ public class MinedSentenceService(
         await sync.FillAsync(userId, word.Sentences, ct);
         var main = word.Sentences.MinBy(s => s.SortOrder);
         var flagged = await sentenceFlags.OpenSentenceIdsAsync(userId, ct);
+        var fixes = await fixStore.ForUserAsync(userId, word.Sentences.Where(s => s.ExampleSentenceId != null).Select(s => s.ExampleSentenceId!.Value).ToList(), ct);
 
         return new MinedWordDto(
             word.MinedWordId, word.WordId, word.ReadingIndex, word.Expression, word.Reading,
@@ -697,7 +805,12 @@ public class MinedSentenceService(
                 s.MinedSentenceId, s.Shown, s.English, s.EnglishOrigin, s.Origin, s.ExampleSentenceId, s.SourceTitle, s.SourceUrl, s.PreviousLine,
                 s.MinedAt, s.AudioPath == null ? null : cdn.GetSignedUrl(s.AudioPath, MediaUrlTtl),
                 s.PicturePath == null ? null : cdn.GetSignedUrl(s.PicturePath, MediaUrlTtl), s == main, s.SortOrder,
-                s.ExampleSentenceId is { } id && flagged.Contains(id))).ToList());
+                s.ExampleSentenceId is { } id && flagged.Contains(id),
+                // As CanRemoveAsync: not the only sentence the word's Anki card shows
+                s.JitenOnly || (!word.Notes.Any(n => n.AnkiNoteId == s.SourceAnkiNoteId) &&
+                                (word.Notes.Count == 0 || word.Sentences.Count(x => !x.JitenOnly) > 1)),
+                SentenceMediaNames.RangeSuffix(s.ExampleSentenceId is { } a ? fixes.GetValueOrDefault(a) : null),
+                SentenceMediaNames.PictureSuffix(s.ExampleSentenceId is { } b ? fixes.GetValueOrDefault(b) : null))).ToList());
     }
 
     private async Task<MinedWord> FindOrCreateWordAsync(string userId, string expression, string reading, int? wordId, byte? readingIndex,
