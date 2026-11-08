@@ -143,7 +143,9 @@ public class MinedSyncService(UserDbContext userContext, IDbContextFactory<Jiten
         await FillAsync(userId, sentences, ct);
         foreach (var copies in sentences.GroupBy(s => MinedSentenceService.PlainText(s.Shown)).Where(g => g.Count() > 1))
         {
-            var kept = copies.OrderByDescending(s => s.SourceAnkiNoteId == keep).ThenBy(s => s.SortOrder).First();
+            var kept = copies.OrderByDescending(s => s.SourceAnkiNoteId == keep).ThenBy(s => s.JitenOnly).ThenBy(s => s.SortOrder).First();
+            // A copy on the card keeps the line on the card.
+            kept.JitenOnly = copies.All(s => s.JitenOnly);
             kept.SortOrder = copies.Min(s => s.SortOrder);
             userContext.MinedSentences.RemoveRange(copies.Where(s => s != kept));
         }
@@ -197,7 +199,7 @@ public class MinedSyncService(UserDbContext userContext, IDbContextFactory<Jiten
     public static MinedSentence? ShownOn(MinedWord word, MinedNote note, IReadOnlySet<long> flagged) =>
         word.Sentences.FirstOrDefault(s => s.MinedSentenceId == note.FieldsSentenceId)
         ?? word.Sentences.FirstOrDefault(s => s.SourceAnkiNoteId == note.AnkiNoteId)
-        ?? InRotation(word.Sentences, flagged).OrderBy(s => s.SortOrder).FirstOrDefault();
+        ?? InRotation(word.Sentences.Where(s => !s.JitenOnly).ToList(), flagged).OrderBy(s => s.SortOrder).FirstOrDefault();
 
     /// <summary>
     /// What to write to each word's kept note (the oldest), as its note type's setup asks: the sentence list, and the main
@@ -208,9 +210,10 @@ public class MinedSyncService(UserDbContext userContext, IDbContextFactory<Jiten
         var bySetup = (await setups.SetupsAsync(userId, ct)).ToDictionary(s => s.ModelName);
         var template = await TargetTemplateAsync(userId, ct);
         var query = userContext.MinedWords.AsNoTracking().AsSplitQuery()
-                               .Where(w => w.UserId == userId && w.Notes.Any() && w.Sentences.Any());
+                               .Where(w => w.UserId == userId && w.Notes.Any() && w.Sentences.Any(s => !s.JitenOnly));
         if (minedWordId != null) query = query.Where(w => w.MinedWordId == minedWordId);
-        var words = await query.Include(w => w.Notes).Include(w => w.Sentences).ToListAsync(ct);
+        // Sentences kept for Jiten only stay off the card.
+        var words = await query.Include(w => w.Notes).Include(w => w.Sentences.Where(s => !s.JitenOnly)).ToListAsync(ct);
         await FillAsync(userId, words.SelectMany(w => w.Sentences).ToList(), ct);
         var flagged = await sentenceFlags.OpenSentenceIdsAsync(userId, ct);
 

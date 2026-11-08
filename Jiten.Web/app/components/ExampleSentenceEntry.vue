@@ -2,7 +2,6 @@
   import type { ExampleSentence, SentenceFuriganaMode } from '~/types';
   import { sentenceRubyHtml, targetWordId, visibleFurigana } from '~/utils/sentenceRuby';
   import { computed, ref } from 'vue';
-  import { useToast } from 'primevue/usetoast';
 
   const props = withDefaults(
     defineProps<{
@@ -15,9 +14,6 @@
       readingIndex?: number;
       // The user already has the max number of custom sentences for this word — disable the create paths.
       atLimit?: boolean;
-      // Marked text of the custom sentences already saved for this word, so a sentence saved in an
-      // earlier visit still shows as starred.
-      savedTexts?: string[];
       // Defaults to the site-wide furigana preference.
       furiganaMode?: SentenceFuriganaMode;
       hiddenWordId?: number;
@@ -25,7 +21,7 @@
       targetKnown?: boolean;
       /** Off where the page has its own listen button. */
       showTts?: boolean;
-      /** Add to Anki; off where the page has its own. */
+      /** The sentence button (save to the word's list, Add to Anki); off where the page has its own. */
       showMine?: boolean;
       /** Thumbnail from the linked video, and a link to the sentence's own page; off on that page. */
       showPicture?: boolean;
@@ -38,15 +34,12 @@
     favourited: [];
   }>();
 
-  const { $api } = useNuxtApp();
   const authStore = useAuthStore();
-  const toast = useToast();
   const localiseTitle = useLocaliseTitle();
   const store = useJitenStore();
   const isNsfw = isTextNsfw(props.exampleSentence.text);
   const { limits: planLimits } = useJitenPlus();
   const sentenceLimitMessage = computed(() => `Maximum of ${planLimits.value.customSentencesPerWord} custom sentences reached`);
-  const savedLocally = ref(false);
   const revealedLocally = ref(false);
   const isRevealed = computed(() => store.displayAllNsfw || revealedLocally.value);
 
@@ -122,8 +115,6 @@
   const flagged = computed(() => flag.value != null);
   onMounted(sentenceFlags.ensureLoaded);
 
-  const favourited = computed(() => savedLocally.value || (props.savedTexts?.includes(markedText.value) ?? false));
-
   const sentenceSource = computed(() => {
     const { sourceDeckParent, sourceDeck } = props.exampleSentence;
     let source = '';
@@ -132,27 +123,10 @@
     return clampSentenceSource(source);
   });
 
-  // Editing a corpus sentence creates a new custom (favourite) sentence; reuse the favourite flow.
+  // Editing a corpus sentence creates a new custom sentence from the edited copy.
   function onEdited() {
     editing.value = false;
-    savedLocally.value = true;
     emit('favourited');
-  }
-
-  async function favouriteSentence() {
-    if (props.wordId == null || props.readingIndex == null) return;
-
-    try {
-      await $api(`user/example-sentences/${props.wordId}/${props.readingIndex}/favourite`, {
-        method: 'POST',
-        body: { text: markedText.value, source: sentenceSource.value || undefined },
-      });
-      savedLocally.value = true;
-      emit('favourited');
-    } catch (e) {
-      const data = (e as { data?: unknown })?.data;
-      toast.add({ severity: 'error', summary: typeof data === 'string' && data ? data : sentenceLimitMessage.value, life: 3000 });
-    }
   }
 </script>
 
@@ -185,22 +159,6 @@
               :word-id="wordId"
               :reading-index="readingIndex"
             />
-            <button
-              v-if="canEdit && actionsVisible"
-              class="inline-flex items-center justify-center transition-colors"
-              :class="
-                favourited
-                  ? 'text-yellow-500'
-                  : atLimit
-                    ? 'text-surface-300 dark:text-surface-400 cursor-not-allowed'
-                    : 'text-surface-400 hover:text-yellow-500'
-              "
-              :disabled="favourited || atLimit"
-              :title="atLimit ? sentenceLimitMessage : 'Save as custom sentence'"
-              @click="favouriteSentence"
-            >
-              <i class="pi text-sm" :class="favourited ? 'pi-star-fill' : 'pi-star'" />
-            </button>
             <button
               v-if="canEdit && actionsVisible"
               class="inline-flex items-center justify-center transition-colors"

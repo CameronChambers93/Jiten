@@ -6,7 +6,6 @@
     wordId: number;
     readingIndex: number;
     atLimit: boolean;
-    savedTexts: string[];
     knownStates?: KnownState[];
   }>();
 
@@ -185,7 +184,6 @@
       :word-id="wordId"
       :reading-index="readingIndex"
       :at-limit="atLimit"
-      :saved-texts="savedTexts"
       :target-known="wordKnown"
       @favourited="emit('favourited')"
     />

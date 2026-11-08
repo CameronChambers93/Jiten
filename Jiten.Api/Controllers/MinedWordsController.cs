@@ -21,6 +21,7 @@ public class MinedWordsController(MinedSentenceService mined, MinedSyncService s
     private const int MaxFlags = 1000;
     private const int MaxMatches = 500;
     private const int MaxWordSummaries = 100;
+    private const int MaxListStates = 200;
 
     [HttpGet("settings")]
     [SwaggerOperation(Summary = "The user's sentence store settings")]
@@ -129,6 +130,35 @@ public class MinedWordsController(MinedSentenceService mined, MinedSyncService s
         {
             return BadRequest(new { message = e.Message });
         }
+    }
+
+    [HttpPost("list")]
+    [SwaggerOperation(Summary = "Saves one of Jiten's lines to a word's list, kept for Jiten only; a line the word has already is left as it is")]
+    public async Task<IActionResult> SaveToList([FromBody] SaveToListRequest request, CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        try
+        {
+            return Ok(await mined.SaveToListAsync(userId, request, ct));
+        }
+        catch (ArgumentException e)
+        {
+            return BadRequest(new { message = e.Message });
+        }
+    }
+
+    [HttpGet("list/state")]
+    [SwaggerOperation(Summary = "Which of these lines (wordId:readingIndex:sentenceId each) are in the word's list, and whether on its Anki card")]
+    public async Task<IActionResult> ListStates([FromQuery] List<string> lines, CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        var parsed = lines.SelectMany(l => l.Split(',', StringSplitOptions.RemoveEmptyEntries))
+                          .Select(l => l.Split(':'))
+                          .Where(p => p.Length == 3 && int.TryParse(p[0], out _) && byte.TryParse(p[1], out _) && long.TryParse(p[2], out _))
+                          .Select(p => (int.Parse(p[0]), byte.Parse(p[1]), long.Parse(p[2])))
+                          .Distinct().ToList();
+        if (parsed.Count > MaxListStates) return BadRequest(new { message = $"At most {MaxListStates} lines per request." });
+        return Ok(parsed.Count == 0 ? new List<ListStateDto>() : await mined.ListStatesAsync(userId, parsed, ct));
     }
 
     [HttpGet("rebuild")]
