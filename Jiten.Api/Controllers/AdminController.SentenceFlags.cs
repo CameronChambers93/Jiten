@@ -1,5 +1,6 @@
 using Hangfire;
 using Jiten.Api.Jobs;
+using Jiten.Api.Services;
 using Jiten.Api.Services.Mining;
 using Jiten.Core.Data.User;
 using Microsoft.AspNetCore.Mvc;
@@ -19,9 +20,10 @@ public partial class AdminController
 
     /// <summary>Closes every open flag on a line as fixed, so it comes back for everyone who flagged it.</summary>
     [HttpPost("sentence-flags/{sentenceId:long}/fixed")]
-    public async Task<IResult> MarkSentenceFixed([FromServices] SentenceFlagService flags, long sentenceId, CancellationToken ct)
+    public async Task<IResult> MarkSentenceFixed([FromServices] SentenceFlagService flags, [FromServices] ICurrentUserService userService, long sentenceId,
+                                                 CancellationToken ct)
     {
-        var closed = await flags.MarkFixedAsync(sentenceId, ct);
+        var closed = await flags.MarkFixedAsync(sentenceId, userService.UserId, ct);
         if (closed == 0) return Results.NotFound(new { message = "This line has no open flags." });
         logger.LogInformation("Admin marked sentence {SentenceId} fixed, closing {Count} flags", sentenceId, closed);
         return Results.Ok(new { closed });
@@ -45,9 +47,10 @@ public partial class AdminController
 
     /// <summary>Closes every open flag on a line as "not a problem": nothing was wrong, and the line comes back for everyone who flagged it.</summary>
     [HttpPost("sentence-flags/{sentenceId:long}/reject")]
-    public async Task<IResult> RejectSentenceFlags([FromServices] SentenceFlagService flags, long sentenceId, CancellationToken ct)
+    public async Task<IResult> RejectSentenceFlags([FromServices] SentenceFlagService flags, [FromServices] ICurrentUserService userService, long sentenceId,
+                                                   CancellationToken ct)
     {
-        var closed = await flags.RejectAsync(sentenceId, ct);
+        var closed = await flags.RejectAsync(sentenceId, userService.UserId, ct);
         if (closed == 0) return Results.NotFound(new { message = "This line has no open flags." });
         logger.LogInformation("Admin found nothing wrong with sentence {SentenceId}, closing {Count} flags", sentenceId, closed);
         return Results.Ok(new { closed });

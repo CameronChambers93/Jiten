@@ -1,5 +1,8 @@
+using Jiten.Api.Services;
 using Jiten.Core;
+using Jiten.Core.Data;
 using Jiten.Core.Data.User;
+using Jiten.Core.Services;
 using Microsoft.EntityFrameworkCore;
 
 namespace Jiten.Api.Services.Mining;
@@ -22,8 +25,13 @@ public record AdminSentenceFlagItemDto(long SentenceId, string Text, string? Tit
 
 public record AdminSentenceFlagPage(List<AdminSentenceFlagItemDto> Items, int TotalCount);
 
+/// <summary>A line the user fixed themselves that got a different approved fix, waiting for them to choose ("ask me" mode).</summary>
+/// <param name="Mine">The user's own parts that differ.</param>
+/// <param name="Approved">The shared line's parts, for the same parts.</param>
+public record ApprovedFixItemDto(long SentenceId, string Text, string? Source, bool HasPage, DateTime ApprovedAt, FixPartsDto Mine, FixPartsDto Approved);
+
 /// <summary>The user's flagged sentences: what they hide from Mine and card rotation, and the to-do list of them.</summary>
-public class SentenceFlagService(UserDbContext userContext, IDbContextFactory<JitenDbContext> contextFactory)
+public class SentenceFlagService(UserDbContext userContext, IDbContextFactory<JitenDbContext> contextFactory, NotificationService notifications)
 {
     public const int MaxNoteLength = 1000;
 
@@ -50,6 +58,56 @@ public class SentenceFlagService(UserDbContext userContext, IDbContextFactory<Ji
             return new SentenceFlagItemDto(f.SentenceFlagId, f.ExampleSentenceId, f.Reason, f.Note, f.CreatedAt, line?.Text, line?.SourceTitle ?? line?.Deck,
                                        line is { RemovedFromDeck: false, DeckId: not null });
         }).ToList();
+    }
+
+    /// <summary>Lines whose approved fix the user is asked about, oldest first.</summary>
+    public async Task<List<ApprovedFixItemDto>> ApprovedFixesAsync(string userId, CancellationToken ct)
+    {
+        var fixes = await userContext.SentenceFixes.AsNoTracking().Where(f => f.UserId == userId && f.ApprovedFixAt != null)
+                                     .OrderBy(f => f.ApprovedFixAt).ToListAsync(ct);
+        var ids = fixes.Select(f => f.ExampleSentenceId).ToList();
+
+        await using var context = await contextFactory.CreateDbContextAsync(ct);
+        var lines = await context.ExampleSentences.AsNoTracking().IgnoreQueryFilters()
+                                 .Where(s => ids.Contains(s.SentenceId) && s.OwnerId == null)
+                                 .Select(s => new
+                                 {
+                                     s.SentenceId, s.Text, s.RemovedFromDeck, s.DeckId,
+                                     Title = s.Deck == null ? s.SourceTitle : s.Deck.ParentDeck != null ? s.Deck.ParentDeck.OriginalTitle : s.Deck.OriginalTitle
+                                 })
+                                 .ToDictionaryAsync(s => s.SentenceId, ct);
+
+        var result = new List<ApprovedFixItemDto>();
+        foreach (var f in fixes.Where(f => lines.ContainsKey(f.ExampleSentenceId)))
+        {
+            // Only the parts the approval covered, where the user's differ
+            if (await SentenceFixService.LatestApprovedPartsAsync(context, f.ExampleSentenceId, ct) is not { } a) continue;
+            var text = a.Text != null && f.Text != null && f.Text != a.Text;
+            var english = a.English != null && f.English != null && f.English != a.English;
+            var clip = a.StartMs != null && f.StartMs != null && (f.StartMs, f.EndMs) != (a.StartMs, a.EndMs);
+            var frame = a.PictureMs != null && f.PictureMs != null && f.PictureMs != a.PictureMs;
+            if (!(text || english || clip || frame)) continue;
+
+            var l = lines[f.ExampleSentenceId];
+            result.Add(new ApprovedFixItemDto(
+                l.SentenceId, f.Text ?? l.Text, l.Title, l is { RemovedFromDeck: false, DeckId: not null }, f.ApprovedFixAt!.Value,
+                new FixPartsDto(text ? f.Text : null, english ? f.English : null, clip ? f.StartMs : null, clip ? f.EndMs : null, frame ? f.PictureMs : null),
+                new FixPartsDto(text ? a.Text : null, english ? a.English : null, clip ? a.StartMs : null, clip ? a.EndMs : null, frame ? a.PictureMs : null)));
+        }
+
+        return result;
+    }
+
+    public async Task<string> ApprovedFixModeAsync(string userId, CancellationToken ct) =>
+        await userContext.UserSettings.AsNoTracking().Where(s => s.UserId == userId).Select(s => s.ApprovedFixMode).FirstOrDefaultAsync(ct)
+        ?? ApprovedFixMode.Keep;
+
+    public async Task SaveApprovedFixModeAsync(string userId, string mode, CancellationToken ct)
+    {
+        var settings = await userContext.UserSettings.FirstOrDefaultAsync(s => s.UserId == userId, ct);
+        if (settings == null) userContext.UserSettings.Add(settings = new UserSettings { UserId = userId });
+        settings.ApprovedFixMode = mode;
+        await userContext.SaveChangesAsync(ct);
     }
 
     /// <summary>Flags a sentence, or sets the reason and note of its open flag. False when the user can't see the sentence.</summary>
@@ -139,15 +197,38 @@ public class SentenceFlagService(UserDbContext userContext, IDbContextFactory<Ji
         userContext.SentenceFlags.Where(f => f.UserId == userId && f.ExampleSentenceId == sentenceId && f.ResolvedAt == null)
                    .ExecuteUpdateAsync(u => u.SetProperty(f => f.ResolvedAt, DateTime.UtcNow).SetProperty(f => f.Resolution, resolution), ct);
 
-    /// <summary>Closes every open flag on a line as "not a problem", bringing it back for everyone who flagged it; returns how many.</summary>
-    public Task<int> RejectAsync(long sentenceId, CancellationToken ct) =>
-        userContext.SentenceFlags.Where(f => f.ExampleSentenceId == sentenceId && f.ResolvedAt == null)
-                   .ExecuteUpdateAsync(u => u.SetProperty(f => f.ResolvedAt, DateTime.UtcNow)
-                                             .SetProperty(f => f.Resolution, SentenceFlagResolution.Rejected), ct);
+    /// <summary>
+    /// Closes every open flag on a line as "not a problem", bringing it back for everyone who flagged it, and tells them;
+    /// returns how many.
+    /// </summary>
+    public Task<int> RejectAsync(long sentenceId, string? actorId, CancellationToken ct) =>
+        CloseAllAsync(sentenceId, SentenceFlagResolution.Rejected, actorId, ct);
 
-    /// <summary>Closes every open flag on a line as fixed, bringing it back for everyone who flagged it; returns how many.</summary>
-    public Task<int> MarkFixedAsync(long sentenceId, CancellationToken ct) =>
-        userContext.SentenceFlags.Where(f => f.ExampleSentenceId == sentenceId && f.ResolvedAt == null)
-                   .ExecuteUpdateAsync(u => u.SetProperty(f => f.ResolvedAt, DateTime.UtcNow)
-                                             .SetProperty(f => f.Resolution, SentenceFlagResolution.Fixed), ct);
+    /// <summary>Closes every open flag on a line as fixed, bringing it back for everyone who flagged it, and tells them; returns how many.</summary>
+    public Task<int> MarkFixedAsync(long sentenceId, string? actorId, CancellationToken ct) =>
+        CloseAllAsync(sentenceId, SentenceFlagResolution.Fixed, actorId, ct);
+
+    /// <summary>Closes a line's open flags; everyone whose flag closed is notified, except <paramref name="actorId"/>, who did it.</summary>
+    private async Task<int> CloseAllAsync(long sentenceId, string resolution, string? actorId, CancellationToken ct)
+    {
+        var users = await userContext.SentenceFlags.AsNoTracking().Where(f => f.ExampleSentenceId == sentenceId && f.ResolvedAt == null)
+                                     .Select(f => f.UserId).ToListAsync(ct);
+        if (users.Count == 0) return 0;
+        var closed = await userContext.SentenceFlags.Where(f => f.ExampleSentenceId == sentenceId && f.ResolvedAt == null)
+                                      .ExecuteUpdateAsync(u => u.SetProperty(f => f.ResolvedAt, DateTime.UtcNow).SetProperty(f => f.Resolution, resolution), ct);
+
+        var notify = users.Where(u => u != actorId).ToList();
+        if (notify.Count > 0)
+        {
+            await using var context = await contextFactory.CreateDbContextAsync(ct);
+            var text = await context.ExampleSentences.AsNoTracking().IgnoreQueryFilters().Where(s => s.SentenceId == sentenceId)
+                                    .Select(s => s.Text).FirstOrDefaultAsync(ct);
+            var (title, outcome) = resolution == SentenceFlagResolution.Fixed
+                ? ("A line you flagged was fixed", "It's back in your sentences.")
+                : ("A line you flagged isn't being changed", "An admin found nothing wrong with it, so it's back in your sentences.");
+            await notifications.NotifyMany(notify, NotificationType.General, title, $"「{text}」 {outcome}", $"/sentences/{sentenceId}");
+        }
+
+        return closed;
+    }
 }

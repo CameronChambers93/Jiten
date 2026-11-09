@@ -189,6 +189,7 @@ public class UserDbContext : IdentityDbContext<User>
         {
             entity.HasKey(us => us.UserId);
             entity.Property(us => us.TargetWordTemplate).HasMaxLength(TargetWordMarkup.MaxTemplateLength);
+            entity.Property(us => us.ApprovedFixMode).HasMaxLength(10);
             if (isNpgsql)
             {
                 entity.Property(us => us.UserId).HasConversion(guidToString).HasColumnType("uuid").IsRequired();

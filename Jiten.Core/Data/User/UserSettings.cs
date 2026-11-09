@@ -31,4 +31,7 @@ public class UserSettings
 
     /// <summary>When Sync last sent known words; cards unchanged since aren't sent again. Cleared when a setup's known words change.</summary>
     public DateTime? AnkiKnownWordsSyncedAt { get; set; }
+
+    /// <summary>What happens to the user's own fix of a line when another fix of it is approved: see <see cref="ApprovedFixMode"/>; null keeps theirs.</summary>
+    public string? ApprovedFixMode { get; set; }
 }
