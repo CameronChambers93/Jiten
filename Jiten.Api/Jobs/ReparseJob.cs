@@ -1,6 +1,7 @@
 using Hangfire;
 using Jiten.Core;
 using Jiten.Core.Data;
+using Jiten.Parser.SpeechBoundaries;
 using Microsoft.EntityFrameworkCore;
 
 namespace Jiten.Api.Jobs;
@@ -9,7 +10,8 @@ public class ReparseJob(
     IDbContextFactory<JitenDbContext> contextFactory,
     IBackgroundJobClient backgroundJobs,
     Jiten.Api.Services.IPendingEmbeddingQueue pendingEmbeddingQueue,
-    Jiten.Api.Services.IIndexNowService indexNow)
+    Jiten.Api.Services.IIndexNowService indexNow,
+    Jiten.Api.Services.Mining.ParseCorrectionService corrections)
 {
     // Single-deck reparse: notifies IndexNow. Kept as a 1-arg overload so in-flight Hangfire jobs
     // serialized before this change still resolve.
@@ -43,10 +45,18 @@ public class ReparseJob(
 
         var children = deck.Children.ToList();
 
+        // Submitted text fixes go back into their lines before parsing, so the fixed words count and each fixed line keeps its row
+        List<int> episodeIds = children.Count == 0 ? [deck.DeckId] : children.Select(c => c.DeckId).ToList();
+        var corrected = await corrections.LoadAsync(episodeIds);
+        var userBySentence = corrected.Values.SelectMany(l => l).ToDictionary(c => c.Correction.SentenceId, c => c.UserId);
+        List<LineCorrection>? CorrectionsFor(int episodeId) => corrected.GetValueOrDefault(episodeId)?.Select(c => c.Correction).ToList();
+        var unmatched = new List<LineCorrection>();
+
         if (deck.Children.Count == 0)
         {
             Deck newDeck = await Parser.Parser.ParseTextToDeck(contextFactory, deck.RawText!.RawText, true, true, deck.MediaType,
-                dictionaryEntries: dictEntries, speechBoundaries: deck.RawText.SpeechBoundaries);
+                dictionaryEntries: dictEntries, speechBoundaries: deck.RawText.SpeechBoundaries,
+                lineCorrections: CorrectionsFor(deck.DeckId), unmatchedCorrections: unmatched);
             deck.CharacterCount = newDeck.CharacterCount;
             deck.WordCount = newDeck.WordCount;
             deck.UniqueWordCount = newDeck.UniqueWordCount;
@@ -81,7 +91,9 @@ public class ReparseJob(
                 predictDifficulty: true,
                 deck.MediaType,
                 dictionaryEntries: dictEntries,
-                speechBoundaries: children.Select(c => c.RawText!.SpeechBoundaries).ToList());
+                speechBoundaries: children.Select(c => c.RawText!.SpeechBoundaries).ToList(),
+                lineCorrections: children.Select(c => (IReadOnlyList<LineCorrection>?)CorrectionsFor(c.DeckId)).ToList(),
+                unmatchedCorrections: unmatched);
 
             // Copy properties back to original deck objects
             for (int i = 0; i < children.Count; i++)
@@ -111,6 +123,9 @@ public class ReparseJob(
         }
 
         deck.LastUpdate = DateTime.UtcNow;
+
+        // Before saving: the flag keeps a line whose fix found no place, rather than the save deleting it
+        await corrections.ReportUnmatchedAsync(deck.DeckId, unmatched, userBySentence);
 
         await JitenHelper.InsertDeck(contextFactory, deck, [], true);
 

@@ -1,3 +1,5 @@
+using Hangfire;
+using Jiten.Api.Jobs;
 using Jiten.Api.Services.Mining;
 using Jiten.Core.Data.User;
 using Microsoft.AspNetCore.Mvc;
@@ -23,6 +25,22 @@ public partial class AdminController
         if (closed == 0) return Results.NotFound(new { message = "This line has no open flags." });
         logger.LogInformation("Admin marked sentence {SentenceId} fixed, closing {Count} flags", sentenceId, closed);
         return Results.Ok(new { closed });
+    }
+
+    /// <summary>Titles with a submitted text fix their last parse hasn't seen.</summary>
+    [HttpGet("sentence-flags/corrected-titles")]
+    public async Task<IResult> GetCorrectedTitles([FromServices] ParseCorrectionService corrections, CancellationToken ct) =>
+        Results.Ok(await corrections.CorrectedTitlesAsync(ct));
+
+    /// <summary>Reparses each corrected title whole, so its fixes reach its word lists and stats.</summary>
+    [HttpPost("sentence-flags/reparse-corrected")]
+    public async Task<IResult> ReparseCorrectedTitles([FromServices] ParseCorrectionService corrections, CancellationToken ct)
+    {
+        var titles = await corrections.CorrectedTitlesAsync(ct);
+        foreach (var title in titles)
+            backgroundJobs.Enqueue<ReparseJob>(job => job.Reparse(title.DeckId, false));
+        logger.LogInformation("Admin queued reparses of {Count} corrected titles", titles.Count);
+        return Results.Ok(new { queued = titles.Count });
     }
 
     /// <summary>Closes every open flag on a line as "not a problem": nothing was wrong, and the line comes back for everyone who flagged it.</summary>

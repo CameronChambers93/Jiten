@@ -28,6 +28,12 @@
     firstFlaggedAt: string;
   }
 
+  interface CorrectedTitle {
+    deckId: number;
+    title: string;
+    corrections: number;
+  }
+
   useHead({ title: 'Flagged Sentences - Jiten Admin' });
   definePageMeta({ middleware: ['auth-admin'] });
 
@@ -41,6 +47,8 @@
   const page = ref(0);
   const rows = 50;
   const fixing = ref<number | null>(null);
+  const corrected = ref<CorrectedTitle[]>([]);
+  const reparsing = ref(false);
 
   function reasonLabel(value: string) {
     return FLAG_REASONS.find((r) => r.value === value)?.label ?? 'No reason yet';
@@ -82,12 +90,42 @@
     }
   }
 
+  /** Titles with submitted text fixes their last parse hasn't seen; a reparse puts the fixes into their word lists and stats. */
+  async function loadCorrected() {
+    try {
+      corrected.value = await $api<CorrectedTitle[]>('admin/sentence-flags/corrected-titles');
+    } catch {
+      corrected.value = [];
+    }
+  }
+
+  async function reparseCorrected() {
+    reparsing.value = true;
+    try {
+      const { queued } = await $api<{ queued: number }>('admin/sentence-flags/reparse-corrected', { method: 'POST' });
+      toast.add({
+        severity: 'success',
+        summary: 'Reparse queued',
+        detail: `${queued} title${queued === 1 ? '' : 's'}. Stats and word lists update when each finishes.`,
+        life: 4000,
+      });
+      corrected.value = [];
+    } catch (e) {
+      toast.add({ severity: 'error', summary: "Couldn't queue the reparse", detail: extractApiError(e, 'The request failed'), life: 5000 });
+    } finally {
+      reparsing.value = false;
+    }
+  }
+
   watch(reason, () => {
     page.value = 0;
     load();
   });
 
-  onMounted(load);
+  onMounted(() => {
+    load();
+    loadCorrected();
+  });
 </script>
 
 <template>
@@ -101,6 +139,24 @@
       everyone and closes every flag on it. Mark fixed closes them after a fix made some other way, and Not a problem closes them when nothing was
       wrong. Either brings the line back for those users. Users' private lines aren't listed.
     </p>
+
+    <div v-if="corrected.length" class="mb-4 p-3 rounded border border-surface-200 dark:border-surface-700 flex flex-col sm:flex-row sm:items-center gap-3">
+      <div class="min-w-0 text-sm">
+        <div class="font-semibold">Corrected titles to reparse</div>
+        <div class="text-gray-600 dark:text-gray-300">
+          Submitted fixes change word lists and stats only after a reparse:
+          <template v-for="(t, i) in corrected" :key="t.deckId">{{ i ? ', ' : '' }}{{ t.title }} ({{ t.corrections }})</template>
+        </div>
+      </div>
+      <Button
+        :label="`Reparse ${corrected.length} title${corrected.length === 1 ? '' : 's'}`"
+        icon="pi pi-refresh"
+        size="small"
+        class="shrink-0 sm:ml-auto"
+        :loading="reparsing"
+        @click="reparseCorrected"
+      />
+    </div>
 
     <div class="mb-4 flex flex-wrap items-center gap-4">
       <Tag severity="warn" class="text-base px-3 py-1">{{ totalCount }} flagged line{{ totalCount === 1 ? '' : 's' }}</Tag>

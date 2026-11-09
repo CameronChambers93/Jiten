@@ -69,6 +69,25 @@ public class SentenceFlagService(UserDbContext userContext, IDbContextFactory<Ji
         return true;
     }
 
+    /// <summary>
+    /// Puts a submitted fix back on its submitter's to-do list when a reparse finds no line for it. The open flag also keeps
+    /// the line through the reparse. False when the user already has an open flag on the line.
+    /// </summary>
+    public async Task<bool> OpenForCorrectionAsync(string userId, long sentenceId, string fixedText, CancellationToken ct)
+    {
+        if (await userContext.SentenceFlags.AnyAsync(f => f.UserId == userId && f.ExampleSentenceId == sentenceId && f.ResolvedAt == null, ct))
+            return false;
+
+        var note = $"A reparse found no subtitle line for your fix: {fixedText}";
+        userContext.SentenceFlags.Add(new SentenceFlag
+        {
+            UserId = userId, ExampleSentenceId = sentenceId, Reason = SentenceFlagReason.Japanese,
+            Note = note.Length > MaxNoteLength ? note[..MaxNoteLength] : note
+        });
+        await userContext.SaveChangesAsync(ct);
+        return true;
+    }
+
     /// <summary>Closes an open flag without a fix; the sentence comes back. False when the user has no such flag.</summary>
     public async Task<bool> DismissAsync(string userId, long sentenceFlagId, CancellationToken ct) =>
         await userContext.SentenceFlags.Where(f => f.SentenceFlagId == sentenceFlagId && f.UserId == userId && f.ResolvedAt == null)

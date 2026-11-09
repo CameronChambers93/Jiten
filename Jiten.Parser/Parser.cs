@@ -825,10 +825,14 @@ namespace Jiten.Parser
                                                        ParserDiagnostics? diagnostics = null,
                                                        BenchmarkTimings? timings = null,
                                                        List<DeckDictionaryEntry>? dictionaryEntries = null,
-                                                       byte[]? speechBoundaries = null)
+                                                       byte[]? speechBoundaries = null,
+                                                       IReadOnlyList<LineCorrection>? lineCorrections = null,
+                                                       ICollection<LineCorrection>? unmatchedCorrections = null)
         {
             var results = await ParseTextsToDeck(contextFactory, [text], storeRawText, predictDifficulty, mediatype, diagnostics, timings, dictionaryEntries,
-                                                 speechBoundaries: [speechBoundaries]);
+                                                 speechBoundaries: [speechBoundaries],
+                                                 lineCorrections: lineCorrections == null ? null : [lineCorrections],
+                                                 unmatchedCorrections: unmatchedCorrections);
             return results.Count > 0 ? results[0] : new Deck();
         }
 
@@ -841,7 +845,9 @@ namespace Jiten.Parser
                                                               BenchmarkTimings? timings = null,
                                                               List<DeckDictionaryEntry>? dictionaryEntries = null,
                                                               List<List<ParsedOccurrence>>? occurrenceSink = null,
-                                                              IReadOnlyList<byte[]?>? speechBoundaries = null)
+                                                              IReadOnlyList<byte[]?>? speechBoundaries = null,
+                                                              IReadOnlyList<IReadOnlyList<LineCorrection>?>? lineCorrections = null,
+                                                              ICollection<LineCorrection>? unmatchedCorrections = null)
         {
             if (texts.Count == 0) return [];
 
@@ -862,6 +868,17 @@ namespace Jiten.Parser
             byte[]?[]? boundariesByText = null;
             var lineUnits = new bool[texts.Count];
             var cueLines = SubtitleLinesEnabled;
+
+            // Submitted fixes apply only to cue lines, where each line is one stored sentence; elsewhere they find no line
+            string ApplyCorrections(string lines, int textIndex)
+            {
+                if (lineCorrections == null || textIndex >= lineCorrections.Count || lineCorrections[textIndex] is not { Count: > 0 } corrections)
+                    return lines;
+                var (corrected, unmatched) = lineUnits[textIndex] ? LineCorrector.Apply(lines, corrections) : (lines, corrections.ToList());
+                foreach (var c in unmatched) unmatchedCorrections?.Add(c);
+                return corrected;
+            }
+
             if (MediaTypes.IsSubtitleSpeech(mediatype))
             {
                 parseTexts = new List<string>(texts.Count);
@@ -873,7 +890,7 @@ namespace Jiten.Parser
                     var (assembled, boundaries) = lineUnits[i]
                         ? CueLineAssembler.Prepare(texts[i], stored, SpeechBoundaryModel.Default)
                         : SpeechTextAssembler.Prepare(texts[i], stored, SpeechBoundaryModel.Default);
-                    parseTexts.Add(assembled);
+                    parseTexts.Add(ApplyCorrections(assembled, i));
                     boundariesByText[i] = boundaries;
                 }
             }
@@ -888,9 +905,14 @@ namespace Jiten.Parser
                     var (prepared, boundaries) = lineUnits[i]
                         ? CueLineAssembler.Prepare(texts[i], stored, SpeechBoundaryModel.YouTube)
                         : YouTubeSpeechText.Prepare(texts[i], SpeechBoundaryModel.YouTube);
-                    parseTexts.Add(prepared);
+                    parseTexts.Add(ApplyCorrections(prepared, i));
                     boundariesByText[i] = boundaries;
                 }
+            }
+            else
+            {
+                // Not cue lines: their fixes find no line
+                for (int i = 0; i < texts.Count; i++) ApplyCorrections(texts[i], i);
             }
 
             var cleanTexts = new List<string>(texts.Count);
