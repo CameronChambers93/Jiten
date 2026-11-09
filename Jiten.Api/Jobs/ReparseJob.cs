@@ -58,10 +58,12 @@ public class ReparseJob(
         var newest = await corrections.NewestIdAsync(episodeIds);
         Dictionary<int, List<(LineCorrection Correction, string UserId)>> corrected;
         var unmatched = new List<LineCorrection>();
+        var applied = new List<AppliedCorrection>();
         for (var parse = 0; ; parse++)
         {
             corrected = await corrections.LoadAsync(episodeIds);
             unmatched.Clear();
+            applied.Clear();
             await ParseAsync();
 
             ReparseSaves.Enter(episodeIds);
@@ -94,6 +96,12 @@ public class ReparseJob(
         try
         {
             var userBySentence = corrected.Values.SelectMany(l => l).ToDictionary(c => c.Correction.SentenceId, c => c.UserId);
+
+            // Each fixed line keeps its row, even where the parser changed the fixed text
+            foreach (var episode in children.Count == 0 ? [deck] : children)
+                if (CorrectionsFor(episode.DeckId) is { } episodeCorrections)
+                    LineCorrector.PinRows(applied.Where(a => episodeCorrections.Contains(a.Correction)).ToList(), episode.ExampleSentences.ToList());
+
             if (children.Count > 0)
             {
                 deck.Children = children;
@@ -131,7 +139,7 @@ public class ReparseJob(
             {
                 Deck newDeck = await Parser.Parser.ParseTextToDeck(contextFactory, deck.RawText!.RawText, true, true, deck.MediaType,
                     dictionaryEntries: dictEntries, speechBoundaries: deck.RawText.SpeechBoundaries,
-                    lineCorrections: CorrectionsFor(deck.DeckId), unmatchedCorrections: unmatched);
+                    lineCorrections: CorrectionsFor(deck.DeckId), unmatchedCorrections: unmatched, appliedCorrections: applied);
                 deck.CharacterCount = newDeck.CharacterCount;
                 deck.WordCount = newDeck.WordCount;
                 deck.UniqueWordCount = newDeck.UniqueWordCount;
@@ -168,7 +176,8 @@ public class ReparseJob(
                     dictionaryEntries: dictEntries,
                     speechBoundaries: children.Select(c => c.RawText!.SpeechBoundaries).ToList(),
                     lineCorrections: children.Select(c => (IReadOnlyList<LineCorrection>?)CorrectionsFor(c.DeckId)).ToList(),
-                    unmatchedCorrections: unmatched);
+                    unmatchedCorrections: unmatched,
+                    appliedCorrections: applied);
 
                 // Copy properties back to original deck objects
                 for (int i = 0; i < children.Count; i++)

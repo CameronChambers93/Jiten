@@ -66,9 +66,17 @@ public class SentenceTranslationService(
         foreach (var (id, t) in await CachedAsync(s => missing.Contains(s.SentenceId), ct))
             result[id] = Ai(t);
 
-        foreach (var (id, text) in fixedTexts ?? new Dictionary<long, string>())
-            if (sentenceIds.Contains(id) && !result.ContainsKey(id) && await CachedForTextAsync(text, ct) is { } t)
-                result[id] = Ai(t);
+        var wanted = (fixedTexts ?? new Dictionary<long, string>()).Where(p => sentenceIds.Contains(p.Key) && !result.ContainsKey(p.Key)).ToList();
+        if (wanted.Count > 0)
+        {
+            var rows = await CentralSentenceRows.FindManyAsync(context, wanted.Select(p => p.Value).Distinct().ToList(), ct);
+            var rowIds = rows.Values.Distinct().ToList();
+            var cached = await context.ExampleSentenceTranslations.AsNoTracking().Where(t => rowIds.Contains(t.CentralSentenceId))
+                                      .ToDictionaryAsync(t => t.CentralSentenceId, ct);
+            foreach (var (id, text) in wanted)
+                if (rows.GetValueOrDefault(text) is { } row && cached.GetValueOrDefault(row) is { } t)
+                    result[id] = Ai(t);
+        }
 
         return result;
     }
@@ -144,6 +152,7 @@ public class SentenceTranslationService(
 
         var prompt = TranslationPrompt.Render(settings.EffectivePrompt, sentence.Title, contextLines, fixedText ?? sentence.Text);
         var result = await active.Provider.TranslateAsync(active.Config, prompt, ct);
+        await using var hold = fixedText != null ? await JitenHelper.HoldSentenceRowsAsync(context, ct) : null;
         var centralId = fixedText != null ? await CentralSentenceRows.EnsureAsync(context, fixedText, ct) : sentence.CentralSentenceId!.Value;
 
         context.ExampleSentenceTranslations.Add(new ExampleSentenceTranslation
@@ -154,6 +163,7 @@ public class SentenceTranslationService(
         try
         {
             await context.SaveChangesAsync(ct);
+            if (hold != null) await hold.CommitAsync(ct);
         }
         catch (DbUpdateException e)
         {

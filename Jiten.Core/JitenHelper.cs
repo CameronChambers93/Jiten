@@ -316,7 +316,8 @@ public static class JitenHelper
 
     /// <summary>
     /// Makes a deck's occurrences match this parse in one transaction: a line that's still there keeps its row, id and
-    /// translation, a new one is added, and a dropped one is deleted, or kept and hidden if a user mined it or has it flagged.
+    /// translation, a new one is added, and a dropped one is deleted, or kept and hidden if a user mined it, has it flagged or
+    /// has a fix of it waiting for review. The API's SentenceRowSweepJob deletes it once none of those holds.
     /// </summary>
     public static async Task SaveExampleSentences(IDbContextFactory<JitenDbContext> contextFactory, ICollection<ExampleSentence> exampleSentences, int deckId)
     {
@@ -332,11 +333,13 @@ public static class JitenHelper
 
             // Disable statement timeout for this transaction
             await ExecuteAsync(conn, @"SET LOCAL statement_timeout = 0");
+            await LockSentenceRowsSharedAsync(conn);
 
             var sentences = exampleSentences.ToList();
             var centralIds = await EnsureCentralSentences(conn, sentences.Select(s => s.Text).ToArray());
             var stored = await LoadStoredOccurrences(conn, deckId);
-            var incoming = sentences.Select((s, i) => new SentenceOccurrenceMatcher.Incoming(centralIds[i], s.Position)).ToList();
+            // A parsed sentence that already has an id is a fixed line pinned to its row (LineCorrector.PinRows)
+            var incoming = sentences.Select((s, i) => new SentenceOccurrenceMatcher.Incoming(centralIds[i], s.Position, s.SentenceId)).ToList();
             var matches = SentenceOccurrenceMatcher.Match(stored, incoming);
 
             // New rows get ids up front, from the backing sequence, so one statement can write them with the matched rows
@@ -386,7 +389,8 @@ public static class JitenHelper
                     DELETE FROM jiten.""ExampleSentences"" es
                     WHERE es.""SentenceId"" = ANY(@ids)
                       AND NOT EXISTS (SELECT 1 FROM ""user"".""MinedSentences"" m WHERE m.""ExampleSentenceId"" = es.""SentenceId"")
-                      AND NOT EXISTS (SELECT 1 FROM ""user"".""SentenceFlags"" f WHERE f.""ExampleSentenceId"" = es.""SentenceId"" AND f.""ResolvedAt"" IS NULL)",
+                      AND NOT EXISTS (SELECT 1 FROM ""user"".""SentenceFlags"" f WHERE f.""ExampleSentenceId"" = es.""SentenceId"" AND f.""ResolvedAt"" IS NULL)
+                      AND NOT EXISTS (SELECT 1 FROM jiten.""SentenceSubmissions"" s WHERE s.""ExampleSentenceId"" = es.""SentenceId"" AND s.""Status"" = 'pending')",
                     new NpgsqlParameter("ids", dropped));
                 await ExecuteAsync(conn, @"
                     UPDATE jiten.""ExampleSentences"" SET ""RemovedFromDeck"" = TRUE, ""WordKeys"" = '{}'
@@ -404,7 +408,30 @@ public static class JitenHelper
         Console.WriteLine($"[{DateTime.UtcNow:O}] Saving example sentences took {timer.ElapsedMilliseconds} ms for DeckId {deckId} with {exampleSentences.Count} sentences.");
     }
 
-    /// <summary>The Sentences row for each text, in order, adding any that are new.</summary>
+    /// <summary>
+    /// The advisory lock between code that resolves a Sentences row and then points at it, which holds it shared until its
+    /// transaction commits, and the sweep that deletes rows nothing points at, which holds it exclusively.
+    /// </summary>
+    public const long SentenceRowsLockKey = 0x4A6974656E_5352;
+
+    /// <summary>Holds <see cref="SentenceRowsLockKey"/> shared until <paramref name="conn"/>'s transaction ends.</summary>
+    public static Task LockSentenceRowsSharedAsync(NpgsqlConnection conn) =>
+        ExecuteAsync(conn, @"SELECT pg_advisory_xact_lock_shared(@key)", new NpgsqlParameter("key", SentenceRowsLockKey));
+
+    /// <summary>
+    /// For EF code that resolves a Sentences row and then saves something pointing at it: a transaction holding
+    /// <see cref="SentenceRowsLockKey"/> shared, to commit after the save. Null off Postgres, or inside a transaction
+    /// already (which then holds the lock).
+    /// </summary>
+    public static async Task<Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction?> HoldSentenceRowsAsync(JitenDbContext context, CancellationToken ct)
+    {
+        if (!context.Database.IsNpgsql()) return null;
+        var transaction = context.Database.CurrentTransaction == null ? await context.Database.BeginTransactionAsync(ct) : null;
+        await context.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock_shared({0})", [SentenceRowsLockKey], ct);
+        return transaction;
+    }
+
+    /// <summary>The Sentences row for each text, in order, adding any that are new. Hold <see cref="SentenceRowsLockKey"/> shared.</summary>
     public static async Task<long[]> EnsureCentralSentences(NpgsqlConnection conn, string[] texts)
     {
         // Sorted, so decks saved in parallel that share lines can't deadlock on the unique index

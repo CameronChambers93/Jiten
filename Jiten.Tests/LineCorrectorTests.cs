@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Jiten.Core.Data;
 using Jiten.Parser.SpeechBoundaries;
 using Xunit;
 
@@ -71,4 +72,50 @@ public class LineCorrectorTests
     public void FuriganaMarkupIsIgnoredWhenMatching() =>
         Apply(["{漢字'かんじ}を読む。"], new LineCorrection(1, "漢字を読む。", "漢字を読もう。", 0))
             .Lines.Should().Equal("漢字を読もう。");
+
+    private static ExampleSentence Parsed(string text, int position) => new() { Text = text, Position = position, Tokens = [], WordKeys = [] };
+
+    private static AppliedCorrection Applied(long id, string text, int linePosition) => new(new LineCorrection(id, "元の行。", text, 0), linePosition);
+
+    [Fact]
+    public void Apply_ReportsEachFixWithItsLinesPosition()
+    {
+        var applied = new List<AppliedCorrection>();
+        var fix = new LineCorrection(1, "はい。", "うん。", 3);
+        LineCorrector.Apply("♪～\nはい。\nそうか。\nはい。\n", [fix], applied);
+        applied.Should().Equal(new AppliedCorrection(fix, 2));
+    }
+
+    [Fact]
+    public void PinRows_AFixTheParserChanged_KeepsItsRow()
+    {
+        var sentences = new[] { Parsed("おはよう。", 0), Parsed("うそだろ！", 1) };
+        LineCorrector.PinRows([Applied(42, "うそだろ！！", 1)], sentences);
+        sentences.Select(s => s.SentenceId).Should().Equal(0L, 42L);
+    }
+
+    [Fact]
+    public void PinRows_ANeighbourWithTheSameText_IsNotPinned()
+    {
+        // Line 1 already read うん; the fix made line 2 うん too
+        var sentences = new[] { Parsed("そうか。", 0), Parsed("うん。", 1), Parsed("うん！", 2) };
+        LineCorrector.PinRows([Applied(42, "うん！！", 2)], sentences);
+        sentences.Select(s => s.SentenceId).Should().Equal(0L, 0L, 42L);
+    }
+
+    [Fact]
+    public void PinRows_AFixWithNoParsedSentence_PinsNothing()
+    {
+        var sentences = new[] { Parsed("おはよう。", 0) };
+        LineCorrector.PinRows([Applied(42, "うん。", 0)], sentences);
+        sentences.Single().SentenceId.Should().Be(0);
+    }
+
+    [Fact]
+    public void PinRows_AFixWithNoJapanese_PinsNothing()
+    {
+        var sentences = new[] { Parsed("……", 0), Parsed("……！", 1) };
+        LineCorrector.PinRows([Applied(42, "……！！", 1)], sentences);
+        sentences.Select(s => s.SentenceId).Should().Equal(0L, 0L);
+    }
 }

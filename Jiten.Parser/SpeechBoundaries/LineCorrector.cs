@@ -1,9 +1,13 @@
 using System.Text;
+using Jiten.Core.Data;
 
 namespace Jiten.Parser.SpeechBoundaries;
 
 /// <summary>A submitted text fix of one stored line: its original text, the fixed text, and where the line was.</summary>
 public record LineCorrection(long SentenceId, string SourceText, string Text, int Position);
+
+/// <summary>A fix <see cref="LineCorrector.Apply"/> put in, with the position its line has in this parse.</summary>
+public record AppliedCorrection(LineCorrection Correction, int Position);
 
 /// <summary>
 /// Puts submitted text fixes back into a deck's lines before they're parsed (sentence flags step 3), so a reparse counts the
@@ -18,9 +22,10 @@ public static class LineCorrector
     /// Replaces each correction's line in <paramref name="assembledText"/> (lines separated by \n): the line whose
     /// <see cref="Key"/> matches the correction's source text, nearest its position first and at most
     /// <see cref="MaxDistance"/> away. A line takes at most one correction. Returns the text and the corrections that found
-    /// no line.
+    /// no line. <paramref name="applied"/> gets the rest, with their lines' positions.
     /// </summary>
-    public static (string Text, List<LineCorrection> Unmatched) Apply(string assembledText, IReadOnlyList<LineCorrection> corrections)
+    public static (string Text, List<LineCorrection> Unmatched) Apply(string assembledText, IReadOnlyList<LineCorrection> corrections,
+                                                                    ICollection<AppliedCorrection>? applied = null)
     {
         if (corrections.Count == 0) return (assembledText, []);
 
@@ -46,16 +51,46 @@ public static class LineCorrector
                          .OrderBy(p => Math.Abs((long)sentenceOfLine[p.Line] - p.Correction.Position))
                          .ThenBy(p => p.Line);
 
-        var applied = new HashSet<LineCorrection>();
+        var done = new HashSet<LineCorrection>();
         var taken = new HashSet<int>();
         foreach (var (correction, line) in candidates)
         {
-            if (applied.Contains(correction) || !taken.Add(line)) continue;
+            if (done.Contains(correction) || !taken.Add(line)) continue;
             lines[line] = correction.Text.Replace("\r", "").Replace('\n', '　');
-            applied.Add(correction);
+            done.Add(correction);
+            applied?.Add(new AppliedCorrection(correction, sentenceOfLine[line]));
         }
 
-        return (string.Join('\n', lines), corrections.Where(c => !applied.Contains(c)).ToList());
+        return (string.Join('\n', lines), corrections.Where(c => !done.Contains(c)).ToList());
+    }
+
+    /// <summary>
+    /// Gives each applied fix's parsed sentence the fix's <see cref="LineCorrection.SentenceId"/>, so the save keeps the line's
+    /// row even when the parser changed the fixed text (「！！」 is stored as 「！」) and its text no longer pairs it. The
+    /// sentence is the one whose <see cref="Key"/> matches the fixed text's, nearest its line's position (the same one,
+    /// unless the parse dropped a line). A fixed text with no key (only punctuation or Latin) isn't pinned.
+    /// </summary>
+    public static void PinRows(IReadOnlyList<AppliedCorrection> applied, IReadOnlyList<ExampleSentence> sentences)
+    {
+        if (applied.Count == 0) return;
+
+        var byKey = sentences.ToLookup(s => Key(s.Text));
+        var candidates = applied
+                         .Select(a => (Applied: a, Key: Key(FuriganaHintExtractor.Strip(a.Correction.Text))))
+                         .Where(a => a.Key.Length > 0)
+                         .SelectMany(a => byKey[a.Key], (a, s) => (a.Applied.Correction, a.Applied.Position, Sentence: s))
+                         .Where(p => Math.Abs((long)p.Sentence.Position - p.Position) <= MaxDistance)
+                         .OrderBy(p => Math.Abs((long)p.Sentence.Position - p.Position))
+                         .ThenBy(p => p.Sentence.Position);
+
+        var pinned = new HashSet<LineCorrection>();
+        var taken = new HashSet<ExampleSentence>(ReferenceEqualityComparer.Instance);
+        foreach (var (correction, _, sentence) in candidates)
+        {
+            if (pinned.Contains(correction) || !taken.Add(sentence)) continue;
+            sentence.SentenceId = correction.SentenceId;
+            pinned.Add(correction);
+        }
     }
 
     /// <summary>

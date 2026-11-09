@@ -984,6 +984,7 @@ builder.Services.AddScoped<WebNovelSyncSweepJob>();
 builder.Services.AddScoped<YouTubeImportJob>();
 builder.Services.AddScoped<YouTubeFetchJob>();
 builder.Services.AddScoped<YouTubeSyncSweepJob>();
+builder.Services.AddScoped<SentenceRowSweepJob>();
 builder.Services.AddScoped<ReparseJob>();
 builder.Services.AddScoped<SentenceParseJob>();
 builder.Services.AddScoped<ComputationJob>();
@@ -1214,6 +1215,11 @@ if (!app.Environment.IsEnvironment("Testing"))
         "youtube-sync-sweep",
         job => job.Sweep(),
         Cron.Daily(4));
+
+    recurringJobs.AddOrUpdate<SentenceRowSweepJob>(
+        "sentence-row-sweep",
+        job => job.Sweep(),
+        Cron.Daily(6));
 
     recurringJobs.AddOrUpdate<YouTubeImportJob>(
         "youtube-import-fetched",
