@@ -5,7 +5,6 @@ using Jiten.Core;
 using Jiten.Core.Data;
 using Jiten.Core.Data.User;
 using Microsoft.EntityFrameworkCore;
-using Npgsql;
 
 namespace Jiten.Api.Services;
 
@@ -296,7 +295,7 @@ public class SentenceFixService(
     /// the submitter's, closes every open flag on those lines as fixed, and marks mined sentences on them for Sync. Users'
     /// own fixes of the lines lose the parts that now match, and otherwise follow their <see cref="ApprovedFixMode"/>.
     /// </summary>
-    /// <exception cref="SentenceFixException">The new text couldn't be parsed.</exception>
+    /// <exception cref="SentenceFixException">The new text couldn't be parsed, or the title's reparse is saving.</exception>
     public async Task ApplyToSharedAsync(ExampleSentence line, FixPartsDto parts, IReadOnlyCollection<long> sameTextIds, string submitterId, CancellationToken ct)
     {
         var sentenceId = line.SentenceId;
@@ -304,6 +303,9 @@ public class SentenceFixService(
         if (parts.Text != null && sameTextIds.Count > 0 && line.CentralSentenceId != null)
             lines.AddRange(await context.ExampleSentences.Where(s => sameTextIds.Contains(s.SentenceId) && s.SentenceId != sentenceId &&
                                                                      s.CentralSentenceId == line.CentralSentenceId).ToListAsync(ct));
+
+        if (lines.Any(l => l.DeckId is { } deckId && Jobs.ReparseSaves.IsSaving(deckId)))
+            throw new SentenceFixException("This title is saving a reparse. Try again in a minute.");
 
         // Parsed again, since the shared line's tokens decide which words it counts for. A failure stops the Submit rather
         // than leaving the shared line without words.
@@ -320,8 +322,9 @@ public class SentenceFixService(
                 throw new SentenceFixException("Couldn't read the words of the new text. Try again.");
             }
         }
-        long? centralId = parts.Text == null ? null : await CentralIdAsync(parts.Text, ct);
+        long? centralId = parts.Text == null ? null : await CentralSentenceRows.EnsureAsync(context, parts.Text, ct);
         var oldTexts = lines.ToDictionary(l => l.SentenceId, l => l.Text);
+        var oldCentralIds = centralId == null ? [] : lines.Where(l => l.CentralSentenceId is { } c && c != centralId).Select(l => l.CentralSentenceId!.Value).Distinct().ToList();
         foreach (var l in lines)
         {
             var sourceText = l.SourceText ?? l.Text;
@@ -352,6 +355,11 @@ public class SentenceFixService(
         }
 
         await context.SaveChangesAsync(ct);
+
+        // The old text's row goes once no line has it, and its cached AI translation with it
+        if (oldCentralIds.Count > 0)
+            await context.Sentences.Where(c => oldCentralIds.Contains(c.Id) && !context.ExampleSentences.IgnoreQueryFilters().Any(s => s.CentralSentenceId == c.Id))
+                         .ExecuteDeleteAsync(ct);
 
         var ids = lines.Select(l => l.SentenceId).ToList();
         await SettleOwnFixesAsync(sentenceId, parts, ids, submitterId, ct);
@@ -479,11 +487,4 @@ public class SentenceFixService(
         await userContext.SaveChangesAsync(ct);
     }
 
-    /// <summary>The central row for a fixed text, made if it's new. Null outside Postgres (the tests), where the line keeps its row.</summary>
-    private async Task<long?> CentralIdAsync(string text, CancellationToken ct)
-    {
-        if (context.Database.GetDbConnection() is not NpgsqlConnection conn) return null;
-        if (conn.State != System.Data.ConnectionState.Open) await conn.OpenAsync(ct);
-        return (await JitenHelper.EnsureCentralSentences(conn, [text]))[0];
-    }
 }

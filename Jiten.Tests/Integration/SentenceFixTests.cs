@@ -5,7 +5,11 @@ using FluentAssertions;
 using Jiten.Core;
 using Jiten.Core.Data;
 using Jiten.Core.Data.User;
+using Jiten.Api.Services;
+using Jiten.Api.Services.Translation;
 using Jiten.Parser.Tests.Integration.Infrastructure;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -406,5 +410,145 @@ public class SentenceFixTests(JitenWebApplicationFactory factory) : IClassFixtur
         editor.GetProperty("original").GetProperty("startMs").ValueKind.Should().Be(JsonValueKind.Null);
         editor.GetProperty("cues").GetArrayLength().Should().Be(3);
         editor.GetProperty("cues").EnumerateArray().Should().OnlyContain(c => !c.GetProperty("inClip").GetBoolean());
+    }
+
+    /// <summary>Line 3 (a book, no subtitles) with a cached AI translation of its text and of another text.</summary>
+    private async Task SeedBookTranslationsAsync()
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<JitenDbContext>();
+        db.Sentences.AddRange(new Sentence { Id = 20, TextHash = [2], Text = "本の行" }, new Sentence { Id = 21, TextHash = [3], Text = "本の髪" });
+        db.ExampleSentenceTranslations.AddRange(
+            new ExampleSentenceTranslation { CentralSentenceId = 20, Text = "A line of the book", Provider = "test", Model = "m", CreatedAt = DateTime.UtcNow },
+            new ExampleSentenceTranslation { CentralSentenceId = 21, Text = "The book's hair", Provider = "test", Model = "m", CreatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+        await db.ExampleSentences.Where(s => s.SentenceId == 3).ExecuteUpdateAsync(u => u.SetProperty(s => s.CentralSentenceId, 20L));
+    }
+
+    [Fact]
+    public async Task TheAiEnglishOfAFixedTextIsTheFixedTexts()
+    {
+        await SeedBookTranslationsAsync();
+        await Save(3, Fix(text: "本の髪"));
+
+        (await Json(HttpMethod.Get, "/api/sentence-translation/3")).GetProperty("translation").GetProperty("text").GetString().Should().Be("The book's hair");
+        (await Json(HttpMethod.Get, "/api/sentence-translation/3", TestUsers.UserB)).GetProperty("translation").GetProperty("text").GetString()
+            .Should().Be("A line of the book");
+
+        var batch = await Send(HttpMethod.Post, "/api/sentence-translation/batch", new { sentenceIds = new[] { 3L } });
+        (await batch.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("translations").GetProperty("3").GetProperty("text").GetString()
+            .Should().Be("The book's hair");
+    }
+
+    [Fact]
+    public async Task AFixedTextWithNoCachedEnglishShowsNoneRatherThanTheLines()
+    {
+        await SeedBookTranslationsAsync();
+        await Save(3, Fix(text: "本の新しい行"));
+
+        (await Json(HttpMethod.Get, "/api/sentence-translation/3")).GetProperty("translation").ValueKind.Should().Be(JsonValueKind.Null);
+        var batch = await Send(HttpMethod.Post, "/api/sentence-translation/batch", new { sentenceIds = new[] { 3L } });
+        (await batch.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("translations").TryGetProperty("3", out _).Should().BeFalse();
+    }
+
+    private class FakeTranslator : ITranslationProvider
+    {
+        public string Id => "fake";
+        public string Name => "Fake";
+        public IReadOnlyList<SettingField> Fields => [];
+        public Task<IReadOnlyList<string>> ListModelsAsync(ProviderConfig config, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(["m"]);
+        public Task<TranslationResult> TranslateAsync(ProviderConfig config, string prompt, CancellationToken ct) =>
+            Task.FromResult(new TranslationResult(prompt.Contains("本の新しい行") ? "A new line of the book" : "A line of the book", "m", null, null));
+        public ModelPrice? PriceFor(string model) => null;
+    }
+
+    [Fact]
+    public async Task TheAiTranslatesTheCallersFixedTextAndCachesItUnderThatText()
+    {
+        using var scope = factory.Services.CreateScope();
+        var services = scope.ServiceProvider;
+        var store = services.GetRequiredService<TranslationSettingsStore>();
+        var settings = await store.GetAsync();
+        settings.ActiveProvider = "fake";
+        await store.SaveAsync(settings);
+        var translations = new SentenceTranslationService(services.GetRequiredService<JitenDbContext>(), services.GetRequiredService<SentenceCueLookup>(),
+                                                          services.GetRequiredService<IMemoryCache>(), store, [new FakeTranslator()],
+                                                          NullLogger<SentenceTranslationService>.Instance);
+        try
+        {
+            (await translations.GetAsync(3, allowAi: true, CancellationToken.None, fixedText: "本の新しい行"))!.Text.Should().Be("A new line of the book");
+
+            var db = services.GetRequiredService<JitenDbContext>();
+            var row = await db.Sentences.SingleAsync(s => s.Text == "本の新しい行");
+            (await db.ExampleSentenceTranslations.SingleAsync(t => t.CentralSentenceId == row.Id)).Text.Should().Be("A new line of the book");
+            (await db.ExampleSentences.SingleAsync(s => s.SentenceId == 3)).CentralSentenceId.Should().NotBe(row.Id);
+
+            // Cached now, and only for that text
+            (await translations.GetAsync(3, allowAi: false, CancellationToken.None, fixedText: "本の新しい行"))!.Text.Should().Be("A new line of the book");
+            (await translations.GetAsync(3, allowAi: false, CancellationToken.None)).Should().BeNull();
+        }
+        finally
+        {
+            settings.ActiveProvider = "";
+            await store.SaveAsync(settings);
+        }
+    }
+
+    [Fact]
+    public async Task SubmittingATextDeletesTheOldTextsRowOnceNoLineHasIt()
+    {
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<JitenDbContext>();
+            db.ExampleSentenceTranslations.Add(new ExampleSentenceTranslation { CentralSentenceId = 10, Text = "Huh?", Provider = "test", Model = "m", CreatedAt = DateTime.UtcNow });
+            await db.SaveChangesAsync();
+        }
+
+        await Save(1, Fix(text: "えっ、なに、その髪！"), TestUsers.Admin);
+        await Send(HttpMethod.Post, "/api/sentences/1/fix/submit", new { }, TestUsers.Admin);
+
+        // Line 2 still has the old text
+        using (var scope = factory.Services.CreateScope())
+            (await scope.ServiceProvider.GetRequiredService<JitenDbContext>().Sentences.AnyAsync(s => s.Id == 10)).Should().BeTrue();
+
+        await Save(2, Fix(text: "えっ、なに、その髪！"), TestUsers.Admin);
+        await Send(HttpMethod.Post, "/api/sentences/2/fix/submit", new { }, TestUsers.Admin);
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<JitenDbContext>();
+            (await db.Sentences.AnyAsync(s => s.Id == 10)).Should().BeFalse();
+            (await db.ExampleSentenceTranslations.AnyAsync(t => t.CentralSentenceId == 10)).Should().BeFalse();
+            var lines = await db.ExampleSentences.Where(s => s.SentenceId == 1 || s.SentenceId == 2).ToListAsync();
+            lines.Select(l => l.CentralSentenceId).Distinct().Should().ContainSingle().Which.Should().NotBeNull();
+        }
+    }
+
+    [Fact]
+    public async Task SubmittingWhileTheTitlesReparseSavesIsRefused()
+    {
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<JitenDbContext>();
+            db.Decks.Add(new Deck { DeckId = 905, OriginalTitle = "Saving", MediaType = MediaType.Anime });
+            db.ExampleSentences.Add(new ExampleSentence { SentenceId = 905, DeckId = 905, Position = 1, Text = "保存中の行", Tokens = NoWords, WordKeys = [] });
+            await db.SaveChangesAsync();
+        }
+        await Save(905, Fix(text: "保存中の文"), TestUsers.Admin);
+
+        Jiten.Api.Jobs.ReparseSaves.Enter([905]);
+        try
+        {
+            var refused = await Send(HttpMethod.Post, "/api/sentences/905/fix/submit", new { }, TestUsers.Admin);
+            refused.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+            (await SentenceText(905, TestUsers.UserB)).Should().Be("保存中の行");
+        }
+        finally
+        {
+            Jiten.Api.Jobs.ReparseSaves.Exit([905]);
+        }
+
+        (await Send(HttpMethod.Post, "/api/sentences/905/fix/submit", new { }, TestUsers.Admin)).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await SentenceText(905, TestUsers.UserB)).Should().Be("保存中の文");
     }
 }

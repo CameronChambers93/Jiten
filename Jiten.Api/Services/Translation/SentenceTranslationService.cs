@@ -38,31 +38,42 @@ public class SentenceTranslationService(
 
     public static void InvalidateEnglish(IMemoryCache cache, int deckId) => cache.Remove($"english-cues:{deckId}");
 
-    public async Task<SentenceTranslationDto?> GetAsync(long sentenceId, bool allowAi, CancellationToken ct)
+    /// <param name="fixedText">The caller's own text for the line, if they fixed it: the AI translates that text instead, cached
+    /// under its own Sentences row. Subtitle English still comes first, since it matches the audio.</param>
+    public async Task<SentenceTranslationDto?> GetAsync(long sentenceId, bool allowAi, CancellationToken ct, string? fixedText = null)
     {
         var cues = await cueLookup.FindAsync(sentenceId, ct);
         if (await FromSubtitlesAsync(cues, ct) is { } fromSubtitles) return fromSubtitles;
 
-        var cached = (await CachedAsync(s => s.SentenceId == sentenceId, ct)).FirstOrDefault().Translation;
-        if (cached != null) return new SentenceTranslationDto(cached.Text, TranslationOrigin.Ai, cached.Provider, cached.Model, null);
+        var cached = fixedText != null
+            ? await CachedForTextAsync(fixedText, ct)
+            : (await CachedAsync(s => s.SentenceId == sentenceId, ct)).FirstOrDefault().Translation;
+        if (cached != null) return Ai(cached);
 
-        return allowAi ? await TranslateWithAiAsync(sentenceId, cues, ct) : null;
+        return allowAi ? await TranslateWithAiAsync(sentenceId, cues, ct, fixedText) : null;
     }
 
-    /// <summary>Subtitle and cached translations only, for showing many sentences at once.</summary>
-    public async Task<Dictionary<long, SentenceTranslationDto>> GetManyAsync(IReadOnlyCollection<long> sentenceIds, CancellationToken ct)
+    /// <summary>Subtitle and cached translations only, for showing many sentences at once; <paramref name="fixedTexts"/> as in <see cref="GetAsync"/>.</summary>
+    public async Task<Dictionary<long, SentenceTranslationDto>> GetManyAsync(IReadOnlyCollection<long> sentenceIds, CancellationToken ct,
+                                                                            IReadOnlyDictionary<long, string>? fixedTexts = null)
     {
         var result = new Dictionary<long, SentenceTranslationDto>();
         foreach (var id in sentenceIds)
             if (await FromSubtitlesAsync(await cueLookup.FindAsync(id, ct), ct) is { } fromSubtitles)
                 result[id] = fromSubtitles;
 
-        var missing = sentenceIds.Where(id => !result.ContainsKey(id)).ToList();
+        var missing = sentenceIds.Where(id => !result.ContainsKey(id) && fixedTexts?.ContainsKey(id) != true).ToList();
         foreach (var (id, t) in await CachedAsync(s => missing.Contains(s.SentenceId), ct))
-            result[id] = new SentenceTranslationDto(t.Text, TranslationOrigin.Ai, t.Provider, t.Model, null);
+            result[id] = Ai(t);
+
+        foreach (var (id, text) in fixedTexts ?? new Dictionary<long, string>())
+            if (sentenceIds.Contains(id) && !result.ContainsKey(id) && await CachedForTextAsync(text, ct) is { } t)
+                result[id] = Ai(t);
 
         return result;
     }
+
+    private static SentenceTranslationDto Ai(ExampleSentenceTranslation t) => new(t.Text, TranslationOrigin.Ai, t.Provider, t.Model, null);
 
     /// <summary>Whether a sentence would be translated from subtitles (used to count what a title still needs from the AI).</summary>
     public async Task<bool> HasSubtitleEnglishAsync(long sentenceId, CancellationToken ct) =>
@@ -109,7 +120,7 @@ public class SentenceTranslationService(
     }
 
     /// <summary>Translates with the active AI provider and caches the result; throws when no provider is set up.</summary>
-    public async Task<SentenceTranslationDto> TranslateWithAiAsync(long sentenceId, SentenceCues? cues, CancellationToken ct)
+    public async Task<SentenceTranslationDto> TranslateWithAiAsync(long sentenceId, SentenceCues? cues, CancellationToken ct, string? fixedText = null)
     {
         var active = await ActiveProviderAsync(ct) ?? throw new TranslationProviderException("No AI translation provider is set up.");
         var settings = await settingsStore.GetAsync(ct);
@@ -131,12 +142,13 @@ public class SentenceTranslationService(
                   .Select(c => c.Text)
                   .ToList();
 
-        var prompt = TranslationPrompt.Render(settings.EffectivePrompt, sentence.Title, contextLines, sentence.Text);
+        var prompt = TranslationPrompt.Render(settings.EffectivePrompt, sentence.Title, contextLines, fixedText ?? sentence.Text);
         var result = await active.Provider.TranslateAsync(active.Config, prompt, ct);
+        var centralId = fixedText != null ? await CentralSentenceRows.EnsureAsync(context, fixedText, ct) : sentence.CentralSentenceId!.Value;
 
         context.ExampleSentenceTranslations.Add(new ExampleSentenceTranslation
         {
-            CentralSentenceId = sentence.CentralSentenceId!.Value, Text = result.Text,
+            CentralSentenceId = centralId, Text = result.Text,
             Provider = active.Provider.Id, Model = result.Model, CreatedAt = DateTime.UtcNow
         });
         try
@@ -162,6 +174,12 @@ public class SentenceTranslationService(
                                 .ToListAsync(ct);
         return rows.Select(r => (r.SentenceId, r.Translation)).ToList();
     }
+
+    /// <summary>The cached translation of a text that may have no line of its own (a user's fixed text).</summary>
+    private async Task<ExampleSentenceTranslation?> CachedForTextAsync(string text, CancellationToken ct) =>
+        await CentralSentenceRows.FindAsync(context, text, ct) is { } id
+            ? await context.ExampleSentenceTranslations.AsNoTracking().FirstOrDefaultAsync(t => t.CentralSentenceId == id, ct)
+            : null;
 
     private async Task<SentenceTranslationDto?> FromSubtitlesAsync(SentenceCues? cues, CancellationToken ct)
     {

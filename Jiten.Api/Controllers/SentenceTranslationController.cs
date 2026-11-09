@@ -38,12 +38,14 @@ public class SentenceTranslationController(SentenceTranslationService translatio
     public async Task<IActionResult> Get(long sentenceId, [FromQuery] bool ai = false, CancellationToken ct = default)
     {
         // A fixed line's English, the caller's own or the shared one, comes before subtitles and AI
-        if ((await fixes.ForUserAsync(currentUser.UserId, sentenceId, ct))?.English is { } fixedEnglish)
+        var fix = await fixes.ForUserAsync(currentUser.UserId, sentenceId, ct);
+        if (fix?.English is { } fixedEnglish)
             return Ok(new { translation = FixedEnglish(fixedEnglish) });
 
         try
         {
-            var translation = await translations.GetAsync(sentenceId, ai && CanUseAi, ct);
+            // The AI translates the caller's own fixed text, not the line's
+            var translation = await translations.GetAsync(sentenceId, ai && CanUseAi, ct, fix?.Text);
             return Ok(new { translation });
         }
         catch (TranslationProviderException e)
@@ -62,8 +64,10 @@ public class SentenceTranslationController(SentenceTranslationService translatio
     {
         if (request.SentenceIds.Count > MaxBatch) return BadRequest(new { message = $"At most {MaxBatch} sentences per request" });
         var ids = request.SentenceIds.Distinct().ToList();
-        var result = await translations.GetManyAsync(ids, ct);
-        foreach (var (id, fix) in await fixes.ForUserAsync(currentUser.UserId, ids, ct))
+        var lineFixes = await fixes.ForUserAsync(currentUser.UserId, ids, ct);
+        var fixedTexts = lineFixes.Where(f => f.Value.Text != null).ToDictionary(f => f.Key, f => f.Value.Text!);
+        var result = await translations.GetManyAsync(ids, ct, fixedTexts);
+        foreach (var (id, fix) in lineFixes)
             if (fix.English != null) result[id] = FixedEnglish(fix.English);
         return Ok(new { translations = result });
     }

@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Jiten.Core;
+using Jiten.Core.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace Jiten.Api.Services;
@@ -20,6 +21,10 @@ public record LineFix(string? Text, byte[]? Tokens, string? English, int? StartM
 
     /// <summary>The frame a screenshot shows: the fixed one, else the middle of a fixed clip; null to use the cues'.</summary>
     public int? EffectivePictureMs => PictureMs ?? (HasRange ? (StartMs!.Value + EndMs!.Value) / 2 : null);
+
+    /// <summary>A line's text and tokens as the user sees them: their own fixed text, else the line's.</summary>
+    public (string Text, byte[] Tokens) Over(string text, byte[] tokens) =>
+        Text != null ? (Text, Tokens ?? ExampleSentenceTokens.Encode([])) : (text, tokens);
 
     /// <summary>"mine" or "shared", for marking a fixed line.</summary>
     public string Label => Mine ? "mine" : "shared";

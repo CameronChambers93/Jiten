@@ -36,6 +36,15 @@ public class ParseCorrectionService(IDbContextFactory<JitenDbContext> contextFac
                          (new LineCorrection(c.ExampleSentenceId, c.SourceText, c.Text!, positions[c.ExampleSentenceId].Position), c.UserId)).ToList());
     }
 
+    /// <summary>The newest text correction of these decks' lines (0 for none), to tell whether more came in during a parse.</summary>
+    public async Task<long> NewestIdAsync(IReadOnlyCollection<int> deckIds, CancellationToken ct = default)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(ct);
+        return await context.SentenceCorrections.AsNoTracking()
+                            .Where(c => c.DeckId != null && deckIds.Contains(c.DeckId.Value) && c.Text != null)
+                            .MaxAsync(c => (long?)c.SentenceCorrectionId, ct) ?? 0;
+    }
+
     /// <summary>Back on the to-do list: a flag for whoever submitted each fix that found no line, which also keeps the line.</summary>
     public async Task ReportUnmatchedAsync(int deckId, IEnumerable<LineCorrection> unmatched, IReadOnlyDictionary<long, string> userBySentence, CancellationToken ct = default)
     {
