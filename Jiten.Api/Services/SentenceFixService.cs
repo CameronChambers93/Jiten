@@ -33,9 +33,11 @@ public record FixFlagDto(long SentenceFlagId, string? Reason, string? Note);
 /// <param name="Mine">The user's own fix, when there is one.</param>
 /// <param name="HasVideo">The line has an episode with a linked video, so its clip and frame can be fixed.</param>
 /// <param name="HasPage">The line is in a deck, so it has a sentence page (private lines don't).</param>
+/// <param name="Submission">The user's pending submission of the line, else their latest reviewed one.</param>
 public record SentenceFixEditorDto(long SentenceId, string Text, string? Title, string? Episode, int? DeckId, bool HasVideo, bool HasPage,
                                    FixPartsDto Original, FixPartsDto? Shared, FixPartsDto? Mine, List<FixCueDto> Cues,
-                                   List<SameTextLineDto> SameText, List<FixMinedDto> Mined, FixFlagDto? Flag);
+                                   List<SameTextLineDto> SameText, List<FixMinedDto> Mined, FixFlagDto? Flag,
+                                   SubmissionStateDto? Submission = null);
 
 /// <summary>The user's fix as a whole; a null part is "as the shared line". All null resets it.</summary>
 public record SaveSentenceFixRequest(string? Text, string? English, int? StartMs, int? EndMs, int? PictureMs);
@@ -46,8 +48,8 @@ public record SubmitSentenceFixRequest(List<long>? SameTextIds);
 public class SentenceFixException(string message) : Exception(message);
 
 /// <summary>
-/// Users' fixes of sentences: the fix screen's data, saving and resetting a user's own fix, and (admins, for now)
-/// submitting it to the shared line. See the sentence flags and fixes design, build step 2.
+/// Users' fixes of sentences: the fix screen's data, saving and resetting a user's own fix, and applying a fix to the
+/// shared line (an admin's Submit, or an approved submission). See the sentence flags and fixes design, build steps 2 and 4.
 /// </summary>
 public class SentenceFixService(
     JitenDbContext context,
@@ -85,14 +87,8 @@ public class SentenceFixService(
         var hasVideo = line.DeckId is { } deckId && await context.DeckVideoSources.AsNoTracking().AnyAsync(v => v.DeckId == deckId, ct);
 
         var cues = line.DeckId == null ? null : await cueLookup.FindAsync(sentenceId, ct);
-        var originalEnglish = line.DeckId == null ? null : (await translations.GetAsync(sentenceId, allowAi: false, ct))?.Text;
-        var original = new FixPartsDto(line.SourceText ?? line.Text, originalEnglish,
-                                       cues == null ? null : Math.Max(0, cues.StartMs - DefaultPadMs), cues == null ? null : cues.EndMs + DefaultPadMs,
-                                       cues == null ? null : (cues.StartMs + cues.EndMs) / 2);
-
-        var shared = line.SourceText != null || line.English != null || line.StartMs != null || line.PictureMs != null
-            ? new FixPartsDto(line.SourceText != null ? line.Text : null, line.English, line.StartMs, line.EndMs, line.PictureMs)
-            : null;
+        var original = await OriginalAsync(line, cues, ct);
+        var shared = Shared(line);
 
         var (title, episode) = Titles(line);
         return new SentenceFixEditorDto(
@@ -106,7 +102,32 @@ public class SentenceFixService(
                              .Select(f => new FixFlagDto(f.SentenceFlagId, f.Reason, f.Note)).FirstOrDefaultAsync(ct));
     }
 
-    private static (string? Title, string? Episode) Titles(ExampleSentence line) =>
+    /// <summary>What the parser and subtitles give for the line, before any fix: the clip is the cues with the default padding.</summary>
+    private async Task<FixPartsDto> OriginalAsync(ExampleSentence line, SentenceCues? cues, CancellationToken ct)
+    {
+        var english = line.DeckId == null ? null : (await translations.GetAsync(line.SentenceId, allowAi: false, ct))?.Text;
+        return new FixPartsDto(line.SourceText ?? line.Text, english,
+                               cues == null ? null : Math.Max(0, cues.StartMs - DefaultPadMs), cues == null ? null : cues.EndMs + DefaultPadMs,
+                               cues == null ? null : (cues.StartMs + cues.EndMs) / 2);
+    }
+
+    /// <summary>The line's submitted fix, when it has one; a part nobody fixed is null.</summary>
+    private static FixPartsDto? Shared(ExampleSentence line) =>
+        line.SourceText != null || line.English != null || line.StartMs != null || line.PictureMs != null
+            ? new FixPartsDto(line.SourceText != null ? line.Text : null, line.English, line.StartMs, line.EndMs, line.PictureMs)
+            : null;
+
+    /// <summary>The shared line as everyone without their own fix sees it: each part's shared fix, else the original.</summary>
+    public async Task<FixPartsDto> SharedLineAsync(ExampleSentence line, CancellationToken ct)
+    {
+        var original = await OriginalAsync(line, line.DeckId == null ? null : await cueLookup.FindAsync(line.SentenceId, ct), ct);
+        var shared = Shared(line);
+        var clip = shared?.StartMs != null ? (shared.StartMs, shared.EndMs) : (original.StartMs, original.EndMs);
+        var picture = shared?.PictureMs ?? (shared?.StartMs != null ? (shared.StartMs + shared.EndMs) / 2 : original.PictureMs);
+        return new FixPartsDto(line.Text, shared?.English ?? original.English, clip.Item1, clip.Item2, picture);
+    }
+
+    public static (string? Title, string? Episode) Titles(ExampleSentence line) =>
         line.Deck?.ParentDeck != null ? (line.Deck.ParentDeck.OriginalTitle, line.Deck.OriginalTitle) : (line.Deck?.OriginalTitle ?? line.SourceTitle, null);
 
     /// <summary>
@@ -216,6 +237,8 @@ public class SentenceFixService(
             if (text != fix.Text) fix.Tokens = text == null ? null : await ParseAsync(text, ct);
             (fix.Text, fix.English, fix.StartMs, fix.EndMs, fix.PictureMs) = (text, english, request.StartMs, request.EndMs, request.PictureMs);
             fix.UpdatedAt = DateTime.UtcNow;
+            // Editing the fix answers "a fix was approved for a line you fixed": this is the version they want
+            fix.ApprovedFixAt = null;
             await flags.CloseAsync(userId, sentenceId, SentenceFlagResolution.Fixed, ct);
         }
 
@@ -254,30 +277,42 @@ public class SentenceFixService(
         sentences.Where(s => !s.NeedsRebuild).ExecuteUpdateAsync(u => u.SetProperty(s => s.NeedsRebuild, true), ct);
 
     /// <summary>
-    /// Makes the user's fix the shared line's, for everyone: the text (re-parsed, the original kept in SourceText), English
-    /// and times, and the text on the ticked lines with the same text too. Closes every open flag on those lines as fixed,
-    /// and marks mined sentences on them for Sync. Others' own fixes stay theirs. False when the user has no fix of a line
-    /// they can see, or it's a private line.
+    /// An admin's Submit: makes their fix the shared line's at once, through <see cref="ApplyToSharedAsync"/>. False when the
+    /// user has no fix of a line they can see, or it's a private line.
     /// </summary>
     public async Task<bool> SubmitAsync(string userId, long sentenceId, SubmitSentenceFixRequest request, CancellationToken ct)
     {
         var line = await LineAsync(userId, sentenceId, ct);
-        var fix = await userContext.SentenceFixes.FirstOrDefaultAsync(f => f.UserId == userId && f.ExampleSentenceId == sentenceId, ct);
+        var fix = await userContext.SentenceFixes.AsNoTracking().FirstOrDefaultAsync(f => f.UserId == userId && f.ExampleSentenceId == sentenceId, ct);
         if (line == null || line.OwnerId != null || fix == null) return false;
 
+        await ApplyToSharedAsync(line, new FixPartsDto(fix.Text, fix.English, fix.StartMs, fix.EndMs, fix.PictureMs), request.SameTextIds ?? [], userId, ct);
+        return true;
+    }
+
+    /// <summary>
+    /// Makes these parts the shared line's, for everyone: the text (re-parsed, the original kept in SourceText), English
+    /// and times, and the text on the listed lines that still have the same text too. Writes <c>SentenceCorrections</c> as
+    /// the submitter's, closes every open flag on those lines as fixed, and marks mined sentences on them for Sync. Users'
+    /// own fixes of the lines lose the parts that now match, and otherwise follow their <see cref="ApprovedFixMode"/>.
+    /// </summary>
+    /// <exception cref="SentenceFixException">The new text couldn't be parsed.</exception>
+    public async Task ApplyToSharedAsync(ExampleSentence line, FixPartsDto parts, IReadOnlyCollection<long> sameTextIds, string submitterId, CancellationToken ct)
+    {
+        var sentenceId = line.SentenceId;
         var lines = new List<ExampleSentence> { line };
-        if (fix.Text != null && request.SameTextIds is { Count: > 0 } sameIds && line.CentralSentenceId != null)
-            lines.AddRange(await context.ExampleSentences.Where(s => sameIds.Contains(s.SentenceId) && s.SentenceId != sentenceId &&
+        if (parts.Text != null && sameTextIds.Count > 0 && line.CentralSentenceId != null)
+            lines.AddRange(await context.ExampleSentences.Where(s => sameTextIds.Contains(s.SentenceId) && s.SentenceId != sentenceId &&
                                                                      s.CentralSentenceId == line.CentralSentenceId).ToListAsync(ct));
 
         // Parsed again, since the shared line's tokens decide which words it counts for. A failure stops the Submit rather
         // than leaving the shared line without words.
         List<SentenceToken>? tokens = null;
-        if (fix.Text != null)
+        if (parts.Text != null)
         {
             try
             {
-                tokens = await parser.ParseAsync(fix.Text, ct);
+                tokens = await parser.ParseAsync(parts.Text, ct);
             }
             catch (Exception e) when (e is not OperationCanceledException)
             {
@@ -285,15 +320,15 @@ public class SentenceFixService(
                 throw new SentenceFixException("Couldn't read the words of the new text. Try again.");
             }
         }
-        long? centralId = fix.Text == null ? null : await CentralIdAsync(fix.Text, ct);
+        long? centralId = parts.Text == null ? null : await CentralIdAsync(parts.Text, ct);
         var oldTexts = lines.ToDictionary(l => l.SentenceId, l => l.Text);
         foreach (var l in lines)
         {
             var sourceText = l.SourceText ?? l.Text;
-            if (fix.Text != null)
+            if (parts.Text != null)
             {
-                l.SourceText = fix.Text == sourceText ? null : sourceText;
-                l.Text = fix.Text;
+                l.SourceText = parts.Text == sourceText ? null : sourceText;
+                l.Text = parts.Text;
                 l.Tokens = ExampleSentenceTokens.Encode(tokens!);
                 l.WordKeys = ExampleSentenceTokens.WordKeys(tokens!, ExampleSentenceTokens.FineBucketOf(l.WordKeys) ?? Random.Shared.Next(ExampleSentenceTokens.FineBucketCount));
                 if (centralId != null) l.CentralSentenceId = centralId;
@@ -302,32 +337,118 @@ public class SentenceFixService(
             var isLine = l.SentenceId == sentenceId;
             if (isLine)
             {
-                l.English = fix.English ?? l.English;
+                l.English = parts.English ?? l.English;
                 // A new clip without a frame of its own shows its middle, as it did for the submitter
-                if (fix.StartMs != null) (l.StartMs, l.EndMs, l.PictureMs) = (fix.StartMs, fix.EndMs, null);
-                if (fix.PictureMs != null) l.PictureMs = fix.PictureMs;
+                if (parts.StartMs != null) (l.StartMs, l.EndMs, l.PictureMs) = (parts.StartMs, parts.EndMs, null);
+                if (parts.PictureMs != null) l.PictureMs = parts.PictureMs;
             }
 
             context.SentenceCorrections.Add(new SentenceCorrection
             {
-                ExampleSentenceId = l.SentenceId, DeckId = l.DeckId, Position = l.Position, SourceText = sourceText, Text = fix.Text, UserId = userId,
-                English = isLine ? fix.English : null, StartMs = isLine ? fix.StartMs : null, EndMs = isLine ? fix.EndMs : null,
-                PictureMs = isLine ? fix.PictureMs : null
+                ExampleSentenceId = l.SentenceId, DeckId = l.DeckId, Position = l.Position, SourceText = sourceText, Text = parts.Text, UserId = submitterId,
+                English = isLine ? parts.English : null, StartMs = isLine ? parts.StartMs : null, EndMs = isLine ? parts.EndMs : null,
+                PictureMs = isLine ? parts.PictureMs : null
             });
         }
 
         await context.SaveChangesAsync(ct);
 
-        userContext.SentenceFixes.Remove(fix);
-        await userContext.SaveChangesAsync(ct);
-
         var ids = lines.Select(l => l.SentenceId).ToList();
-        foreach (var id in ids) await flags.MarkFixedAsync(id, ct);
-        if (fix.Text != null) await MoveMinedWordsAsync(ids, oldTexts, fix.Text, ct);
-        if (fix.Text != null || fix.English != null)
+        await SettleOwnFixesAsync(sentenceId, parts, ids, submitterId, ct);
+        foreach (var id in ids) await flags.MarkFixedAsync(id, submitterId, ct);
+        if (parts.Text != null) await MoveMinedWordsAsync(ids, oldTexts, parts.Text, ct);
+        if (parts.Text != null || parts.English != null)
             await MarkRebuildAsync(userContext.MinedSentences.Where(s => s.ExampleSentenceId != null && ids.Contains(s.ExampleSentenceId.Value)), ct);
 
-        logger.LogInformation("User {UserId} submitted a fix of sentence {SentenceId} ({Count} lines)", userId, sentenceId, ids.Count);
+        logger.LogInformation("Fix of sentence {SentenceId} by {UserId} applied to the shared line ({Count} lines)", sentenceId, submitterId, ids.Count);
+    }
+
+    /// <summary>
+    /// Users' own fixes of lines that just got a shared fix: parts equal to the shared ones are dropped, since they now
+    /// show the same. The rest follow each user's <see cref="ApprovedFixMode"/>: kept, dropped ("use"), or kept with
+    /// <see cref="SentenceFix.ApprovedFixAt"/> set so their to-do list asks ("ask"). The submitter's own differing parts are
+    /// edits made after submitting, so they're kept. Same-text lines got only the text.
+    /// </summary>
+    private async Task SettleOwnFixesAsync(long sentenceId, FixPartsDto parts, List<long> ids, string submitterId, CancellationToken ct)
+    {
+        var fixes = await userContext.SentenceFixes.Where(f => ids.Contains(f.ExampleSentenceId)).ToListAsync(ct);
+        if (fixes.Count == 0) return;
+        var userIds = fixes.Select(f => f.UserId).Distinct().ToList();
+        var modes = await userContext.UserSettings.AsNoTracking().Where(u => userIds.Contains(u.UserId) && u.ApprovedFixMode != null)
+                                     .ToDictionaryAsync(u => u.UserId, u => u.ApprovedFixMode!, ct);
+
+        foreach (var fix in fixes)
+        {
+            var covered = fix.ExampleSentenceId == sentenceId ? parts : new FixPartsDto(parts.Text, null, null, null, null);
+            var textSame = covered.Text != null && fix.Text == covered.Text;
+            var englishSame = covered.English != null && fix.English == covered.English;
+            var clipSame = covered.StartMs != null && (fix.StartMs, fix.EndMs) == (covered.StartMs, covered.EndMs);
+            var frameSame = covered.PictureMs != null && fix.PictureMs == covered.PictureMs;
+            if (textSame) (fix.Text, fix.Tokens) = (null, null);
+            if (englishSame) fix.English = null;
+            if (clipSame) (fix.StartMs, fix.EndMs) = (null, null);
+            if (frameSame) fix.PictureMs = null;
+
+            var differs = (covered.Text != null && fix.Text != null) || (covered.English != null && fix.English != null) ||
+                          (covered.StartMs != null && fix.StartMs != null) || (covered.PictureMs != null && fix.PictureMs != null);
+            // The submitter's fix just became the shared line, so any question about an earlier approval is moot
+            if (fix.UserId == submitterId) fix.ApprovedFixAt = null;
+            else if (differs)
+            {
+                switch (modes.GetValueOrDefault(fix.UserId, ApprovedFixMode.Keep))
+                {
+                    case ApprovedFixMode.Use:
+                        DropCovered(fix, covered);
+                        break;
+                    case ApprovedFixMode.Ask:
+                        fix.ApprovedFixAt = DateTime.UtcNow;
+                        break;
+                }
+            }
+
+            if (fix.IsEmpty) userContext.SentenceFixes.Remove(fix);
+            else fix.UpdatedAt = DateTime.UtcNow;
+        }
+
+        await userContext.SaveChangesAsync(ct);
+    }
+
+    /// <summary>Drops the parts of a user's fix that a shared fix covers.</summary>
+    private static void DropCovered(SentenceFix fix, FixPartsDto covered)
+    {
+        if (covered.Text != null) (fix.Text, fix.Tokens) = (null, null);
+        if (covered.English != null) fix.English = null;
+        if (covered.StartMs != null) (fix.StartMs, fix.EndMs) = (null, null);
+        if (covered.PictureMs != null) fix.PictureMs = null;
+    }
+
+    /// <summary>
+    /// The parts the line's latest shared fix covered: what "a fix was approved for a line you fixed" asks about. Null
+    /// when the line has none.
+    /// </summary>
+    public static async Task<FixPartsDto?> LatestApprovedPartsAsync(JitenDbContext context, long sentenceId, CancellationToken ct) =>
+        await context.SentenceCorrections.AsNoTracking().Where(c => c.ExampleSentenceId == sentenceId)
+                     .OrderByDescending(c => c.SentenceCorrectionId)
+                     .Select(c => new FixPartsDto(c.Text, c.English, c.StartMs, c.EndMs, c.PictureMs)).FirstOrDefaultAsync(ct);
+
+    /// <summary>
+    /// The user's answer to "a fix was approved for a line you fixed": use the approved one drops the parts of their fix
+    /// that approval covered; either way the question closes. False when there's no such question.
+    /// </summary>
+    public async Task<bool> AnswerApprovedAsync(string userId, long sentenceId, bool useApproved, CancellationToken ct)
+    {
+        var fix = await userContext.SentenceFixes.FirstOrDefaultAsync(f => f.UserId == userId && f.ExampleSentenceId == sentenceId && f.ApprovedFixAt != null, ct);
+        if (fix == null) return false;
+        fix.ApprovedFixAt = null;
+        if (useApproved)
+        {
+            if (await LatestApprovedPartsAsync(context, sentenceId, ct) is { } covered) DropCovered(fix, covered);
+            await MarkRebuildAsync(userContext.MinedSentences.Where(s => s.UserId == userId && s.ExampleSentenceId == sentenceId), ct);
+        }
+
+        if (fix.IsEmpty) userContext.SentenceFixes.Remove(fix);
+        else fix.UpdatedAt = DateTime.UtcNow;
+        await userContext.SaveChangesAsync(ct);
         return true;
     }
 

@@ -262,21 +262,14 @@ public class SentenceFixTests(JitenWebApplicationFactory factory) : IClassFixtur
     }
 
     [Fact]
-    public async Task OnlyAdminsCanSubmit()
-    {
-        await Save(1, Fix(text: "えっ、なに、その髪！"));
-
-        (await Send(HttpMethod.Post, "/api/sentences/1/fix/submit", new { })).StatusCode.Should().Be(HttpStatusCode.Forbidden);
-    }
-
-    [Fact]
     public async Task SubmittingMakesTheFixEveryonesAndKeepsTheSubtitleText()
     {
         await Send(HttpMethod.Post, "/api/sentence-flags", new { sentenceId = 1, reason = "japanese" }, TestUsers.UserB);
         await Save(1, Fix(text: "えっ、なに、その髪！", english: "Hey, your hair!", startMs: 2300, endMs: 4250), TestUsers.Admin);
 
-        (await Send(HttpMethod.Post, "/api/sentences/1/fix/submit", new { sameTextIds = new[] { 2L } }, TestUsers.Admin))
-            .StatusCode.Should().Be(HttpStatusCode.NoContent);
+        var submitted = await Send(HttpMethod.Post, "/api/sentences/1/fix/submit", new { sameTextIds = new[] { 2L } }, TestUsers.Admin);
+        submitted.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await submitted.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("applied").GetBoolean().Should().BeTrue();
 
         (await SentenceText(1, TestUsers.UserB)).Should().Be("えっ、なに、その髪！");
         (await SentenceText(2, TestUsers.UserB)).Should().Be("えっ、なに、その髪！");

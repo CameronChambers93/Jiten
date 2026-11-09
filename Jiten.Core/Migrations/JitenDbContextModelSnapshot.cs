@@ -2513,6 +2513,78 @@ namespace Jiten.Core.Migrations
                     b.ToTable("SentenceCorrections", "jiten");
                 });
 
+            modelBuilder.Entity("Jiten.Core.Data.SentenceSubmission", b =>
+                {
+                    b.Property<long>("SentenceSubmissionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("SentenceSubmissionId"));
+
+                    b.Property<long?>("BaseCorrectionId")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("EndMs")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("English")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<long>("ExampleSentenceId")
+                        .HasColumnType("bigint");
+
+                    b.Property<int?>("PictureMs")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ReviewNote")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<DateTime?>("ReviewedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ReviewerId")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.PrimitiveCollection<long[]>("SameTextIds")
+                        .IsRequired()
+                        .HasColumnType("bigint[]");
+
+                    b.Property<int?>("StartMs")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("Text")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.HasKey("SentenceSubmissionId");
+
+                    b.HasIndex("ExampleSentenceId");
+
+                    b.HasIndex("Status", "CreatedAt");
+
+                    b.HasIndex("UserId", "ExampleSentenceId")
+                        .IsUnique()
+                        .HasFilter("\"Status\" = 'pending'");
+
+                    b.ToTable("SentenceSubmissions", "jiten");
+                });
+
             modelBuilder.Entity("Jiten.Core.Data.Series", b =>
                 {
                     b.Property<int>("SeriesId")

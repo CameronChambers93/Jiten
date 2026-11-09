@@ -33,7 +33,30 @@
     }
   }
 
+  /** What happens to the user's own fix of a line when someone else's fix of it is approved. */
+  const approvedFixMode = ref<'keep' | 'use' | 'ask' | null>(null);
+  const approvedFixOptions = [
+    { value: 'keep', label: 'Keep mine', hint: null },
+    { value: 'use', label: 'Use the approved one', hint: 'Drops your changes to the parts it fixes.' },
+    { value: 'ask', label: 'Ask me', hint: 'Puts the line on your flagged sentences list.' },
+  ] as const;
+  const { $api } = useNuxtApp();
+  async function saveApprovedFixMode(mode: 'keep' | 'use' | 'ask') {
+    const previous = approvedFixMode.value;
+    approvedFixMode.value = mode;
+    try {
+      await $api('sentence-flags/settings', { method: 'PUT', body: { approvedFixMode: mode } });
+      toast.add({ severity: 'success', summary: 'Saved', life: 2000 });
+    } catch (e) {
+      approvedFixMode.value = previous;
+      toast.add({ severity: 'error', summary: "Couldn't save it", detail: extractApiError(e, 'The request failed'), life: 5000 });
+    }
+  }
+
   onMounted(async () => {
+    $api<{ approvedFixMode: 'keep' | 'use' | 'ask' }>('sentence-flags/settings')
+      .then((r) => (approvedFixMode.value = r.approvedFixMode))
+      .catch(() => {});
     await anki.load().catch(() => {});
     await loadOthers();
   });
@@ -86,14 +109,37 @@
       <template #content>
         <div class="flex flex-wrap items-center justify-between gap-3 text-sm">
           <div class="min-w-0 text-gray-600 dark:text-gray-300">
-            Where new cards go, what's built for them, their tags, and what happens when a word already has a card are set per pipeline. Field roles and empty fields
-            are in Card settings, per note type.
+            Where new cards go, what's built for them, their tags, and what happens when a word already has a card are set per pipeline. Field roles and empty
+            fields are in Card settings, per note type.
           </div>
           <div class="flex gap-2">
             <NuxtLink to="/settings/pipelines"><Button label="Pipelines" icon="pi pi-sitemap" size="small" severity="secondary" outlined /></NuxtLink>
             <Button label="Card settings" icon="pi pi-cog" size="small" severity="secondary" outlined @click="cardSettingsVisible = true" />
           </div>
         </div>
+      </template>
+    </Card>
+
+    <Card>
+      <template #title>Sentence fixes</template>
+      <template #content>
+        <fieldset class="flex flex-col gap-2 text-sm">
+          <legend class="mb-2 font-semibold">When a fix is approved for a line I fixed myself</legend>
+          <div v-for="o in approvedFixOptions" :key="o.value" class="flex items-start gap-2">
+            <RadioButton
+              :input-id="`approved-fix-${o.value}`"
+              name="approved-fix"
+              :value="o.value"
+              :model-value="approvedFixMode"
+              :disabled="approvedFixMode == null"
+              @update:model-value="saveApprovedFixMode"
+            />
+            <label :for="`approved-fix-${o.value}`">
+              {{ o.label }}
+              <span v-if="o.hint" class="block text-gray-500 dark:text-gray-400">{{ o.hint }}</span>
+            </label>
+          </div>
+        </fieldset>
       </template>
     </Card>
 

@@ -31,5 +31,26 @@ public class SentenceFix
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
+    /// <summary>
+    /// When someone else's fix of the line was approved while the user, in "ask me" mode (<see cref="ApprovedFixMode"/>),
+    /// had this one; their to-do list asks which to keep until they answer.
+    /// </summary>
+    public DateTime? ApprovedFixAt { get; set; }
+
     public bool IsEmpty => Text == null && English == null && StartMs == null && PictureMs == null;
+}
+
+/// <summary>What happens to a user's own fix of a line when someone else's fix of it is approved.</summary>
+public static class ApprovedFixMode
+{
+    /// <summary>Their fix stays as it is (the default).</summary>
+    public const string Keep = "keep";
+
+    /// <summary>The parts the approval fixed are dropped from their fix, so they see the approved ones.</summary>
+    public const string Use = "use";
+
+    /// <summary>Their to-do list asks them.</summary>
+    public const string Ask = "ask";
+
+    public static bool IsValid(string? mode) => mode is Keep or Use or Ask;
 }

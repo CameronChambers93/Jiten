@@ -20,7 +20,25 @@ public class SentenceFlagsController(SentenceFlagService flags, ICurrentUserServ
     public async Task<IActionResult> List(CancellationToken ct)
     {
         if (userService.UserId is not { } userId) return Unauthorized();
-        return Ok(new { flags = await flags.ListAsync(userId, ct) });
+        return Ok(new { flags = await flags.ListAsync(userId, ct), approved = await flags.ApprovedFixesAsync(userId, ct) });
+    }
+
+    [HttpGet("settings")]
+    [SwaggerOperation(Summary = "What happens to the user's own fix of a line when another fix of it is approved")]
+    public async Task<IActionResult> Settings(CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        return Ok(new { approvedFixMode = await flags.ApprovedFixModeAsync(userId, ct) });
+    }
+
+    [HttpPut("settings")]
+    [SwaggerOperation(Summary = "Sets what happens to the user's own fix when another is approved: keep, use or ask")]
+    public async Task<IActionResult> SaveSettings([FromBody] SentenceFlagSettingsRequest request, CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        if (!ApprovedFixMode.IsValid(request.ApprovedFixMode)) return BadRequest(new { message = "Choose keep, use or ask." });
+        await flags.SaveApprovedFixModeAsync(userId, request.ApprovedFixMode, ct);
+        return NoContent();
     }
 
     [HttpPost]
@@ -41,3 +59,5 @@ public class SentenceFlagsController(SentenceFlagService flags, ICurrentUserServ
         return await flags.DismissAsync(userId, sentenceFlagId, ct) ? NoContent() : NotFound();
     }
 }
+
+public record SentenceFlagSettingsRequest(string ApprovedFixMode);

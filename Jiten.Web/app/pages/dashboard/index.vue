@@ -9,6 +9,15 @@
   definePageMeta({
     middleware: ['auth-admin'],
   });
+
+  const { $api } = useNuxtApp();
+  /** Fixes users submitted, waiting for review. */
+  const pendingSubmissions = ref(0);
+  onMounted(() => {
+    $api<{ pending: number }>('admin/sentence-submissions/count')
+      .then((r) => (pendingSubmissions.value = r.pending))
+      .catch(() => {});
+  });
 </script>
 
 <template>
@@ -131,9 +140,16 @@
       <Card class="shadow-md">
         <template #title>Flagged Sentences</template>
         <template #content>
-          <p class="mb-4">Lines users flagged as wrong; mark them fixed once corrected</p>
-          <div class="flex justify-center">
+          <p class="mb-4">Lines users flagged as wrong, and fixes they submitted for review</p>
+          <div class="flex justify-center gap-2 flex-wrap">
             <Button label="Review Flags" icon="pi pi-flag" class="p-button-primary" @click="navigateTo('/dashboard/sentence-flags')" />
+            <Button
+              :label="`Submitted Fixes${pendingSubmissions ? ` (${pendingSubmissions})` : ''}`"
+              icon="pi pi-inbox"
+              severity="secondary"
+              outlined
+              @click="navigateTo('/dashboard/sentence-flags?tab=submissions')"
+            />
           </div>
         </template>
       </Card>

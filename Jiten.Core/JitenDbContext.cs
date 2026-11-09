@@ -72,6 +72,7 @@ public class JitenDbContext : DbContext
     public DbSet<DeckEnglishTrack> DeckEnglishTracks { get; set; }
     public DbSet<ExampleSentenceTranslation> ExampleSentenceTranslations { get; set; }
     public DbSet<SentenceCorrection> SentenceCorrections { get; set; }
+    public DbSet<SentenceSubmission> SentenceSubmissions { get; set; }
     public DbSet<AppSetting> AppSettings { get; set; }
     public DbSet<FrequencyDictionary> FrequencyDictionaries { get; set; }
     public DbSet<FrequencyDictionaryRank> FrequencyDictionaryRanks { get; set; }
@@ -948,6 +949,22 @@ public class JitenDbContext : DbContext
             entity.Property(c => c.UserId).HasMaxLength(64).IsRequired();
             entity.HasIndex(c => c.ExampleSentenceId);
             entity.HasIndex(c => c.DeckId);
+        });
+
+        modelBuilder.Entity<SentenceSubmission>(entity =>
+        {
+            entity.ToTable("SentenceSubmissions", "jiten");
+            entity.HasKey(s => s.SentenceSubmissionId);
+            entity.Property(s => s.UserId).HasMaxLength(64).IsRequired();
+            entity.Property(s => s.ReviewerId).HasMaxLength(64);
+            entity.Property(s => s.Text).HasMaxLength(1000);
+            entity.Property(s => s.English).HasMaxLength(2000);
+            entity.Property(s => s.Status).HasMaxLength(20).IsRequired();
+            entity.Property(s => s.ReviewNote).HasMaxLength(1000);
+            entity.HasIndex(s => s.ExampleSentenceId);
+            entity.HasIndex(s => new { s.Status, s.CreatedAt });
+            // One pending submission per user and line
+            entity.HasIndex(s => new { s.UserId, s.ExampleSentenceId }).IsUnique().HasFilter("\"Status\" = 'pending'");
         });
 
         modelBuilder.Entity<Tag>(entity =>

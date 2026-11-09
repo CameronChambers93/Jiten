@@ -37,6 +37,8 @@
     sameText: { sentenceId: number; title: string | null; episode: string | null }[];
     mined: { minedSentenceId: number; expression: string; removable: boolean }[];
     flag: { sentenceFlagId: number; reason: string | null; note: string | null } | null;
+    /** The user's pending submission of the line, else their latest reviewed one. */
+    submission: { status: 'pending' | 'approved' | 'rejected'; createdAt: string; reviewedAt: string | null; reviewNote: string | null } | null;
   }
 
   const DEFAULT_PAD_MS = 250;
@@ -188,7 +190,9 @@
   }
 
   // ---- Screenshot ----
-  const frameMs = computed(() => pictureMs.value ?? base.value.pictureMs ?? (startMs.value != null && endMs.value != null ? Math.round((startMs.value + endMs.value) / 2) : null));
+  const frameMs = computed(
+    () => pictureMs.value ?? base.value.pictureMs ?? (startMs.value != null && endMs.value != null ? Math.round((startMs.value + endMs.value) / 2) : null)
+  );
   const pictureUrl = ref<string | null>(null);
   const pictureLoading = ref(false);
   let pictureRequest = 0;
@@ -249,18 +253,37 @@
     }
   }
 
+  /** An admin's Submit applies at once; anyone else's waits for review, and their fix stays theirs meanwhile. */
   async function submit() {
     saving.value = true;
     try {
       await $api(`sentences/${sentenceId.value}/fix`, { method: 'PUT', body: request() });
-      await $api(`sentences/${sentenceId.value}/fix/submit`, { method: 'POST', body: { sameTextIds: sameTextIds.value } });
-      done('Fixed for everyone');
+      const { applied } = await $api<{ applied: boolean }>(`sentences/${sentenceId.value}/fix/submit`, {
+        method: 'POST',
+        body: { sameTextIds: sameTextIds.value },
+      });
+      done(applied ? 'Fixed for everyone' : 'Submitted for review');
     } catch (e) {
       toast.add({ severity: 'error', summary: "Couldn't submit the fix", detail: extractApiError(e, ''), life: 6000 });
     } finally {
       saving.value = false;
     }
   }
+
+  async function withdraw() {
+    saving.value = true;
+    try {
+      await $api(`sentences/${sentenceId.value}/fix/submission`, { method: 'DELETE' });
+      toast.add({ severity: 'success', summary: 'Submission withdrawn', detail: 'Your fix is still yours.', life: 3000 });
+      await load();
+    } catch (e) {
+      toast.add({ severity: 'error', summary: "Couldn't withdraw it", detail: extractApiError(e, ''), life: 6000 });
+    } finally {
+      saving.value = false;
+    }
+  }
+
+  const submission = computed(() => editor.value?.submission ?? null);
 
   function remove(mined: SentenceFixEditor['mined'][number]) {
     confirm.require({
@@ -316,7 +339,8 @@
             <h1 class="text-2xl" lang="ja">{{ editor.text }}</h1>
             <p v-if="editor.flag" class="text-sm text-gray-600 dark:text-gray-300">
               <i class="pi pi-flag-fill text-red-500 mr-1" aria-hidden="true" />
-              You flagged this line<template v-if="editor.flag.reason">: <b>{{ reasonLabels[editor.flag.reason] ?? editor.flag.reason }}</b></template
+              You flagged this line<template v-if="editor.flag.reason"
+                >: <b>{{ reasonLabels[editor.flag.reason] ?? editor.flag.reason }}</b></template
               ><template v-if="editor.flag.note">, “{{ editor.flag.note }}”</template>. Saving a fix closes the flag.
             </p>
           </div>
@@ -405,7 +429,9 @@
                 <Tag :value="originLabels[origins.text]" :severity="originSeverity[origins.text]" />
                 <Button v-if="textChanged" label="Reset" size="small" text class="ml-auto" @click="text = base.text" />
               </div>
-              <label for="fix-text" class="text-sm text-gray-500 dark:text-gray-400">The card's text. Saving reads its furigana again and finds your word in it.</label>
+              <label for="fix-text" class="text-sm text-gray-500 dark:text-gray-400"
+                >The card's text. Saving reads its furigana again and finds your word in it.</label
+              >
               <Textarea id="fix-text" v-model="text" rows="2" auto-resize class="text-lg" lang="ja" />
               <p v-if="editor.original.text !== base.text" class="text-sm text-gray-500 dark:text-gray-400">
                 Subtitle: <span lang="ja">{{ editor.original.text }}</span>
@@ -428,23 +454,40 @@
             </label>
             <InputText id="fix-english" v-model="english" />
             <div v-if="suggestion" class="flex items-center gap-3 flex-wrap rounded bg-primary-50 dark:bg-primary-950 px-3 py-2 text-sm">
-              <span>Subtitles for the new clip: <b>“{{ suggestion }}”</b></span>
-              <Button label="Use it" size="small" @click="(english = suggestion!), (suggestion = null)" />
+              <span
+                >Subtitles for the new clip: <b>“{{ suggestion }}”</b></span
+              >
+              <Button label="Use it" size="small" @click="((english = suggestion!), (suggestion = null))" />
             </div>
           </div>
         </template>
       </Card>
 
-      <Card v-if="authStore.isAdmin && editor.deckId != null">
+      <Card v-if="editor.deckId != null">
         <template #content>
           <div class="flex flex-col gap-3">
-            <div class="flex items-center gap-2 flex-wrap">
-              <h2 class="text-lg font-semibold">Submit for everyone</h2>
-              <span class="text-sm text-gray-500 dark:text-gray-400">admins only for now</span>
-            </div>
-            <p class="text-sm text-gray-500 dark:text-gray-400">
+            <h2 class="text-lg font-semibold">{{ authStore.isAdmin ? 'Submit for everyone' : 'Submit for review' }}</h2>
+            <p v-if="authStore.isAdmin" class="text-sm text-gray-500 dark:text-gray-400">
               Submit makes your fix the shared line and closes everyone's flags on it. The words the line counts for are read again from the new text.
             </p>
+            <p v-else class="text-sm text-gray-500 dark:text-gray-400">
+              An admin checks your fix before it becomes the shared line. Until then only you see it, and you can keep editing it.
+            </p>
+            <div
+              v-if="!authStore.isAdmin && submission?.status === 'pending'"
+              class="flex items-center gap-3 flex-wrap rounded bg-primary-50 dark:bg-primary-950 px-3 py-2 text-sm"
+            >
+              <span
+                ><b>Submitted on {{ new Date(submission.createdAt).toLocaleDateString() }},</b> waiting for review. Submit again to send your current version
+                instead.</span
+              >
+              <Button label="Withdraw" size="small" severity="secondary" outlined class="ml-auto" :loading="saving" @click="withdraw" />
+            </div>
+            <div v-else-if="!authStore.isAdmin && submission?.status === 'rejected'" class="rounded bg-red-50 dark:bg-red-950 px-3 py-2 text-sm">
+              <b>Not accepted on {{ new Date(submission.reviewedAt ?? submission.createdAt).toLocaleDateString() }}.</b>
+              Your fix is still yours; change it and submit again if you like.
+              <span v-if="submission.reviewNote" class="block mt-1">The admin's reason: {{ submission.reviewNote }}</span>
+            </div>
             <template v-if="editor.sameText.length && textChanged">
               <p class="text-sm text-gray-500 dark:text-gray-400">The same text appears elsewhere. Tick the lines to give the new text too:</p>
               <label v-for="line in editor.sameText" :key="line.sentenceId" class="flex items-center gap-2 text-sm">
@@ -480,8 +523,8 @@
         </span>
         <Button label="Cancel" severity="secondary" outlined @click="navigateTo(editor.hasPage ? `/sentences/${editor.sentenceId}` : '/mined')" />
         <Button
-          v-if="authStore.isAdmin && editor.deckId != null"
-          label="Submit"
+          v-if="editor.deckId != null"
+          :label="authStore.isAdmin ? 'Submit' : 'Submit for review'"
           severity="secondary"
           :disabled="!anyChange"
           :loading="saving"

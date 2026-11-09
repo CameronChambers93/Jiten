@@ -986,6 +986,9 @@ namespace Jiten.Core.Migrations.UserDb
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("SentenceFixId"));
 
+                    b.Property<DateTime?>("ApprovedFixAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -1711,6 +1714,10 @@ namespace Jiten.Core.Migrations.UserDb
 
                     b.Property<DateTime?>("AnkiKnownWordsSyncedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ApprovedFixMode")
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)");
 
                     b.Property<string>("DismissedNoticesJson")
                         .IsRequired()
