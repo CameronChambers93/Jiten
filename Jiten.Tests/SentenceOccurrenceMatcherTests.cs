@@ -39,4 +39,23 @@ public class SentenceOccurrenceMatcherTests
 
         matches.Should().Contain(10L).And.Contain(11L).And.Contain((long?)null);
     }
+
+    [Fact]
+    public void APinnedOccurrenceKeepsItsRowWhenItsTextChanged()
+    {
+        Match([new Stored(10, 1, 5), new Stored(11, 2, 9)], [new Incoming(3, 5, PinnedId: 10)]).Should().Equal(10L);
+    }
+
+    [Fact]
+    public void APinnedRowIsNotTakenByItsOldText()
+    {
+        // The parse still has a line with the fixed row's old text, nearer than the fixed line; the pin wins
+        Match([new Stored(10, 1, 5)], [new Incoming(1, 5), new Incoming(3, 6, PinnedId: 10)]).Should().Equal(null, 10L);
+    }
+
+    [Fact]
+    public void APinToARowTheDeckDoesntHoldPairsByText()
+    {
+        Match([new Stored(10, 1, 5)], [new Incoming(1, 5, PinnedId: 99)]).Should().Equal(10L);
+    }
 }

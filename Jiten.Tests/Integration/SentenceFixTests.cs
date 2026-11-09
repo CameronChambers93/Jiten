@@ -495,33 +495,19 @@ public class SentenceFixTests(JitenWebApplicationFactory factory) : IClassFixtur
     }
 
     [Fact]
-    public async Task SubmittingATextDeletesTheOldTextsRowOnceNoLineHasIt()
+    public async Task SubmittingATextLeavesTheOldTextsRowForTheSweep()
     {
-        using (var scope = factory.Services.CreateScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<JitenDbContext>();
-            db.ExampleSentenceTranslations.Add(new ExampleSentenceTranslation { CentralSentenceId = 10, Text = "Huh?", Provider = "test", Model = "m", CreatedAt = DateTime.UtcNow });
-            await db.SaveChangesAsync();
-        }
-
         await Save(1, Fix(text: "えっ、なに、その髪！"), TestUsers.Admin);
         await Send(HttpMethod.Post, "/api/sentences/1/fix/submit", new { }, TestUsers.Admin);
-
-        // Line 2 still has the old text
-        using (var scope = factory.Services.CreateScope())
-            (await scope.ServiceProvider.GetRequiredService<JitenDbContext>().Sentences.AnyAsync(s => s.Id == 10)).Should().BeTrue();
-
         await Save(2, Fix(text: "えっ、なに、その髪！"), TestUsers.Admin);
         await Send(HttpMethod.Post, "/api/sentences/2/fix/submit", new { }, TestUsers.Admin);
 
-        using (var scope = factory.Services.CreateScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<JitenDbContext>();
-            (await db.Sentences.AnyAsync(s => s.Id == 10)).Should().BeFalse();
-            (await db.ExampleSentenceTranslations.AnyAsync(t => t.CentralSentenceId == 10)).Should().BeFalse();
-            var lines = await db.ExampleSentences.Where(s => s.SentenceId == 1 || s.SentenceId == 2).ToListAsync();
-            lines.Select(l => l.CentralSentenceId).Distinct().Should().ContainSingle().Which.Should().NotBeNull();
-        }
+        // No line has row 10 any more; SentenceRowSweepJob deletes it, not the Submit, which could race a deck save
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<JitenDbContext>();
+        (await db.Sentences.AnyAsync(s => s.Id == 10)).Should().BeTrue();
+        var lines = await db.ExampleSentences.Where(s => s.SentenceId == 1 || s.SentenceId == 2).ToListAsync();
+        lines.Select(l => l.CentralSentenceId).Distinct().Should().ContainSingle().Which.Should().NotBe(10);
     }
 
     [Fact]

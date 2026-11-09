@@ -827,12 +827,13 @@ namespace Jiten.Parser
                                                        List<DeckDictionaryEntry>? dictionaryEntries = null,
                                                        byte[]? speechBoundaries = null,
                                                        IReadOnlyList<LineCorrection>? lineCorrections = null,
-                                                       ICollection<LineCorrection>? unmatchedCorrections = null)
+                                                       ICollection<LineCorrection>? unmatchedCorrections = null,
+                                                       ICollection<AppliedCorrection>? appliedCorrections = null)
         {
             var results = await ParseTextsToDeck(contextFactory, [text], storeRawText, predictDifficulty, mediatype, diagnostics, timings, dictionaryEntries,
                                                  speechBoundaries: [speechBoundaries],
                                                  lineCorrections: lineCorrections == null ? null : [lineCorrections],
-                                                 unmatchedCorrections: unmatchedCorrections);
+                                                 unmatchedCorrections: unmatchedCorrections, appliedCorrections: appliedCorrections);
             return results.Count > 0 ? results[0] : new Deck();
         }
 
@@ -847,7 +848,8 @@ namespace Jiten.Parser
                                                               List<List<ParsedOccurrence>>? occurrenceSink = null,
                                                               IReadOnlyList<byte[]?>? speechBoundaries = null,
                                                               IReadOnlyList<IReadOnlyList<LineCorrection>?>? lineCorrections = null,
-                                                              ICollection<LineCorrection>? unmatchedCorrections = null)
+                                                              ICollection<LineCorrection>? unmatchedCorrections = null,
+                                                              ICollection<AppliedCorrection>? appliedCorrections = null)
         {
             if (texts.Count == 0) return [];
 
@@ -874,7 +876,7 @@ namespace Jiten.Parser
             {
                 if (lineCorrections == null || textIndex >= lineCorrections.Count || lineCorrections[textIndex] is not { Count: > 0 } corrections)
                     return lines;
-                var (corrected, unmatched) = lineUnits[textIndex] ? LineCorrector.Apply(lines, corrections) : (lines, corrections.ToList());
+                var (corrected, unmatched) = lineUnits[textIndex] ? LineCorrector.Apply(lines, corrections, appliedCorrections) : (lines, corrections.ToList());
                 foreach (var c in unmatched) unmatchedCorrections?.Add(c);
                 return corrected;
             }

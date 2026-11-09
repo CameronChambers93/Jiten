@@ -322,9 +322,10 @@ public class SentenceFixService(
                 throw new SentenceFixException("Couldn't read the words of the new text. Try again.");
             }
         }
+        // The old text's row stays until the daily sweep (SentenceRowSweepJob), which waits for this save
+        await using var hold = parts.Text == null ? null : await JitenHelper.HoldSentenceRowsAsync(context, ct);
         long? centralId = parts.Text == null ? null : await CentralSentenceRows.EnsureAsync(context, parts.Text, ct);
         var oldTexts = lines.ToDictionary(l => l.SentenceId, l => l.Text);
-        var oldCentralIds = centralId == null ? [] : lines.Where(l => l.CentralSentenceId is { } c && c != centralId).Select(l => l.CentralSentenceId!.Value).Distinct().ToList();
         foreach (var l in lines)
         {
             var sourceText = l.SourceText ?? l.Text;
@@ -355,11 +356,7 @@ public class SentenceFixService(
         }
 
         await context.SaveChangesAsync(ct);
-
-        // The old text's row goes once no line has it, and its cached AI translation with it
-        if (oldCentralIds.Count > 0)
-            await context.Sentences.Where(c => oldCentralIds.Contains(c.Id) && !context.ExampleSentences.IgnoreQueryFilters().Any(s => s.CentralSentenceId == c.Id))
-                         .ExecuteDeleteAsync(ct);
+        if (hold != null) await hold.CommitAsync(ct);
 
         var ids = lines.Select(l => l.SentenceId).ToList();
         await SettleOwnFixesAsync(sentenceId, parts, ids, submitterId, ct);

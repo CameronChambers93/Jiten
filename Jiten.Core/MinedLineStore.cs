@@ -55,6 +55,7 @@ public static class MinedLineStore
     {
         var conn = (NpgsqlConnection)context.Database.GetDbConnection();
         if (conn.State != System.Data.ConnectionState.Open) await conn.OpenAsync(ct);
+        await using var hold = await JitenHelper.HoldSentenceRowsAsync(context, ct);
         var centralId = (await JitenHelper.EnsureCentralSentences(conn, [line.Text]))[0];
 
         var occurrence = await context.ExampleSentences.IgnoreQueryFilters()
@@ -73,6 +74,7 @@ public static class MinedLineStore
         if (occurrence.AudioPath == null) (occurrence.AudioPath, occurrence.AudioContentType) = (media.AudioPath, media.AudioContentType);
         if (occurrence.PicturePath == null) (occurrence.PicturePath, occurrence.PictureContentType) = (media.PicturePath, media.PictureContentType);
         await context.SaveChangesAsync(ct);
+        if (hold != null) await hold.CommitAsync(ct);
         return occurrence.SentenceId;
     }
 }
