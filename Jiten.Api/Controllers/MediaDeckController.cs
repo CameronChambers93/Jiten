@@ -57,7 +57,8 @@ public class MediaDeckController(
     IDeckActivityBuffer activityBuffer,
     ISentenceTokenService sentenceTokens,
     IJitenPlusService jitenPlusService,
-    SeriesService seriesService) : ControllerBase
+    SeriesService seriesService,
+    SentenceFixStore sentenceFixes) : ControllerBase
 {
 
     private class DeckWithOccurrences
@@ -1370,9 +1371,13 @@ public class MediaDeckController(
                                  .Where(es => sentenceIds.Contains(es.SentenceId))
                                  .Select(es => new { es.SentenceId, DeckId = es.DeckId!.Value, es.Text, es.Tokens })
                                  .ToDictionaryAsync(es => es.SentenceId);
+        // The caller's own fixed text replaces the line's, with its own tokens for furigana and the word's place
+        var lineFixes = await sentenceFixes.ForUserAsync(currentUserService.UserId, sentenceIds);
         var rows = sentenceByTitle
                    .Where(kv => texts.ContainsKey(kv.Value))
-                   .Select(kv => (TitleId: kv.Key, texts[kv.Value].SentenceId, texts[kv.Value].DeckId, texts[kv.Value].Text, texts[kv.Value].Tokens))
+                   .Select(kv => texts[kv.Value] is var es && lineFixes.GetValueOrDefault(es.SentenceId)?.Over(es.Text, es.Tokens) is { } seen
+                               ? (TitleId: kv.Key, es.SentenceId, es.DeckId, seen.Text, seen.Tokens)
+                               : (TitleId: kv.Key, es.SentenceId, es.DeckId, es.Text, es.Tokens))
                    .ToList();
 
         // The sentence's title and episode, so a card mined from it names its source (n1miner).
@@ -1392,8 +1397,10 @@ public class MediaDeckController(
         foreach (var row in rows)
         {
             if (ExampleSentenceTokens.FindForm(ExampleSentenceTokens.Decode(row.Tokens), wordId, readingIndex) is not { } token) continue;
+            var fix = lineFixes.GetValueOrDefault(row.SentenceId);
             result[row.TitleId] = new ExampleSentenceDto
             {
+                Fixed = fix?.Label, ClipKey = SentenceMediaNames.RangeSuffix(fix), PictureKey = SentenceMediaNames.PictureSuffix(fix),
                 SentenceId = row.SentenceId, Text = row.Text, WordPosition = token.Position, WordLength = token.Length,
                 SourceDeck = sources.GetValueOrDefault(row.DeckId),
                 SourceDeckParent = row.DeckId != row.TitleId ? sources.GetValueOrDefault(row.TitleId) : null,

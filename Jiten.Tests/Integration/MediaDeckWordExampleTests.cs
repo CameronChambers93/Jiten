@@ -4,6 +4,8 @@ using System.Text.Json;
 using FluentAssertions;
 using Jiten.Core;
 using Jiten.Core.Data;
+using Jiten.Core.Data.User;
+using Microsoft.EntityFrameworkCore;
 using Jiten.Parser.Tests.Integration.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -75,5 +77,37 @@ public class MediaDeckWordExampleTests(JitenWebApplicationFactory factory)
         decks[novel].GetProperty("exampleSentence").GetProperty("text").GetString().Should().Be("小説");
         decks[novel].GetProperty("exampleSentence").GetProperty("wordPosition").GetInt32().Should().Be(2);
         decks[bare].GetProperty("exampleSentence").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task WordFilter_ShowsTheCallersOwnFixedText()
+    {
+        var (_, novel, _) = await SeedAsync();
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<JitenDbContext>();
+            var line = await db.ExampleSentences.SingleAsync(s => s.Text == "小説");
+            var userDb = scope.ServiceProvider.GetRequiredService<UserDbContext>();
+            userDb.SentenceFixes.RemoveRange(userDb.SentenceFixes);
+            var tokens = new[] { new SentenceToken(Target, 0, 4, 2, IsTarget: true, IsFunctionWord: false) };
+            userDb.SentenceFixes.Add(new SentenceFix
+            {
+                UserId = TestUsers.UserA, ExampleSentenceId = line.SentenceId, Text = "長い小説", Tokens = ExampleSentenceTokens.Encode(tokens)
+            });
+            await userDb.SaveChangesAsync();
+        }
+
+        async Task<JsonElement> SentenceFor(string user)
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, $"/api/media-deck/get-media-decks?wordId={Target}&readingIndex=0").WithUser(user);
+            var body = await (await _client.SendAsync(request)).Content.ReadFromJsonAsync<JsonElement>();
+            return body.GetProperty("data").EnumerateArray().Single(d => d.GetProperty("deckId").GetInt32() == novel).GetProperty("exampleSentence");
+        }
+
+        var mine = await SentenceFor(TestUsers.UserA);
+        mine.GetProperty("text").GetString().Should().Be("長い小説");
+        mine.GetProperty("wordPosition").GetInt32().Should().Be(4);
+        mine.GetProperty("fixed").GetString().Should().Be("mine");
+        (await SentenceFor(TestUsers.UserB)).GetProperty("text").GetString().Should().Be("小説");
     }
 }

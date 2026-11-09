@@ -328,8 +328,8 @@ public class ExampleSentenceQueryService(JitenDbContext context, ISentenceTokenS
     {
         // The caller's own fixed text replaces the line's, with its own tokens for furigana and the word's place
         var lineFixes = await fixes.ForUserAsync(currentUser.UserId, picked.Select(p => p.SentenceId).ToList());
-        picked = picked.Select(p => lineFixes.GetValueOrDefault(p.SentenceId) is { Text: { } text } fix
-                                        ? p with { Text = text, Tokens = fix.Tokens ?? ExampleSentenceTokens.Encode([]) }
+        picked = picked.Select(p => lineFixes.GetValueOrDefault(p.SentenceId)?.Over(p.Text, p.Tokens) is { } seen
+                                        ? p with { Text = seen.Text, Tokens = seen.Tokens }
                                         : p).ToList();
 
         var positionMap = new Dictionary<long, (byte Position, byte Length)>();

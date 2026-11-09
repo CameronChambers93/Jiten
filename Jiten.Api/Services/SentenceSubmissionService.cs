@@ -147,7 +147,7 @@ public class SentenceSubmissionService(
     /// Approves a pending submission: its parts become the shared line's, as an admin's Submit would make them, and the
     /// submitter is told. False when it isn't pending or its line is gone.
     /// </summary>
-    /// <exception cref="SentenceFixException">The new text couldn't be parsed.</exception>
+    /// <exception cref="SentenceFixException">The new text couldn't be parsed, or the title's reparse is saving.</exception>
     public async Task<bool> ApproveAsync(long submissionId, string reviewerId, CancellationToken ct)
     {
         var submission = await context.SentenceSubmissions.AsNoTracking().FirstOrDefaultAsync(s => s.SentenceSubmissionId == submissionId &&
@@ -169,7 +169,7 @@ public class SentenceSubmissionService(
         }
         catch (SentenceFixException)
         {
-            // Nothing was applied (the text didn't parse): it waits again
+            // Nothing was applied (the text didn't parse, or a reparse is saving): it waits again
             await context.SentenceSubmissions.Where(s => s.SentenceSubmissionId == submissionId)
                          .ExecuteUpdateAsync(u => u.SetProperty(s => s.Status, SentenceSubmissionStatus.Pending)
                                                    .SetProperty(s => s.ReviewerId, (string?)null)
