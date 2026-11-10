@@ -120,6 +120,24 @@ public partial class EnglishSubtitleService(
         return saved;
     }
 
+    /// <summary>Saves an English track found elsewhere (episode import), replacing the deck's, and clears its cached English.</summary>
+    public async Task SaveTrackAsync(int deckId, IEnumerable<SubtitleCue> cues, int offsetMs, string source, CancellationToken ct)
+    {
+        var track = await context.DeckEnglishTracks.FindAsync([deckId], ct);
+        if (track == null)
+        {
+            track = new DeckEnglishTrack { DeckId = deckId };
+            context.DeckEnglishTracks.Add(track);
+        }
+
+        track.CuesJson = DeckSubtitleTrack.FromItems(cues.Select(c => new SubtitleItem(c.StartMs, c.EndMs, c.Text))).CuesJson;
+        track.OffsetMs = offsetMs;
+        track.Source = source.Length > 500 ? source[..500] : source;
+        track.SavedAt = DateTime.UtcNow;
+        await context.SaveChangesAsync(ct);
+        SentenceTranslationService.InvalidateEnglish(cache, deckId);
+    }
+
     public async Task<bool> DeleteAsync(int deckId, CancellationToken ct)
     {
         var deleted = await context.DeckEnglishTracks.Where(t => t.DeckId == deckId).ExecuteDeleteAsync(ct);

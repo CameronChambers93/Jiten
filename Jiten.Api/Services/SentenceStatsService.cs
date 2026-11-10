@@ -15,6 +15,12 @@ public sealed class SentenceStatsCache : IDisposable
 
     public MemoryCache Cache { get; } = new(new MemoryCacheOptions { SizeLimit = SizeLimit });
 
+    /// <summary>
+    /// Forgets every user's stats and i+1 lists, after a deck's sentences changed underneath them (episode import).
+    /// Entries are keyed by user, so one deck's can't be found to drop alone; they're cheap to rebuild.
+    /// </summary>
+    public void Clear() => Cache.Compact(1.0);
+
     public void Dispose() => Cache.Dispose();
 }
 

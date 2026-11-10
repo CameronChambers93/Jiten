@@ -43,7 +43,7 @@ public static class JitenHelper
             SanitizeDeckStrings(child);
     }
 
-    public static async Task InsertDeck(IDbContextFactory<JitenDbContext> contextFactory, Deck deck, byte[] cover, bool update = false)
+    public static async Task InsertDeck(IDbContextFactory<JitenDbContext> contextFactory, Deck deck, byte[] cover, bool update = false, bool childrenOnly = false)
     {
         var totalTimer = Stopwatch.StartNew();
         SanitizeDeckStrings(deck);
@@ -99,26 +99,34 @@ public static class JitenHelper
                 Console.WriteLine($"[{DateTime.UtcNow:O}] Deck {deck.OriginalTitle} exists, updating metadata...");
 
                 // Phase 1: Update metadata and delete old data (within transaction)
-                var (deckWords, exampleSentences) = UpdateDeckMetadata(context, existingDeck, deck);
-                await DeleteDeckData(context, existingDeck.DeckId);
+                // childrenOnly: replace just the episodes in deck, leaving the parent's own data and the other episodes alone
+                var deckWords = new List<DeckWord>();
+                var exampleSentences = new List<ExampleSentence>();
+                if (!childrenOnly)
+                {
+                    (deckWords, exampleSentences) = UpdateDeckMetadata(context, existingDeck, deck);
+                    await DeleteDeckData(context, existingDeck.DeckId);
+                }
 
                 // Collect child deck data for bulk inserts
-                var childBulkData = await CollectChildDeckUpdates(contextFactory, context, existingDeck, deck.Children);
+                var childBulkData = await CollectChildDeckUpdates(contextFactory, context, existingDeck, deck.Children, !childrenOnly);
 
                 await context.SaveChangesAsync();
                 await transaction.CommitAsync();
 
                 // Phase 2: Bulk insert new data (after transaction commit to avoid lock conflicts)
                 // Console.WriteLine($"[{DateTime.UtcNow:O}] Transaction committed, starting bulk inserts...");
-                await BulkInsertDeckData(contextFactory, existingDeck.DeckId, deckWords, exampleSentences);
+                if (!childrenOnly)
+                    await BulkInsertDeckData(contextFactory, existingDeck.DeckId, deckWords, exampleSentences);
 
                 // Bulk insert child deck data
                 var childBulkTasks = childBulkData.Select(c =>
                     BulkInsertDeckData(contextFactory, c.deckId, c.deckWords, c.exampleSentences));
                 await Task.WhenAll(childBulkTasks);
 
+                var profiles = childBulkData.Select(c => (c.deckId, c.sentenceProfile));
                 await SaveSentenceProfiles(contextFactory, existingDeck.DeckId,
-                    childBulkData.Select(c => (c.deckId, c.sentenceProfile)).Append((existingDeck.DeckId, deck.SentenceProfile)));
+                    childrenOnly ? profiles : profiles.Append((existingDeck.DeckId, deck.SentenceProfile)));
 
                 Console.WriteLine($"[{DateTime.UtcNow:O}] Update completed.");
                 return;
@@ -551,6 +559,38 @@ public static class JitenHelper
         await context.Database.ExecuteSqlRawAsync($@"DELETE FROM jiten.""DeckWords"" WHERE ""DeckId"" = {{0}}", deckId);
     }
 
+    /// <summary>
+    /// After episodes were replaced or added on their own (<see cref="InsertDeck"/> with childrenOnly), brings the
+    /// parent's word list and totals back in line with its children, the way a full parse builds them
+    /// (<see cref="Deck.AddChildDeckWords"/>). Difficulty, the sentence profile and coverage are left to their own jobs.
+    /// </summary>
+    public static async Task RebuildParentFromChildren(IDbContextFactory<JitenDbContext> contextFactory, int parentId)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync();
+        var parent = await context.Decks.FirstAsync(d => d.DeckId == parentId);
+        var children = await context.Decks.AsNoTracking().Include(d => d.DeckWords)
+                                    .Where(d => d.ParentDeckId == parentId).ToListAsync();
+        if (children.Count == 0) return;
+
+        var rebuilt = new Deck { DeckId = parentId, Children = children };
+        await rebuilt.AddChildDeckWords(context);
+
+        parent.CharacterCount = rebuilt.CharacterCount;
+        parent.WordCount = rebuilt.WordCount;
+        parent.UniqueWordCount = rebuilt.UniqueWordCount;
+        parent.UniqueWordUsedOnceCount = rebuilt.UniqueWordUsedOnceCount;
+        parent.UniqueKanjiCount = rebuilt.UniqueKanjiCount;
+        parent.UniqueKanjiUsedOnceCount = rebuilt.UniqueKanjiUsedOnceCount;
+        parent.SentenceCount = rebuilt.SentenceCount;
+        parent.SpeechDuration = rebuilt.SpeechDuration;
+        parent.SpeechMoraCount = rebuilt.SpeechMoraCount;
+        parent.LastUpdate = DateTimeOffset.UtcNow;
+
+        await DeleteDeckData(context, parentId);
+        await context.SaveChangesAsync();
+        await BulkInsertDeckWords(contextFactory, rebuilt.DeckWords.ToList(), parentId);
+    }
+
     public static async Task BulkInsertDeckData(IDbContextFactory<JitenDbContext> contextFactory, int deckId, List<DeckWord> deckWords, List<ExampleSentence> exampleSentences)
     {
         var tasks = new List<Task>();
@@ -564,7 +604,7 @@ public static class JitenHelper
     }
 
     private static async Task<List<(int deckId, List<DeckWord> deckWords, List<ExampleSentence> exampleSentences, byte[]? sentenceProfile)>> CollectChildDeckUpdates(
-        IDbContextFactory<JitenDbContext> contextFactory, JitenDbContext context, Deck existingDeck, ICollection<Deck> children)
+        IDbContextFactory<JitenDbContext> contextFactory, JitenDbContext context, Deck existingDeck, ICollection<Deck> children, bool deleteMissing = true)
     {
         var bulkData = new List<(int deckId, List<DeckWord> deckWords, List<ExampleSentence> exampleSentences, byte[]? sentenceProfile)>();
 
@@ -614,9 +654,13 @@ public static class JitenHelper
                     RomajiTitle = child.RomajiTitle,
                     EnglishTitle = child.EnglishTitle,
                     DeckOrder = child.DeckOrder,
+                    OriginalFileName = child.OriginalFileName,
+                    DifficultyOverride = child.DifficultyOverride,
                     CharacterCount = child.CharacterCount,
                     UniqueWordCount = child.UniqueWordCount,
+                    UniqueWordUsedOnceCount = child.UniqueWordUsedOnceCount,
                     UniqueKanjiCount = child.UniqueKanjiCount,
+                    UniqueKanjiUsedOnceCount = child.UniqueKanjiUsedOnceCount,
                     SentenceCount = child.SentenceCount,
                     SpeechDuration = child.SpeechDuration,
                     SpeechMoraCount = child.SpeechMoraCount,
@@ -639,7 +683,7 @@ public static class JitenHelper
                                .Select(c => c.DeckId)
                                .ToList();
 
-        if (childrenToDelete.Any())
+        if (deleteMissing && childrenToDelete.Any())
         {
             var placeholders = string.Join(",", childrenToDelete.Select((_, i) => "{" + i + "}"));
             var parameters = childrenToDelete.Cast<object>().ToArray();

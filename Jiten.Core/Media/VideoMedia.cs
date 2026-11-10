@@ -64,6 +64,23 @@ public static class VideoMedia
         public bool IsText => Codec is "ass" or "ssa" or "subrip" or "srt" or "mov_text" or "webvtt" or "text";
     }
 
+    /// <summary>An audio stream inside a video file, as ffprobe reports it.</summary>
+    public record AudioStream(int Index, string? Language, string? Title);
+
+    public static async Task<List<AudioStream>> ListAudioStreams(string videoPath, CancellationToken ct = default)
+    {
+        var json = await Run("ffprobe", ["-v", "error", "-select_streams", "a", "-show_entries", "stream=index:stream_tags=language,title", "-of", "json", videoPath], ct);
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.GetProperty("streams").EnumerateArray()
+                  .Select(s =>
+                  {
+                      var tags = s.TryGetProperty("tags", out var t) ? t : default;
+                      string? Tag(string name) => tags.ValueKind == JsonValueKind.Object && tags.TryGetProperty(name, out var v) ? v.GetString() : null;
+                      return new AudioStream(s.GetProperty("index").GetInt32(), Tag("language"), Tag("title"));
+                  })
+                  .ToList();
+    }
+
     public static async Task<List<SubtitleStream>> ListSubtitleStreams(string videoPath, CancellationToken ct = default)
     {
         var json = await Run("ffprobe", ["-v", "error", "-select_streams", "s", "-show_entries", "stream=index,codec_name:stream_tags=language,title", "-of", "json", videoPath], ct);

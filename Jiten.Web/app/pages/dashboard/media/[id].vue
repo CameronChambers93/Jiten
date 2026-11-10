@@ -21,6 +21,7 @@
   import WebNovelSyncPanel from '~/components/dashboard/WebNovelSyncPanel.vue';
   import YouTubeSyncPanel from '~/components/dashboard/YouTubeSyncPanel.vue';
   import EnglishSubtitlesPanel from '~/components/dashboard/EnglishSubtitlesPanel.vue';
+  import EpisodeImportPanel from '~/components/dashboard/EpisodeImportPanel.vue';
   import { detectLinkTypeFromUrl, getLinkLabel, getLinkTypeText } from '~/utils/linkTypeMapper';
   import { getAllGenres } from '~/utils/genreMapper';
   import { DEFAULT_TAG_PERCENTAGE } from '~/utils/tags';
@@ -1087,6 +1088,8 @@
         <!-- Only renders for decks tracked as webnovels -->
         <WebNovelSyncPanel :deck-id="Number(mediaId)" />
         <YouTubeSyncPanel :deck-id="Number(mediaId)" />
+        <!-- Episodic video titles: add or replace episodes from local video -->
+        <EpisodeImportPanel v-if="selectedMediaType === 1 || selectedMediaType === 2" :deck-id="Number(mediaId)" />
         <EnglishSubtitlesPanel :deck-id="Number(mediaId)" />
 
         <!-- File details card -->

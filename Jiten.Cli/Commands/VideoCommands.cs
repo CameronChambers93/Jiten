@@ -51,7 +51,7 @@ public class VideoCommands(CliContext context)
         Console.WriteLine($"{metadata.OriginalTitle} (deck {parents[0]}){(options.DryRun ? " [dry run]" : "")}");
         var extractor = new SubtitleExtractor();
         var parallel = new ParallelOptions { MaxDegreeOfParallelism = Math.Max(options.Threads, 1) };
-        var results = new (int DeckId, DeckSubtitleTrack Track, DeckVideoSource Source, string Line)?[children.Count];
+        var results = new (int DeckId, List<SubtitleItem> Cues, DeckVideoSource Source, string Line)?[children.Count];
 
         await Parallel.ForEachAsync(Enumerable.Range(0, children.Count), parallel, async (i, ct) =>
         {
@@ -101,31 +101,18 @@ public class VideoCommands(CliContext context)
                 how = $"detected, fit {detected.Score:0} vs {detected.ScoreAtZero:0} unshifted";
             }
 
-            results[i] = (child.DeckId, DeckSubtitleTrack.FromItems(items),
+            results[i] = (child.DeckId, items,
                           new DeckVideoSource { DeckId = child.DeckId, VideoPath = meta.VideoPath, AudioStreamIndex = audioStream.Value, SubtitleOffsetMs = offset },
                           $"  {child.OriginalTitle}: {items.Count} cues, audio stream {audioStream}, offset {offset:+0;-0} ms ({how})");
         });
 
-        foreach (var result in results.OfType<(int DeckId, DeckSubtitleTrack Track, DeckVideoSource Source, string Line)>())
+        foreach (var result in results.OfType<(int DeckId, List<SubtitleItem> Cues, DeckVideoSource Source, string Line)>())
         {
             Console.WriteLine(result.Line);
             if (options.DryRun) continue;
 
-            var track = await db.DeckSubtitleTracks.FindAsync(result.DeckId);
-            if (track == null)
-                db.DeckSubtitleTracks.Add(new DeckSubtitleTrack { DeckId = result.DeckId, CuesJson = result.Track.CuesJson });
-            else
-                track.CuesJson = result.Track.CuesJson;
-
-            var source = await db.DeckVideoSources.FindAsync(result.DeckId);
-            if (source == null)
-                db.DeckVideoSources.Add(result.Source);
-            else
-            {
-                source.VideoPath = result.Source.VideoPath;
-                source.AudioStreamIndex = result.Source.AudioStreamIndex;
-                source.SubtitleOffsetMs = result.Source.SubtitleOffsetMs;
-            }
+            await VideoLinker.StageAsync(db, result.DeckId, result.Cues, result.Source.VideoPath, result.Source.AudioStreamIndex,
+                                         result.Source.SubtitleOffsetMs);
         }
 
         if (!options.DryRun)

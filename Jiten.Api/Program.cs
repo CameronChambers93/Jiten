@@ -501,6 +501,8 @@ builder.Services.AddScoped<Jiten.Api.Services.Translation.Subtitles.ISubtitleSou
 builder.Services.AddScoped<Jiten.Api.Services.Translation.Subtitles.ISubtitleSource, Jiten.Api.Services.Translation.Subtitles.SubDlSubtitleSource>();
 builder.Services.AddScoped<Jiten.Api.Services.Translation.Subtitles.ISubtitleSource, Jiten.Api.Services.Translation.Subtitles.OpenSubtitlesSource>();
 builder.Services.AddScoped<Jiten.Api.Services.Translation.Subtitles.EnglishSubtitleService>();
+builder.Services.AddScoped<Jiten.Api.Services.EpisodeImport.EpisodeImportService>();
+builder.Services.AddSingleton<Jiten.Api.Services.EpisodeImport.EpisodeImportTracker>();
 builder.Services.AddScoped<Jiten.Api.Services.Mining.FrequencyDictionaryService>();
 builder.Services.AddScoped<Jiten.Api.Services.Mining.MiningSentenceService>();
 builder.Services.AddScoped<Jiten.Api.Services.Mining.MinedSentenceService>();
