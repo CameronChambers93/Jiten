@@ -21,6 +21,9 @@ public class SentenceCueLookup(JitenDbContext context, IMemoryCache cache)
 {
     private static readonly TimeSpan MatcherTtl = TimeSpan.FromMinutes(30);
 
+    /// <summary>Drops a deck's cached cues, after they were replaced (episode import), so clips and English use the new ones.</summary>
+    public static void Invalidate(IMemoryCache cache, int deckId) => cache.Remove($"sentence-cues:{deckId}");
+
     /// <summary>Null when the sentence doesn't exist, its deck has no stored cues, or no cue matches it.</summary>
     public async Task<SentenceCues?> FindAsync(long sentenceId, CancellationToken ct)
     {

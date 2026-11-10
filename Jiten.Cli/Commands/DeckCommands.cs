@@ -313,7 +313,7 @@ public class DeckCommands(CliContext context)
             coverOptimized.Quality = 85;
             coverOptimized.Format = ImageMagick.MagickFormat.Jpeg;
 
-            await JitenHelper.InsertDeck(context.ContextFactory, deck, coverOptimized.ToByteArray(), options.UpdateDecks);
+            await JitenHelper.InsertDeck(context.ContextFactory, deck, coverOptimized.ToByteArray(), options.UpdateDecks, options.ChildrenOnly);
 
             if (options.Verbose)
                 Console.WriteLine($"Deck {deck.OriginalTitle} inserted into the database.");

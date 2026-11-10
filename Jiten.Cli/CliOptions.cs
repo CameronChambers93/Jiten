@@ -67,6 +67,10 @@ public class CliOptions
             HelpText = "Update the parsed deck.json into the database from a directory if it's more recent'.")]
     public bool UpdateDecks { get; set; }
 
+    [Option(longName: "children-only", Required = false,
+            HelpText = "With --insert --update: replace only the episodes in deck.json; the parent's own data and the other episodes are left alone.")]
+    public bool ChildrenOnly { get; set; }
+
     [Option(longName: "compute-frequencies", Required = false,
             HelpText = "Compute global word frequencies, then compute and persist per-media-type frequencies")]
     public bool ComputeFrequencies { get; set; }
