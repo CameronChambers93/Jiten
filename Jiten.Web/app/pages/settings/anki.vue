@@ -53,7 +53,30 @@
     }
   }
 
+  /** The most sentences one Sync adds automatically, across note types. */
+  const autoMax = ref<number | null>(null);
+  const savingAutoMax = ref(false);
+  async function saveAutoMax(value: number | null) {
+    if (value == null || value === autoMax.value) return;
+    const previous = autoMax.value;
+    autoMax.value = value;
+    savingAutoMax.value = true;
+    try {
+      await $api('mined/auto/settings', { method: 'PUT', body: { maxPerSync: value } });
+      toast.add({ severity: 'success', summary: 'Saved', life: 2000 });
+    } catch (e) {
+      autoMax.value = previous;
+      toast.add({ severity: 'error', summary: "Couldn't save it", detail: extractApiError(e, 'The request failed'), life: 5000 });
+    } finally {
+      savingAutoMax.value = false;
+    }
+  }
+  const anyAuto = computed(() => anki.setups.value.some((s) => s.autoSentences?.enabled));
+
   onMounted(async () => {
+    $api<{ maxPerSync: number }>('mined/auto/settings')
+      .then((r) => (autoMax.value = r.maxPerSync))
+      .catch(() => {});
     $api<{ approvedFixMode: 'keep' | 'use' | 'ask' }>('sentence-flags/settings')
       .then((r) => (approvedFixMode.value = r.approvedFixMode))
       .catch(() => {});
@@ -151,6 +174,20 @@
       </p>
       <p v-if="anki.loaded.value && !anki.setups.value.length" class="text-sm text-gray-500">None yet. Add one below.</p>
       <AnkiNoteTypeSetupCard v-for="s in anki.setups.value" :key="s.modelName" :setup="s" />
+      <div v-if="anyAuto" class="flex flex-wrap items-center gap-2 text-sm" data-testid="auto-max">
+        <label for="auto-max-per-sync">Automatic sentences: at most</label>
+        <InputNumber
+          :model-value="autoMax"
+          input-id="auto-max-per-sync"
+          :min="1"
+          :max="1000"
+          size="small"
+          input-class="w-20"
+          :disabled="autoMax == null || savingAutoMax"
+          @update:model-value="saveAutoMax"
+        />
+        <span>per Sync, across note types. Each one's media is cut during Sync, so a large number makes Sync slower.</span>
+      </div>
     </section>
 
     <section class="flex flex-col gap-2" aria-labelledby="other-types">

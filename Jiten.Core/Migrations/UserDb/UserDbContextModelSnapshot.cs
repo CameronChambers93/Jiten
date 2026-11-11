@@ -729,6 +729,9 @@ namespace Jiten.Core.Migrations.UserDb
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("AnkiNoteTypeSetupId"));
 
+                    b.Property<string>("AutoSentencesJson")
+                        .HasColumnType("jsonb");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -866,6 +869,9 @@ namespace Jiten.Core.Migrations.UserDb
                         .HasMaxLength(300)
                         .HasColumnType("character varying(300)");
 
+                    b.Property<DateTime?>("AutoAddedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -934,6 +940,36 @@ namespace Jiten.Core.Migrations.UserDb
                     b.HasIndex("UserId", "SourceAnkiNoteId");
 
                     b.ToTable("MinedSentences", "user");
+                });
+
+            modelBuilder.Entity("Jiten.Core.Data.User.MinedSentenceRejection", b =>
+                {
+                    b.Property<long>("MinedSentenceRejectionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("MinedSentenceRejectionId"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<long>("ExampleSentenceId")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("MinedWordId")
+                        .HasColumnType("bigint");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("MinedSentenceRejectionId");
+
+                    b.HasIndex("MinedWordId");
+
+                    b.HasIndex("UserId", "MinedWordId", "ExampleSentenceId")
+                        .IsUnique();
+
+                    b.ToTable("MinedSentenceRejections", "user");
                 });
 
             modelBuilder.Entity("Jiten.Core.Data.User.MinedWord", b =>
@@ -1719,6 +1755,11 @@ namespace Jiten.Core.Migrations.UserDb
                         .HasMaxLength(10)
                         .HasColumnType("character varying(10)");
 
+                    b.Property<int>("AutoSentencesMaxPerSync")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(100);
+
                     b.Property<string>("DismissedNoticesJson")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
@@ -2039,6 +2080,15 @@ namespace Jiten.Core.Migrations.UserDb
                 {
                     b.HasOne("Jiten.Core.Data.User.MinedWord", null)
                         .WithMany("Sentences")
+                        .HasForeignKey("MinedWordId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Jiten.Core.Data.User.MinedSentenceRejection", b =>
+                {
+                    b.HasOne("Jiten.Core.Data.User.MinedWord", null)
+                        .WithMany()
                         .HasForeignKey("MinedWordId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();

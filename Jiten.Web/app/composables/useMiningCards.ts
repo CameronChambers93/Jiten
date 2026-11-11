@@ -3,6 +3,7 @@ import { ankiConnect } from '~/composables/useAnkiConnect';
 import { ankiPitchCategories, ankiPitchPositions } from '~/utils/pitchAccent';
 import {
   ankiSearchValue,
+  autoSentencesOf,
   fieldFor,
   fieldsFor,
   miningOf,
@@ -195,6 +196,68 @@ export function useMiningCards() {
       }
     }
     return { updated, failed };
+  }
+
+  /**
+   * Automatic sentences: adds the lines the server picks for mined words' cards (`mined/auto/plan`), each built with its
+   * note type's automatic settings (parts and English), its media stored in Anki, and marked as automatic. The cards are
+   * written by Sync's next step. A line that fails, or comes without English when English is needed, is skipped and
+   * tried again on the next Sync; a lost connection stops the Sync.
+   */
+  async function addAutoSentences(
+    progress?: (done: number, total: number) => void
+  ): Promise<{ added: number; words: number; failed: number; skipped: number; capped: boolean; startedAt: string; byModel: Record<string, number> }> {
+    const plan = await $api<{
+      words: { minedWordId: number; ankiNoteId: number; modelName: string; expression: string; sentences: ExampleSentence[] }[];
+      lines: number;
+      capped: boolean;
+      startedAt: string;
+    }>('mined/auto/plan', { method: 'POST' });
+    const byModel: Record<string, number> = {};
+    const words = new Set<number>();
+    let added = 0;
+    let failed = 0;
+    let skipped = 0;
+    let done = 0;
+    for (const word of plan.words) {
+      const auto = autoSentencesOf(anki.setupFor(word.modelName));
+      const parts: MiningParts = { audio: auto.audio, picture: auto.picture, english: auto.english !== 'none', video: auto.video };
+      const want = { ...parts, video: wantsVideo(word.modelName, parts) };
+      const build = { english: auto.english, padStartMs: settings.value.padStartMs, padEndMs: settings.value.padEndMs };
+      for (const sentence of word.sentences) {
+        progress?.(done++, plan.lines);
+        try {
+          // A line without the English it needs is skipped for good, before any media is cut and stored in Anki.
+          if (auto.needsEnglish && parts.english) {
+            const english = await cardEnglish(sentence.sentenceId, build.english);
+            if (!english.text) {
+              // Only a line that has no English is skipped; a failed request or English turned off site-wide is tried again.
+              if (english.reason?.startsWith('no ')) {
+                await $api('mined/auto/skip', { method: 'POST', body: { ankiNoteId: word.ankiNoteId, exampleSentenceId: sentence.sentenceId } });
+                skipped++;
+              } else failed++;
+              continue;
+            }
+          }
+          const built = await buildSentence(sentence, want, build);
+          // A line that needs a clip goes on the card only with it: one whose cut failed is tried again next Sync.
+          const b = built.body;
+          if (auto.needsClip && ((want.audio && !b.audioFilename?.endsWith('.mp3')) || (want.picture && !b.pictureFilename) || (want.video && !b.videoFilename))) {
+            failed++;
+            continue;
+          }
+          const result = await $api<AddedSentence>('mined/sentences', { method: 'POST', body: { ankiNoteId: word.ankiNoteId, ...built.body, auto: true } });
+          if (!result.added) continue;
+          added++;
+          words.add(word.minedWordId);
+          byModel[word.modelName] = (byModel[word.modelName] ?? 0) + 1;
+        } catch (e) {
+          if (e instanceof TypeError) throw e;
+          failed++;
+        }
+      }
+    }
+    return { added, words: words.size, failed, skipped, capped: plan.capped, startedAt: plan.startedAt, byModel };
   }
 
   /**
@@ -681,6 +744,7 @@ export function useMiningCards() {
     addToExistingNote,
     rebuildMovedSentences,
     updateFixedMedia,
+    addAutoSentences,
   };
 
   /**

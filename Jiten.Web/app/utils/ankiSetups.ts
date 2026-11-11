@@ -30,6 +30,50 @@ export interface AnkiNoteTypeSetup {
   scriptVersion: number | null;
   /** How mining treats the note type; null or missing for the defaults (`miningOf`). */
   mining?: MiningSettings | null;
+  /** How Sync tops up the note type's cards by itself; null or missing when it never was set (off). */
+  autoSentences?: AutoSentences | null;
+}
+
+/**
+ * Automatic sentences: each Sync adds lines from imported anime, TV and film to the note type's cards, until a card
+ * has `perCard`, at most `perSync` per card in one Sync. A line qualifies when the word is its only word not known.
+ */
+export interface AutoSentences {
+  enabled: boolean;
+  perCard: number;
+  perSync: number;
+  /** Other words must be Mature, not just Young or better. */
+  othersMature: boolean;
+  needsClip: boolean;
+  needsEnglish: boolean;
+  lengthMin: number;
+  lengthMax: number;
+  audio: boolean;
+  picture: boolean;
+  video: boolean;
+  english: 'subtitlesOnly' | 'subtitlesThenAi' | 'none';
+  excludedTitles: readonly { readonly deckId: number; readonly title: string }[] | null;
+}
+
+export const DEFAULT_AUTO_SENTENCES: AutoSentences = {
+  enabled: false,
+  perCard: 5,
+  perSync: 2,
+  othersMature: false,
+  needsClip: true,
+  needsEnglish: true,
+  lengthMin: 6,
+  lengthMax: 40,
+  audio: true,
+  picture: true,
+  video: true,
+  english: 'subtitlesOnly',
+  excludedTitles: [],
+};
+
+/** A setup's automatic sentences settings, with the defaults filled in (off when never set). */
+export function autoSentencesOf(setup: Pick<AnkiNoteTypeSetup, 'autoSentences'> | null | undefined): AutoSentences {
+  return { ...DEFAULT_AUTO_SENTENCES, ...(setup?.autoSentences ?? {}) };
 }
 
 /** When mining would leave a field empty: add the card and say so, or don't add it. */

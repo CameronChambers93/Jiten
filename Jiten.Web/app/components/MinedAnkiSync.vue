@@ -49,13 +49,15 @@
     moved: number;
     known: number;
     flags: number;
+    /** Sentences Sync added to the note type's cards by itself (automatic sentences). */
+    autoAdded: number;
     written: number;
     unchanged: number;
     /** The sentence-list field the note type is missing, when it is. */
     missingList: string | null;
   }
 
-  const emit = defineEmits<{ changed: []; check: [expression: string] }>();
+  const emit = defineEmits<{ changed: []; check: [expression: string]; autoAdded: [since: string] }>();
 
   /** Notes per notesInfo read while writing. */
   const READ_BATCH = 100;
@@ -65,7 +67,7 @@
   const confirm = useConfirm();
   const anki = useAnkiSetups();
   const { importNotes } = useMinedImport();
-  const { writeNote, recordMainWritten, rebuildMovedSentences, updateFixedMedia } = useMiningCards();
+  const { writeNote, recordMainWritten, rebuildMovedSentences, updateFixedMedia, addAutoSentences } = useMiningCards();
   const knownWords = useAnkiKnownWords();
 
   const running = ref(false);
@@ -73,6 +75,8 @@
   const results = ref<Record<string, ModelResult> | null>(null);
   const known = ref<{ imported: number; updated: number; unmatched: string[]; withHistory: boolean } | null>(null);
   const foldsCompleted = ref(0);
+  /** What automatic sentences added in this Sync, and from when, for the link to those words. */
+  const auto = ref<{ added: number; words: number; failed: number; skipped: number; capped: boolean; since: string } | null>(null);
   const folds = ref<FoldCandidate[] | null>(null);
   const keep = ref<Record<number, number>>({});
   const folding = ref<number | null>(null);
@@ -89,6 +93,7 @@
       moved: 0,
       known: 0,
       flags: 0,
+      autoAdded: 0,
       written: 0,
       unchanged: 0,
       missingList: null,
@@ -195,6 +200,7 @@
     running.value = true;
     results.value = null;
     known.value = null;
+    auto.value = null;
     foldsCompleted.value = 0;
     try {
       await anki.load(true);
@@ -229,6 +235,12 @@
           detail: 'Their cards keep the old clip; they are tried again on the next Sync.',
           life: 6000,
         });
+      if (anki.setups.value.some((s) => s.autoSentences?.enabled)) {
+        step.value = 'Choosing sentences to add…';
+        const r = await addAutoSentences((done, total) => (step.value = `Adding sentences… ${done + 1}/${total}`));
+        for (const [model, n] of Object.entries(r.byModel)) resultFor(model).autoAdded += n;
+        if (r.added || r.failed || r.skipped || r.capped) auto.value = { ...r, since: r.startedAt };
+      }
       step.value = 'Writing sentences to notes…';
       await writeNotes();
       step.value = 'Finding notes to fold…';
@@ -315,6 +327,7 @@
     if (r.guessed) parts.push(`${r.guessed} notes matched by guess`);
     if (r.importFailed) parts.push(`${r.importFailed} couldn't be imported`);
     if (r.flags) parts.push(`${r.flags} flags taken in`);
+    if (r.autoAdded) parts.push(`${r.autoAdded} sentences added automatically`);
     if (r.written || r.unchanged) parts.push(`${r.written} notes written, ${r.unchanged} unchanged`);
     return parts.join(' · ') || 'Nothing to do';
   }
@@ -345,6 +358,16 @@
             <Button :label="`Add ${r.missingList}`" size="small" outlined @click="addListField(model, r.missingList)" />
           </div>
         </div>
+        <Message v-if="auto" severity="secondary" size="small" data-testid="sync-auto">
+          <template v-if="auto.added">
+            Added {{ auto.added }} sentence{{ auto.added === 1 ? '' : 's' }} to {{ auto.words }} word{{ auto.words === 1 ? '' : 's' }}.
+            <button class="underline" @click="emit('autoAdded', auto.since)">Show them</button>
+          </template>
+          <template v-else>No sentences added.</template>
+          <template v-if="auto.skipped"> {{ auto.skipped }} had no English and won't be tried again.</template>
+          <template v-if="auto.failed"> {{ auto.failed }} couldn't be built (tried again next Sync).</template>
+          <template v-if="auto.capped"> The limit per Sync was reached; the next Sync adds more.</template>
+        </Message>
         <Message v-if="known" severity="secondary" size="small">
           Known words: {{ known.imported }} new, {{ known.updated }} updated<template v-if="known.unmatched.length">
             · {{ known.unmatched.length }} with no dictionary match ({{ known.unmatched.slice(0, 10).join('、')

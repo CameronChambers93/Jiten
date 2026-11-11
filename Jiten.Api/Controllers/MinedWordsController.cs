@@ -288,12 +288,66 @@ public class MinedWordsController(MinedSentenceService mined, MinedSyncService s
     }
 
     [HttpGet("words")]
-    [SwaggerOperation(Summary = "A page of mined words, most recently changed first; guessed limits it to words with a note matched by guess")]
+    [SwaggerOperation(Summary = "A page of mined words, most recently changed first; guessed limits it to words with a note matched by guess, " +
+                                "auto to words with sentences Sync added by itself (since autoSince when given), the latest first")]
     public async Task<IActionResult> List([FromQuery] string? search, [FromQuery] int page = 0, [FromQuery] bool guessed = false,
-                                          CancellationToken ct = default)
+                                          [FromQuery] bool auto = false, [FromQuery] DateTime? autoSince = null, CancellationToken ct = default)
     {
         if (userService.UserId is not { } userId) return Unauthorized();
-        return Ok(await mined.ListAsync(userId, search, page, ct, guessed));
+        return Ok(await mined.ListAsync(userId, search, page, ct, guessed, auto, autoSince));
+    }
+
+    [HttpPost("auto/plan")]
+    [SwaggerOperation(Summary = "Automatic sentences: the lines Sync should add to mined words' cards now, within each note type's limits and the limit per Sync")]
+    public async Task<IActionResult> AutoPlan([FromServices] MinedAutoSentenceService auto, CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        return Ok(await auto.PlanAsync(userId, ct));
+    }
+
+    public record AutoSkipRequest(long AnkiNoteId, long ExampleSentenceId);
+
+    [HttpPost("auto/skip")]
+    [SwaggerOperation(Summary = "Automatic sentences: a planned line can't be used (no English where it's needed); it isn't planned again for the word")]
+    public async Task<IActionResult> AutoSkip([FromBody] AutoSkipRequest request, CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        return await mined.SkipAutoAsync(userId, request.AnkiNoteId, request.ExampleSentenceId, ct) ? NoContent() : NotFound();
+    }
+
+    [HttpGet("auto/preview")]
+    [SwaggerOperation(Summary = "Automatic sentences: how many lines the next Sync would add for a note type, before the limit per Sync")]
+    public async Task<IActionResult> AutoPreview([FromServices] MinedAutoSentenceService auto, [FromQuery] string modelName, CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        if (string.IsNullOrWhiteSpace(modelName)) return BadRequest(new { message = "Choose a note type." });
+        return Ok(await auto.PreviewAsync(userId, modelName, ct));
+    }
+
+    [HttpGet("auto/settings")]
+    [SwaggerOperation(Summary = "Automatic sentences: the most lines one Sync adds")]
+    public async Task<IActionResult> AutoSettings([FromServices] AnkiSyncSetupService setups, CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        return Ok(new { maxPerSync = await setups.AutoMaxPerSyncAsync(userId, ct) });
+    }
+
+    public record AutoSettingsRequest(int MaxPerSync);
+
+    [HttpPut("auto/settings")]
+    [SwaggerOperation(Summary = "Automatic sentences: saves the most lines one Sync adds")]
+    public async Task<IActionResult> SaveAutoSettings([FromServices] AnkiSyncSetupService setups, [FromBody] AutoSettingsRequest request, CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        try
+        {
+            await setups.SaveAutoMaxPerSyncAsync(userId, request.MaxPerSync, ct);
+            return Ok(new { maxPerSync = request.MaxPerSync });
+        }
+        catch (ArgumentException e)
+        {
+            return BadRequest(new { message = e.Message });
+        }
     }
 
     [HttpGet("words/{minedWordId:long}")]
