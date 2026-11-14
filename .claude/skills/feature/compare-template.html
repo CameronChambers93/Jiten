@@ -45,6 +45,8 @@
   section > p { margin: 0; color: var(--muted); max-width: 75ch; }
   .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   @media (max-width: 760px) { .pair { grid-template-columns: 1fr; } }
+  /* Phone shots are tall and narrow: keep them at about phone size, side by side even on a phone. */
+  .pair.phone { grid-template-columns: repeat(2, minmax(0, 360px)); }
   figure { margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
   figcaption {
     font-family: var(--mono); font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase;
@@ -87,6 +89,16 @@
     <div class="pair">
       <figure class="before"><figcaption>Before</figcaption><div class="empty">{{Main has no such screen.}}</div></figure>
       <figure class="after"><figcaption>After</figcaption><a class="shot" href="shots/{{2-name}}-after.png" target="_blank" rel="noopener"><img src="shots/{{2-name}}-after.png" alt="{{What the branch shows}}" loading="lazy"></a></figure>
+    </div>
+  </section>
+
+  <!-- A screen on the phone (shoot.mjs --phone, files end in -phone.png): the same pair with class "phone". -->
+  <section>
+    <h2><span class="n">{{/path}} · phone</span> {{Screen name}} on the phone</h2>
+    <p>{{One line on what changed at phone width.}}</p>
+    <div class="pair phone">
+      <figure class="before"><figcaption>Before</figcaption><a class="shot" href="shots/{{3-name}}-before-phone.png" target="_blank" rel="noopener"><img src="shots/{{3-name}}-before-phone.png" alt="{{What main shows on the phone}}" loading="lazy"></a></figure>
+      <figure class="after"><figcaption>After</figcaption><a class="shot" href="shots/{{3-name}}-after-phone.png" target="_blank" rel="noopener"><img src="shots/{{3-name}}-after-phone.png" alt="{{What the branch shows on the phone}}" loading="lazy"></a></figure>
     </div>
   </section>
 
