@@ -26,6 +26,11 @@ public class ExampleSentenceDto
     /// <summary>Where those unknown words sit in Text; set only by the Jiten+ readable-sentence search.</summary>
     public List<SentenceSpanDto>? UnknownSpans { get; set; }
 
+    /// <summary>Content words that are New, and that are Learning, the target included; set only by the Mine search when a count filter is on.</summary>
+    public int? NewCount { get; set; }
+
+    public int? LearningCount { get; set; }
+
     /// <summary>Null for sentences parsed before token spans existed.</summary>
     public List<SentenceFuriganaDto>? Furigana { get; set; }
 

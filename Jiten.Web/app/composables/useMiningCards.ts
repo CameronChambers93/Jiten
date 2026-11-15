@@ -396,23 +396,56 @@ export function useMiningCards() {
     return ids.sort((a, b) => a - b);
   }
 
+  type WordNote = { modelName: string; fields: Record<string, { value: string; order: number }> };
+
+  /** Adds the plain text of the chosen fields of every note the search finds to `words`. */
+  async function collectWords(query: string, fieldsOf: (note: WordNote) => string[], words: Set<string>) {
+    const noteIds = await ankiConnect<number[]>('findNotes', { query });
+    for (let i = 0; i < noteIds.length; i += 1000) {
+      const notes = await ankiConnect<WordNote[]>('notesInfo', { notes: noteIds.slice(i, i + 1000) });
+      for (const note of notes) {
+        for (const f of fieldsOf(note)) {
+          const w = plainFieldText(note.fields?.[f]?.value ?? '');
+          if (w) words.add(w);
+        }
+      }
+    }
+  }
+
   /** Every word on the notes of note types with sentence actions, as plain text. */
   async function wordsInAnki(): Promise<string[]> {
     await anki.load();
     const words = new Set<string>();
     for (const setup of wordSetups()) {
       const wordFields = fieldsFor(setup.fieldRoles, 'word');
-      const noteIds = await ankiConnect<number[]>('findNotes', { query: setupQuery(setup) });
-      for (let i = 0; i < noteIds.length; i += 1000) {
-        const notes = await ankiConnect<{ fields: Record<string, { value: string }> }[]>('notesInfo', { notes: noteIds.slice(i, i + 1000) });
-        for (const note of notes) {
-          for (const f of wordFields) {
-            const w = plainFieldText(note.fields[f]?.value ?? '');
-            if (w) words.add(w);
-          }
-        }
-      }
+      await collectWords(setupQuery(setup), () => wordFields, words);
     }
+    return [...words];
+  }
+
+  /** The Anki collection's deck names, sorted. */
+  async function deckNames(): Promise<string[]> {
+    return (await ankiConnect<string[]>('deckNames')).sort((a, b) => a.localeCompare(b));
+  }
+
+  /**
+   * Every word on the notes in a deck (and its subdecks), as plain text: the word fields of a note type that has a setup,
+   * otherwise the note type's first field (a premade deck usually leads with the word).
+   */
+  async function wordsInDeck(deck: string): Promise<string[]> {
+    await anki.load();
+    const words = new Set<string>();
+    await collectWords(
+      `"deck:${ankiSearchValue(deck)}"`,
+      (note) => {
+        const setup = anki.setupFor(note.modelName);
+        const roleFields = setup ? fieldsFor(setup.fieldRoles, 'word') : [];
+        if (roleFields.length) return roleFields;
+        const first = Object.entries(note.fields ?? {}).find(([, f]) => f.order === 0)?.[0];
+        return first ? [first] : [];
+      },
+      words
+    );
     return [...words];
   }
 
@@ -676,6 +709,8 @@ export function useMiningCards() {
     keptNote,
     targetReady,
     wordsInAnki,
+    deckNames,
+    wordsInDeck,
     writeNote,
     recordMainWritten,
     addToExistingNote,

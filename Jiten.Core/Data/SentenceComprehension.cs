@@ -10,12 +10,21 @@ public enum MiningStatus
     Settled
 }
 
-/// <summary>Which sentences count for mining: the target's status, and how well every other content word must be known.</summary>
-public sealed record MiningRule(IReadOnlySet<MiningStatus> Targets, bool OthersMature)
+/// <summary>
+/// Which sentences count for mining: the target's status, how well every other content word must be known, and how many
+/// words may fall short of that (1 is i+1; more lets each of them be a target).
+/// </summary>
+public sealed record MiningRule(IReadOnlySet<MiningStatus> Targets, bool OthersMature, int MaxWeak = 1)
 {
+    /// <summary>The most words a sentence may have that aren't known well enough, when the counts are filtered.</summary>
+    public const int LooseMaxWeak = 10;
+
+    /// <summary>Counts are kept on the hits only under a loose rule; i+1 doesn't need them.</summary>
+    public bool CountsWords => MaxWeak > 1;
+
     public static readonly MiningRule Default = new(new HashSet<MiningStatus> { MiningStatus.New, MiningStatus.Learning }, false);
 
-    public string CacheKey => $"{string.Join(',', Targets.Order())}:{OthersMature}";
+    public string CacheKey => $"{string.Join(',', Targets.Order())}:{OthersMature}:{MaxWeak}";
 }
 
 public static class SentenceComprehension
@@ -34,19 +43,32 @@ public static class SentenceComprehension
     }
 
     /// <summary>
-    /// The words a sentence can be mined for under the rule, each at its first occurrence: a word of a wanted status whose
-    /// fellow content words are all known well enough. A sentence with no weak word gives one target per wanted word.
+    /// The words a sentence can be mined for under the rule, each at its first occurrence: each weak word (one not known well
+    /// enough) of a wanted status, when the sentence has at most <see cref="MiningRule.MaxWeak"/> of them. A sentence with no
+    /// weak word gives one target per wanted word. With more than one weak word, every one must be New or Learning: a Young word
+    /// under "others mature" can only be the sentence's single weak word.
     /// </summary>
     public static List<(SentenceToken Token, MiningStatus Status)> MiningTargets(IEnumerable<SentenceToken> tokens, Func<int, MiningStatus> statusOf, MiningRule rule)
     {
-        var words = tokens.Where(t => !t.IsFunctionWord && !IsNameEntry(t.WordId))
-                          .DistinctBy(t => t.WordKey)
-                          .Select(t => (Token: t, Status: statusOf(t.WordKey)))
-                          .ToList();
+        var words = ContentWords(tokens, statusOf);
         var weak = words.Where(w => !IsSolid(w.Status, rule.OthersMature)).ToList();
-        if (weak.Count > 1) return [];
-        return (weak.Count == 1 ? weak : words).Where(w => rule.Targets.Contains(w.Status)).ToList();
+        if (weak.Count > rule.MaxWeak) return [];
+        if (weak.Count > 1 && weak.Any(w => w.Status is not (MiningStatus.New or MiningStatus.Learning))) return [];
+        return (weak.Count > 0 ? weak : words).Where(w => rule.Targets.Contains(w.Status)).ToList();
     }
+
+    /// <summary>Distinct content words of the sentence that are New, and that are Learning; the target counts too.</summary>
+    public static (int New, int Learning) CountByStatus(IEnumerable<SentenceToken> tokens, Func<int, MiningStatus> statusOf)
+    {
+        var words = ContentWords(tokens, statusOf);
+        return (words.Count(w => w.Status == MiningStatus.New), words.Count(w => w.Status == MiningStatus.Learning));
+    }
+
+    private static List<(SentenceToken Token, MiningStatus Status)> ContentWords(IEnumerable<SentenceToken> tokens, Func<int, MiningStatus> statusOf) =>
+        tokens.Where(t => !t.IsFunctionWord && !IsNameEntry(t.WordId))
+              .DistinctBy(t => t.WordKey)
+              .Select(t => (Token: t, Status: statusOf(t.WordKey)))
+              .ToList();
 
     private static bool IsSolid(MiningStatus status, bool othersMature) =>
         status is MiningStatus.Settled or MiningStatus.Mature || status == MiningStatus.Young && !othersMature;

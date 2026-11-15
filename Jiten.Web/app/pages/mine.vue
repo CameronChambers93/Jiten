@@ -51,6 +51,11 @@
   const q = route.query;
   const str = (v: unknown) => (typeof v === 'string' && v.length > 0 ? v : undefined);
   const num = (v: unknown) => (str(v) != null && !Number.isNaN(Number(v)) ? Number(v) : null);
+  /** A word count from the URL, kept to the 0-5 the API accepts. */
+  const count = (v: unknown) => {
+    const n = num(v);
+    return n == null ? null : Math.min(5, Math.max(0, Math.round(n)));
+  };
   const ids = (v: unknown) =>
     (str(v) ?? '')
       .split(',')
@@ -115,7 +120,14 @@
     requireEnglish: q.en === '1',
     requireAudio: q.audio === '1',
     hideInAnki: q.anki === '1',
+    unlearnedMin: count(q.umin),
+    unlearnedMax: count(q.umax),
+    learningMin: count(q.lrmin),
+    learningMax: count(q.lrmax),
+    deck: str(q.deck) ?? (null as string | null),
   });
+  /** Any count set lifts the one-unknown-word rule; the server then counts New and Learning words, the target included. */
+  const countsFiltered = computed(() => [filters.unlearnedMin, filters.unlearnedMax, filters.learningMin, filters.learningMax].some((c) => c != null));
 
   function filterQuery() {
     const f = filters;
@@ -138,6 +150,11 @@
       en: f.requireEnglish ? '1' : undefined,
       audio: f.requireAudio ? '1' : undefined,
       anki: f.hideInAnki ? '1' : undefined,
+      umin: f.unlearnedMin?.toString(),
+      umax: f.unlearnedMax?.toString(),
+      lrmin: f.learningMin?.toString(),
+      lrmax: f.learningMax?.toString(),
+      deck: f.deck ?? undefined,
     };
     return Object.fromEntries(Object.entries(entries).filter(([, v]) => v != null)) as Record<string, string>;
   }
@@ -160,6 +177,11 @@
       requireEnglish: false,
       requireAudio: false,
       hideInAnki: false,
+      unlearnedMin: null,
+      unlearnedMax: null,
+      learningMin: null,
+      learningMax: null,
+      deck: null,
     });
   }
 
@@ -194,7 +216,7 @@
   }
 
   // ---- Words already in Anki (read through the user's AnkiConnect) ----
-  const { fetchAudio, wordsInAnki } = useMiningCards();
+  const { fetchAudio, wordsInAnki, deckNames, wordsInDeck } = useMiningCards();
   const { miningSetups, load: loadSetups } = useAnkiSetups();
   const ankiWords = ref<string[] | null>(null);
   const ankiLoading = ref(false);
@@ -218,6 +240,56 @@
     }
   }
 
+  // ---- Only words in one Anki deck ----
+  const decks = ref<string[]>([]);
+  const decksLoading = ref(false);
+  const deckWords = ref<{ deck: string; words: string[] } | null>(null);
+  // The read in flight, so a search for the same deck waits on it and a different deck starts its own.
+  let deckRead: { deck: string; done: Promise<void> } | null = null;
+  const deckLoading = ref(false);
+  const deckReady = computed(() => !!filters.deck && deckWords.value?.deck === filters.deck);
+  const deckOptions = computed(() => (filters.deck && !decks.value.includes(filters.deck) ? [filters.deck, ...decks.value] : decks.value));
+
+  function ankiUnreachable() {
+    toast.add({ severity: 'warn', summary: "Couldn't reach AnkiConnect, so the deck filter is off.", life: 5000, group: 'bottom' });
+    filters.deck = null;
+  }
+
+  async function loadDecks() {
+    if (decks.value.length || decksLoading.value) return;
+    decksLoading.value = true;
+    try {
+      decks.value = await deckNames();
+    } catch {
+      toast.add({ severity: 'warn', summary: "Couldn't reach AnkiConnect to list your decks.", life: 5000, group: 'bottom' });
+    } finally {
+      decksLoading.value = false;
+    }
+  }
+
+  async function loadDeckWords(force = false) {
+    const deck = filters.deck;
+    if (!deck || (deckWords.value?.deck === deck && !force)) return;
+    if (deckRead?.deck === deck && !force) return deckRead.done;
+    const read: { deck: string; done: Promise<void> } = { deck, done: Promise.resolve() };
+    read.done = (async () => {
+      try {
+        const words = await wordsInDeck(deck);
+        if (deckRead === read) deckWords.value = { deck, words };
+      } catch {
+        if (deckRead === read && filters.deck === deck) ankiUnreachable();
+      } finally {
+        if (deckRead === read) {
+          deckRead = null;
+          deckLoading.value = false;
+        }
+      }
+    })();
+    deckRead = read;
+    deckLoading.value = true;
+    return read.done;
+  }
+
   // ---- Results ----
   const items = ref<MineItem[]>([]);
   const total = ref(0);
@@ -231,6 +303,11 @@
   async function search(reset = true) {
     if (!granted.value) return;
     if (filters.hideInAnki) await loadAnkiWords();
+    if (filters.deck) {
+      await loadDeckWords();
+      // The deck changed or couldn't be read meanwhile; the search that change started will run.
+      if (!deckReady.value) return;
+    }
     const id = ++requestId;
     loading.value = true;
     failed.value = false;
@@ -254,6 +331,11 @@
           wordTypes: filters.wordTypes,
           script: filters.script === 'any' ? null : filters.script,
           excludeTerms: filters.hideInAnki ? (ankiWords.value ?? []) : [],
+          includeTerms: deckReady.value ? deckWords.value!.words : null,
+          unlearnedMin: filters.unlearnedMin,
+          unlearnedMax: filters.unlearnedMax,
+          learningMin: filters.learningMin,
+          learningMax: filters.learningMax,
           layout: filters.layout,
           offset: reset ? 0 : items.value.length,
         },
@@ -487,6 +569,26 @@
                 <InputNumber v-model="filters.lengthMax" placeholder="Max" :min="1" :use-grouping="false" input-class="w-full" class="flex-1" />
               </div>
             </div>
+            <div class="flex flex-col gap-1">
+              <span v-tooltip.top="'New words in the sentence, the target included. Empty: one word you don\'t know yet.'" class="text-sm font-medium">
+                Unlearned words
+              </span>
+              <div class="flex items-center gap-2">
+                <InputNumber v-model="filters.unlearnedMin" placeholder="Min" :min="0" :max="5" :use-grouping="false" input-class="w-full" class="flex-1" />
+                <span class="text-gray-400">–</span>
+                <InputNumber v-model="filters.unlearnedMax" placeholder="Max" :min="0" :max="5" :use-grouping="false" input-class="w-full" class="flex-1" />
+              </div>
+            </div>
+            <div class="flex flex-col gap-1">
+              <span v-tooltip.top="'Words you are learning (due or suspended) in the sentence, the target included.'" class="text-sm font-medium">
+                Learning words
+              </span>
+              <div class="flex items-center gap-2">
+                <InputNumber v-model="filters.learningMin" placeholder="Min" :min="0" :max="5" :use-grouping="false" input-class="w-full" class="flex-1" />
+                <span class="text-gray-400">–</span>
+                <InputNumber v-model="filters.learningMax" placeholder="Max" :min="0" :max="5" :use-grouping="false" input-class="w-full" class="flex-1" />
+              </div>
+            </div>
             <label class="flex flex-col gap-1">
               <span class="text-sm font-medium">Target word status</span>
               <MultiSelect
@@ -521,6 +623,31 @@
             <div class="flex flex-col gap-1">
               <span class="text-sm font-medium">Written</span>
               <SelectButton v-model="filters.script" :options="scriptOptions" option-label="label" option-value="value" :allow-empty="false" />
+            </div>
+            <div class="flex flex-col gap-1">
+              <span class="text-sm font-medium">In Anki deck</span>
+              <div class="flex items-center gap-2">
+                <Select
+                  v-model="filters.deck"
+                  :options="deckOptions"
+                  placeholder="Any deck"
+                  filter
+                  show-clear
+                  :loading="decksLoading || deckLoading"
+                  class="flex-1 min-w-0"
+                  @before-show="loadDecks"
+                />
+                <Button
+                  v-if="deckReady"
+                  v-tooltip.top="'Re-read the deck'"
+                  icon="pi pi-refresh"
+                  size="small"
+                  text
+                  rounded
+                  aria-label="Re-read the deck"
+                  @click="loadDeckWords(true).then(() => search(true))"
+                />
+              </div>
             </div>
             <div class="flex flex-col gap-2 justify-end">
               <label class="flex items-center gap-2 text-sm">
@@ -599,6 +726,12 @@
                   class="flex items-start gap-2"
                 >
                   <div class="min-w-0 flex-1">
+                    <Tag
+                      v-if="countsFiltered && sentence.newCount != null"
+                      :value="`${sentence.newCount} new · ${sentence.learningCount ?? 0} learning`"
+                      severity="secondary"
+                      class="text-xs mb-1"
+                    />
                     <ExampleSentenceEntry
                       :example-sentence="sentence"
                       :word-id="item.word.wordId"

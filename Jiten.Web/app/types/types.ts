@@ -678,6 +678,9 @@ export interface ExampleSentence {
   unknownSpans?: { position: number; length: number; wordId: number; readingIndex: number }[] | null;
   furigana?: SentenceFurigana[] | null;
   words?: SentenceWord[] | null;
+  /** New and Learning content words, the target included; set only by the Mine search when a count filter is on. */
+  newCount?: number | null;
+  learningCount?: number | null;
   /** The sentence's deck has a linked video, so it may have a screenshot and audio. */
   hasVideo?: boolean;
   /** 'mine' when the caller fixed the line (text is their version), 'shared' when a fix was submitted to it. */

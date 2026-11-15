@@ -26,6 +26,10 @@ public class MiningController(MiningSentenceService mining, ICurrentUserService 
     {
         if (userService.UserId is not { } userId) return Unauthorized();
         if (request.ExcludeTerms is { Count: > 100_000 }) return BadRequest(new { message = "Too many words to exclude." });
+        if (request.IncludeTerms is { Count: > 100_000 }) return BadRequest(new { message = "Too many words in the deck." });
+        int?[] counts = [request.UnlearnedMin, request.UnlearnedMax, request.LearningMin, request.LearningMax];
+        if (counts.Any(c => c is < 0 or > MineRequest.MaxCount))
+            return BadRequest(new { message = $"Word counts go from 0 to {MineRequest.MaxCount}." });
         return Ok(await mining.SearchAsync(userId, request, ct));
     }
 }

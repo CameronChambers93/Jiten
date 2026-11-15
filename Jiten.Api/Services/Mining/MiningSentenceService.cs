@@ -17,6 +17,10 @@ namespace Jiten.Api.Services.Mining;
 /// <param name="Statuses">new, learning, young, mature: the target word's status; none means new and learning.</param>
 /// <param name="OthersKnownAt">young or mature: how well every other content word must be known; none means young.</param>
 /// <param name="Layout">word (one row per word with its best sentences) or sentence.</param>
+/// <param name="IncludeTerms">When sent, only words with a written form among these (the client sends the words of an Anki deck).</param>
+/// <param name="UnlearnedMin">Bounds (0 to 5) on the sentence's New content words, the target included. Setting any of the four
+/// count bounds lifts the one-weak-word rule; an unset bound is 0 or 5.</param>
+/// <param name="LearningMin">The same for Learning (due or suspended) content words.</param>
 public record MineRequest(
     List<int>? DeckIds = null,
     int? DictionaryId = null,
@@ -35,7 +39,17 @@ public record MineRequest(
     List<string>? Statuses = null,
     string? OthersKnownAt = null,
     string Layout = "word",
-    int Offset = 0);
+    int Offset = 0,
+    List<string>? IncludeTerms = null,
+    int? UnlearnedMin = null,
+    int? UnlearnedMax = null,
+    int? LearningMin = null,
+    int? LearningMax = null)
+{
+    public const int MaxCount = 5;
+
+    public bool FiltersCounts => UnlearnedMin != null || UnlearnedMax != null || LearningMin != null || LearningMax != null;
+}
 
 /// <param name="Rank">The word's rank in the chosen frequency source.</param>
 /// <param name="WordSentences">The word's sentences after the filters.</param>
@@ -66,7 +80,7 @@ public class MiningSentenceService(
 
     public static readonly string[] WordTypes = ["verb", "i-adjective", "na-adjective", "noun", "adverb", "expression", "other"];
 
-    private sealed record WordInfo(int? Rank, string WordType, bool IsKana, bool Excluded);
+    private sealed record WordInfo(int? Rank, string WordType, bool IsKana, bool Excluded, bool Included);
 
     public async Task<MineOptionsDto> OptionsAsync(CancellationToken ct)
     {
@@ -111,6 +125,13 @@ public class MiningSentenceService(
             hits = hits.Where(h => withTrack.Contains(h.DeckId) || translated.Contains(h.SentenceId)).ToList();
         }
 
+        if (request.FiltersCounts)
+        {
+            int newMin = request.UnlearnedMin ?? 0, newMax = request.UnlearnedMax ?? MineRequest.MaxCount;
+            int learningMin = request.LearningMin ?? 0, learningMax = request.LearningMax ?? MineRequest.MaxCount;
+            hits = hits.Where(h => h.NewCount >= newMin && h.NewCount <= newMax && h.LearningCount >= learningMin && h.LearningCount <= learningMax).ToList();
+        }
+
         if (request.LengthMin is { } minLength) hits = hits.Where(h => h.TextLength >= minLength).ToList();
         if (request.LengthMax is { } maxLength) hits = hits.Where(h => h.TextLength <= maxLength).ToList();
 
@@ -119,7 +140,7 @@ public class MiningSentenceService(
         hits = hits.Where(h =>
         {
             var w = words[h.WordKey];
-            if (w.Excluded) return false;
+            if (w.Excluded || !w.Included) return false;
             if (types != null && !types.Contains(w.WordType)) return false;
             if (request.Script == "kana" && !w.IsKana || request.Script == "kanji" && w.IsKana) return false;
             if (w.Rank == null) return !request.HideUnranked && request.FrequencyMin == null && request.FrequencyMax == null;
@@ -161,7 +182,14 @@ public class MiningSentenceService(
             {
                 if (!dtos.TryGetValue(hit.SentenceId, out var dto)) continue;
                 // A sentence can be on the page for two words, so each gets its own copy
-                sentenceDtos.Add(dto.ForWord(hit.Position, hit.Length));
+                var copy = dto.ForWord(hit.Position, hit.Length);
+                if (request.FiltersCounts)
+                {
+                    copy.NewCount = hit.NewCount;
+                    copy.LearningCount = hit.LearningCount;
+                }
+
+                sentenceDtos.Add(copy);
             }
 
             if (sentenceDtos.Count > 0)
@@ -177,7 +205,11 @@ public class MiningSentenceService(
                       .Select(s => Enum.TryParse<MiningStatus>(s, ignoreCase: true, out var status) && status != MiningStatus.Settled ? status : (MiningStatus?)null)
                       .OfType<MiningStatus>()
                       .ToHashSet();
-        return new MiningRule(targets.Count > 0 ? targets : MiningRule.Default.Targets, request.OthersKnownAt == "mature");
+        // Only as many weak words as the bounds allow, so a tight filter caches a small listing; at least 2, so the hits carry counts.
+        var maxWeak = request.FiltersCounts
+            ? Math.Clamp((request.UnlearnedMax ?? MineRequest.MaxCount) + (request.LearningMax ?? MineRequest.MaxCount), 2, MiningRule.LooseMaxWeak)
+            : 1;
+        return new MiningRule(targets.Count > 0 ? targets : MiningRule.Default.Targets, request.OthersKnownAt == "mature", maxWeak);
     }
 
     /// <summary>Unranked words sort after ranked ones in either direction.</summary>
@@ -271,12 +303,8 @@ public class MiningSentenceService(
         var wordForms = await context.WordForms.AsNoTracking().Where(f => wordIds.Contains(f.WordId))
                                      .Select(f => new { f.WordId, f.ReadingIndex, f.Text, f.FormType }).ToListAsync(ct);
         var formType = wordForms.ToDictionary(f => (f.WordId, f.ReadingIndex), f => f.FormType);
-        var excluded = new HashSet<int>();
-        if (request.ExcludeTerms is { Count: > 0 } terms)
-        {
-            var termSet = terms.Select(t => t.Trim()).Where(t => t.Length > 0).ToHashSet();
-            excluded = wordForms.Where(f => termSet.Contains(f.Text)).Select(f => f.WordId).ToHashSet();
-        }
+        var excluded = WordsWithAFormIn(request.ExcludeTerms) ?? [];
+        var included = WordsWithAFormIn(request.IncludeTerms);
 
         var words = forms.ToDictionary(f => f.Key, f =>
         {
@@ -284,9 +312,17 @@ public class MiningSentenceService(
             return new WordInfo(ranks.TryGetValue(key, out var rank) ? rank : null,
                                 ClassifyWordType(partsOfSpeech.GetValueOrDefault(f.Form.WordId) ?? []),
                                 formType.GetValueOrDefault(key) == JmDictFormType.KanaForm,
-                                excluded.Contains(f.Form.WordId));
+                                excluded.Contains(f.Form.WordId),
+                                included?.Contains(f.Form.WordId) ?? true);
         });
         return (words, rankSource);
+
+        HashSet<int>? WordsWithAFormIn(List<string>? terms)
+        {
+            if (terms == null) return null;
+            var termSet = terms.Select(t => t.Trim()).Where(t => t.Length > 0).ToHashSet();
+            return wordForms.Where(f => termSet.Contains(f.Text)).Select(f => f.WordId).ToHashSet();
+        }
     }
 
     /// <summary>A coarse word type from JMDict part-of-speech tags, checked in this order (a suru-verb noun counts as a noun).</summary>

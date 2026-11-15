@@ -49,7 +49,7 @@ public interface ISentenceStatsService
 }
 
 /// <summary>An example sentence whose one unknown content word is <paramref name="WordKey"/>, at <paramref name="Position"/> for <paramref name="Length"/> characters.</summary>
-public sealed record IPlusOneHit(long SentenceId, int DeckId, int WordKey, byte Position, byte Length, float Difficulty, int TextLength, MiningStatus Status = MiningStatus.New);
+public sealed record IPlusOneHit(long SentenceId, int DeckId, int WordKey, byte Position, byte Length, float Difficulty, int TextLength, MiningStatus Status = MiningStatus.New, byte NewCount = 0, byte LearningCount = 0);
 
 /// <param name="Checked">Example sentences judged; a long title holds more than the cap.</param>
 public sealed record IPlusOneListing(List<IPlusOneHit> Hits, int Checked);
@@ -327,8 +327,14 @@ public class SentenceStatsService(
 
         var hits = new List<IPlusOneHit>();
         foreach (var (row, tokens) in decoded)
-        foreach (var (token, status) in SentenceComprehension.MiningTargets(tokens, statusOf, rule))
-            hits.Add(new IPlusOneHit(row.SentenceId, row.DeckId, token.WordKey, token.Position, token.Length, row.Difficulty, row.TextLength, status));
+        {
+            var targets = SentenceComprehension.MiningTargets(tokens, statusOf, rule);
+            if (targets.Count == 0) continue;
+            var (newCount, learningCount) = rule.CountsWords ? SentenceComprehension.CountByStatus(tokens, statusOf) : (0, 0);
+            foreach (var (token, status) in targets)
+                hits.Add(new IPlusOneHit(row.SentenceId, row.DeckId, token.WordKey, token.Position, token.Length, row.Difficulty, row.TextLength, status,
+                                         (byte)Math.Min(newCount, byte.MaxValue), (byte)Math.Min(learningCount, byte.MaxValue)));
+        }
 
         return new IPlusOneListing(hits, decoded.Count);
     }
