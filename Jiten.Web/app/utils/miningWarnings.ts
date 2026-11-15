@@ -22,6 +22,14 @@ export class MineDenied extends Error {
   }
 }
 
+/** A new note's target (deck, note type, field roles) isn't set up; a bulk run stops on it, since every later line would fail too. */
+export class TargetNotReady extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TargetNotReady';
+  }
+}
+
 /** Roles that only import reads, so mining never fills them and has no policy for them. */
 export const UNWRITTEN_ROLES: FieldRole[] = ['url', 'previousLine'];
 

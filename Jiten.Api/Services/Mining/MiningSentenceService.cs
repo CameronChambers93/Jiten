@@ -61,6 +61,15 @@ public record MineItemDto(WordSummaryDto Word, int? Rank, string WordType, strin
 /// <param name="Checked">Example sentences judged across the titles.</param>
 public record MineResponse(List<MineItemDto> Items, int Total, int TotalWords, int TotalSentences, int Checked, string RankSource);
 
+/// <summary>The plan of a bulk run: the first <see cref="MiningSentenceService.MaxRunWords"/> words of a search with their top sentences.</summary>
+/// <param name="TotalWords">Words the search returns before the cap.</param>
+/// <param name="Sentences">Sentences in the plan.</param>
+/// <param name="Capped">The search returned more words than the plan holds.</param>
+public record MineRunPlanDto(List<MineItemDto> Items, int TotalWords, int Sentences, bool Capped, string RankSource);
+
+/// <param name="PerWord">Sentences per word, 1 to 5.</param>
+public record MineRunPlanRequest(MineRequest Search, int PerWord = 1);
+
 public record MineEpisodeDto(int DeckId, int Order, string Title);
 
 public record MineTitleDto(int DeckId, string Title, string? EnglishTitle, int MediaType, List<MineEpisodeDto> Episodes);
@@ -78,6 +87,8 @@ public class MiningSentenceService(
     public const int WordPageSize = 20;
     public const int SentencePageSize = 30;
     public const int SentencesPerWord = 5;
+    /// <summary>The most words one bulk run takes (GDR-059).</summary>
+    public const int MaxRunWords = 500;
 
     public static readonly string[] WordTypes = ["verb", "i-adjective", "na-adjective", "noun", "adverb", "expression", "other"];
 
@@ -103,6 +114,52 @@ public class MiningSentenceService(
     }
 
     public async Task<MineResponse> SearchAsync(string userId, MineRequest request, CancellationToken ct)
+    {
+        var found = await FilterAsync(userId, request, ct);
+        var offset = Math.Max(request.Offset, 0);
+
+        List<(int WordKey, List<IPlusOneHit> Sentences)> page;
+        int total;
+        if (request.Layout == "sentence")
+        {
+            var ordered = Order(found.Hits, h => SortKey(request.Sort, found.Words[h.WordKey].Rank, found.ByWord[h.WordKey].Count, h.TextLength, h.Difficulty, h.SentenceId), request);
+            total = ordered.Count;
+            page = ordered.Skip(offset).Take(SentencePageSize).Select(h => (h.WordKey, new List<IPlusOneHit> { h })).ToList();
+        }
+        else
+        {
+            var ordered = OrderWords(found, request);
+            total = ordered.Count;
+            page = ordered.Skip(offset).Take(WordPageSize).Select(g => (g.Key, g.Value.Take(SentencesPerWord).ToList())).ToList();
+        }
+
+        var items = await BuildItems(page, found, request);
+        return new MineResponse(items, total, found.ByWord.Count, found.Hits.Count, found.Checked, found.RankSource);
+    }
+
+    /// <summary>
+    /// Every word of the search in its sort order, up to <see cref="MaxRunWords"/>, each with its first <paramref name="perWord"/>
+    /// sentences in By-word order: the plan of a bulk pipeline run (GDR-059). Layout and offset are ignored.
+    /// </summary>
+    public async Task<MineRunPlanDto> AllAsync(string userId, MineRequest request, int perWord, CancellationToken ct)
+    {
+        perWord = Math.Clamp(perWord, 1, SentencesPerWord);
+        var found = await FilterAsync(userId, request, ct);
+        var ordered = OrderWords(found, request);
+        var page = ordered.Take(MaxRunWords).Select(g => (g.Key, g.Value.Take(perWord).ToList())).ToList();
+        var items = await BuildItems(page, found, request);
+        return new MineRunPlanDto(items, found.ByWord.Count, items.Sum(i => i.Sentences.Count), ordered.Count > MaxRunWords, found.RankSource);
+    }
+
+    private sealed record Found(
+        List<IPlusOneHit> Hits,
+        Dictionary<int, WordInfo> Words,
+        Dictionary<int, List<IPlusOneHit>> ByWord,
+        int Checked,
+        string RankSource);
+
+    /// <summary>The search's hits after every filter, and each word's hits easiest first, then shortest.</summary>
+    private async Task<Found> FilterAsync(string userId, MineRequest request, CancellationToken ct)
     {
         var (hits, checkedCount) = await CollectHits(request.DeckIds, RuleOf(request), ct);
 
@@ -149,27 +206,18 @@ public class MiningSentenceService(
         }).ToList();
 
         var byWord = hits.GroupBy(h => h.WordKey).ToDictionary(g => g.Key, g => g.OrderBy(h => h.Difficulty).ThenBy(h => h.TextLength).ToList());
-        var offset = Math.Max(request.Offset, 0);
+        return new Found(hits, words, byWord, checkedCount, rankSource);
+    }
 
-        List<(int WordKey, List<IPlusOneHit> Sentences)> page;
-        int total;
-        if (request.Layout == "sentence")
+    private static List<KeyValuePair<int, List<IPlusOneHit>>> OrderWords(Found found, MineRequest request) =>
+        Order(found.ByWord.ToList(), g =>
         {
-            var ordered = Order(hits, h => SortKey(request.Sort, words[h.WordKey].Rank, byWord[h.WordKey].Count, h.TextLength, h.Difficulty, h.SentenceId), request);
-            total = ordered.Count;
-            page = ordered.Skip(offset).Take(SentencePageSize).Select(h => (h.WordKey, new List<IPlusOneHit> { h })).ToList();
-        }
-        else
-        {
-            var ordered = Order(byWord.ToList(), g =>
-            {
-                var first = g.Value[0];
-                return SortKey(request.Sort, words[g.Key].Rank, g.Value.Count, g.Value.Min(h => h.TextLength), first.Difficulty, g.Value.Min(h => h.SentenceId));
-            }, request);
-            total = ordered.Count;
-            page = ordered.Skip(offset).Take(WordPageSize).Select(g => (g.Key, g.Value.Take(SentencesPerWord).ToList())).ToList();
-        }
+            var first = g.Value[0];
+            return SortKey(request.Sort, found.Words[g.Key].Rank, g.Value.Count, g.Value.Min(h => h.TextLength), first.Difficulty, g.Value.Min(h => h.SentenceId));
+        }, request);
 
+    private async Task<List<MineItemDto>> BuildItems(List<(int WordKey, List<IPlusOneHit> Sentences)> page, Found found, MineRequest request)
+    {
         var pageHits = page.SelectMany(p => p.Sentences).ToList();
         var dtos = (await exampleSentences.BuildDtosAsync(pageHits.Select(h => h.SentenceId).Distinct().ToList(), 0, 0)).ToDictionary(d => d.SentenceId);
         var summaries = await sentenceStats.LoadWordSummariesAsync(page.Select(p => p.WordKey));
@@ -194,10 +242,10 @@ public class MiningSentenceService(
             }
 
             if (sentenceDtos.Count > 0)
-                items.Add(new MineItemDto(summary, words[wordKey].Rank, words[wordKey].WordType, sentences[0].Status.ToString().ToLowerInvariant(), byWord[wordKey].Count, sentenceDtos));
+                items.Add(new MineItemDto(summary, found.Words[wordKey].Rank, found.Words[wordKey].WordType, sentences[0].Status.ToString().ToLowerInvariant(), found.ByWord[wordKey].Count, sentenceDtos));
         }
 
-        return new MineResponse(items, total, byWord.Count, hits.Count, checkedCount, rankSource);
+        return items;
     }
 
     private static MiningRule RuleOf(MineRequest request)
