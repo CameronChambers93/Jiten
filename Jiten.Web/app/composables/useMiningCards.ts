@@ -17,7 +17,7 @@ import {
 } from '~/utils/ankiSetups';
 import type { BuildChoice, PipelineEnglish } from '~/utils/pipelines';
 import { mainFieldValues, noteWriteFields, type MainFields, type NoteWrite } from '~/utils/ankiNoteWrite';
-import { DEFAULT_EMPTY_FIELDS, emptyFieldWarnings, failureReason, MineDenied, rolesWith, type EmptyReasons } from '~/utils/miningWarnings';
+import { DEFAULT_EMPTY_FIELDS, emptyFieldWarnings, failureReason, MineDenied, rolesWith, TargetNotReady, type EmptyReasons } from '~/utils/miningWarnings';
 import type { AnkiNoteInfo } from '~/utils/minedImport';
 import {
   ankiSentenceFurigana,
@@ -570,7 +570,7 @@ export function useMiningCards() {
     const { target, build } = plan;
     await anki.load();
     if (!targetReady(target))
-      throw new Error(
+      throw new TargetNotReady(
         `The target for this line (${target.deckName || 'no deck'}, ${target.modelName || 'no note type'}) isn't set up. Check the pipeline's Anki step and the note type's field roles.`
       );
     const mapping = rolesOf(target.modelName);

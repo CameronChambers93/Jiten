@@ -510,6 +510,7 @@ builder.Services.AddScoped<Jiten.Api.Services.Mining.WordMatchService>();
 builder.Services.AddScoped<Jiten.Api.Services.Mining.MinedSyncService>();
 builder.Services.AddScoped<Jiten.Api.Services.Mining.AnkiSyncSetupService>();
 builder.Services.AddScoped<Jiten.Api.Services.Mining.MiningPipelineService>();
+builder.Services.AddScoped<Jiten.Api.Services.Mining.MineSearchService>();
 builder.Services.AddScoped<Jiten.Api.Services.Mining.SentenceFlagService>();
 builder.Services.AddScoped<Jiten.Api.Services.Mining.ParseCorrectionService>();
 builder.Services.AddScoped<ISentenceUnlockOrder, SentenceUnlockOrder>();

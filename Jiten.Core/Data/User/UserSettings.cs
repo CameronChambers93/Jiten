@@ -29,6 +29,9 @@ public class UserSettings
     /// </summary>
     public string MiningPipelinesJson { get; set; } = "{}";
 
+    /// <summary>The user's saved Mine page searches (JSON array, see the mine searches service).</summary>
+    public string MineSearchesJson { get; set; } = "[]";
+
     /// <summary>When Sync last sent known words; cards unchanged since aren't sent again. Cleared when a setup's known words change.</summary>
     public DateTime? AnkiKnownWordsSyncedAt { get; set; }
 

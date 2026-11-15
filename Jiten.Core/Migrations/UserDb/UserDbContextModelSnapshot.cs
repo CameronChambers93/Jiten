@@ -1743,6 +1743,12 @@ namespace Jiten.Core.Migrations.UserDb
                         .HasColumnType("jsonb")
                         .HasDefaultValue("{}");
 
+                    b.Property<string>("MineSearchesJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasDefaultValue("[]");
+
                     b.Property<string>("MiningPipelinesJson")
                         .IsRequired()
                         .ValueGeneratedOnAdd()

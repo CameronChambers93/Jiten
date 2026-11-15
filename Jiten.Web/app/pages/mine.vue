@@ -101,31 +101,36 @@
     { label: 'Mature only', value: 'mature' },
   ];
 
-  const filters = reactive({
-    titles: ids(q.titles),
-    episodes: ids(q.episodes),
-    dictionary: num(q.dict) as number | null,
-    sort: str(q.sort) ?? 'frequency',
-    descending: q.desc === '1',
-    layout: str(q.layout) ?? 'word',
-    frequencyMin: num(q.fmin),
-    frequencyMax: num(q.fmax),
-    hideUnranked: q.ranked === '1',
-    lengthMin: num(q.lmin),
-    lengthMax: num(q.lmax),
-    statuses: str(q.status)?.split(',').filter(Boolean) ?? [...defaultStatuses],
-    othersKnownAt: str(q.others) ?? 'young',
-    wordTypes: (str(q.types) ?? '').split(',').filter(Boolean),
-    script: str(q.script) ?? 'any',
-    requireEnglish: q.en === '1',
-    requireAudio: q.audio === '1',
-    hideInAnki: q.anki === '1',
-    unlearnedMin: count(q.umin),
-    unlearnedMax: count(q.umax),
-    learningMin: count(q.lrmin),
-    learningMax: count(q.lrmax),
-    deck: str(q.deck) ?? (null as string | null),
-  });
+  /** The filters a query asks for; a key left out is its default. */
+  function fromQuery(q: Record<string, unknown>) {
+    return {
+      titles: ids(q.titles),
+      episodes: ids(q.episodes),
+      dictionary: num(q.dict) as number | null,
+      sort: str(q.sort) ?? 'frequency',
+      descending: q.desc === '1',
+      layout: str(q.layout) ?? 'word',
+      frequencyMin: num(q.fmin),
+      frequencyMax: num(q.fmax),
+      hideUnranked: q.ranked === '1',
+      lengthMin: num(q.lmin),
+      lengthMax: num(q.lmax),
+      statuses: str(q.status)?.split(',').filter(Boolean) ?? [...defaultStatuses],
+      othersKnownAt: str(q.others) ?? 'young',
+      wordTypes: (str(q.types) ?? '').split(',').filter(Boolean),
+      script: str(q.script) ?? 'any',
+      requireEnglish: q.en === '1',
+      requireAudio: q.audio === '1',
+      hideInAnki: q.anki === '1',
+      unlearnedMin: count(q.umin),
+      unlearnedMax: count(q.umax),
+      learningMin: count(q.lrmin),
+      learningMax: count(q.lrmax),
+      deck: str(q.deck) ?? (null as string | null),
+    };
+  }
+
+  const filters = reactive(fromQuery(q));
   /** Any count set lifts the one-unknown-word rule; the server then counts New and Learning words, the target included. */
   const countsFiltered = computed(() => [filters.unlearnedMin, filters.unlearnedMax, filters.learningMin, filters.learningMax].some((c) => c != null));
 
@@ -134,7 +139,8 @@
     const entries: Record<string, string | undefined> = {
       titles: f.titles.join(',') || undefined,
       episodes: f.episodes.join(',') || undefined,
-      dict: f.dictionary?.toString(),
+      // "jiten" keeps Jiten's own ranks, so a bookmark or saved search isn't switched to the first imported dictionary.
+      dict: f.dictionary?.toString() ?? 'jiten',
       sort: f.sort === 'frequency' ? undefined : f.sort,
       desc: f.descending ? '1' : undefined,
       layout: f.layout === 'word' ? undefined : f.layout,
@@ -300,6 +306,33 @@
   const showsLearnedWords = computed(() => filters.statuses.some((s) => s === 'young' || s === 'mature'));
   let requestId = 0;
 
+  /** The search as a `MineRequest`, without the layout and offset; the Anki words must already be read. */
+  function requestBody() {
+    return {
+      deckIds: requestDeckIds.value,
+      dictionaryId: filters.dictionary,
+      sort: filters.sort,
+      descending: filters.descending,
+      frequencyMin: filters.frequencyMin,
+      frequencyMax: filters.frequencyMax,
+      hideUnranked: filters.hideUnranked,
+      lengthMin: filters.lengthMin,
+      lengthMax: filters.lengthMax,
+      requireEnglish: filters.requireEnglish,
+      requireAudio: filters.requireAudio,
+      statuses: filters.statuses,
+      othersKnownAt: filters.othersKnownAt,
+      wordTypes: filters.wordTypes,
+      script: filters.script === 'any' ? null : filters.script,
+      excludeTerms: filters.hideInAnki ? (ankiWords.value ?? []) : [],
+      includeTerms: deckReady.value ? deckWords.value!.words : null,
+      unlearnedMin: filters.unlearnedMin,
+      unlearnedMax: filters.unlearnedMax,
+      learningMin: filters.learningMin,
+      learningMax: filters.learningMax,
+    };
+  }
+
   async function search(reset = true) {
     if (!granted.value) return;
     if (filters.hideInAnki) await loadAnkiWords();
@@ -314,31 +347,7 @@
     try {
       const response = await $api<MineResponse>('mining/sentences', {
         method: 'POST',
-        body: {
-          deckIds: requestDeckIds.value,
-          dictionaryId: filters.dictionary,
-          sort: filters.sort,
-          descending: filters.descending,
-          frequencyMin: filters.frequencyMin,
-          frequencyMax: filters.frequencyMax,
-          hideUnranked: filters.hideUnranked,
-          lengthMin: filters.lengthMin,
-          lengthMax: filters.lengthMax,
-          requireEnglish: filters.requireEnglish,
-          requireAudio: filters.requireAudio,
-          statuses: filters.statuses,
-          othersKnownAt: filters.othersKnownAt,
-          wordTypes: filters.wordTypes,
-          script: filters.script === 'any' ? null : filters.script,
-          excludeTerms: filters.hideInAnki ? (ankiWords.value ?? []) : [],
-          includeTerms: deckReady.value ? deckWords.value!.words : null,
-          unlearnedMin: filters.unlearnedMin,
-          unlearnedMax: filters.unlearnedMax,
-          learningMin: filters.learningMin,
-          learningMax: filters.learningMax,
-          layout: filters.layout,
-          offset: reset ? 0 : items.value.length,
-        },
+        body: { ...requestBody(), layout: filters.layout, offset: reset ? 0 : items.value.length },
       });
       if (id !== requestId) return;
       items.value = reset ? response.items : [...items.value, ...response.items];
@@ -414,6 +423,42 @@
   function onMined(word: WordSummary) {
     minedWords.value = new Set(minedWords.value).add(wordKey(word));
     ankiWords.value?.push(word.reading);
+  }
+
+  // ---- Saved searches and runs on all results (GDR-059) ----
+  const savedSearchId = ref<string | null>(null);
+  const runVisible = ref(false);
+
+  function applySearch(query: Record<string, string>) {
+    Object.assign(filters, fromQuery(query));
+  }
+
+  /**
+   * The search for a run, with its Anki words read fresh; null when a filter that needs Anki couldn't read them. The
+   * page's own filters and word lists are left alone, so a preview never changes the search it previews.
+   */
+  async function runSearchBody(): Promise<Record<string, unknown> | null> {
+    const body = requestBody();
+    try {
+      if (filters.hideInAnki) {
+        await loadSetups();
+        if (!miningSetups.value.length) return null;
+        body.excludeTerms = await wordsInAnki();
+      }
+      if (filters.deck) body.includeTerms = await wordsInDeck(filters.deck);
+    } catch {
+      return null;
+    }
+    return body;
+  }
+
+  /** After a run: the rows show what was mined once the list is read again. */
+  async function onRunFinished(words: WordSummary[]) {
+    const next = new Set(minedWords.value);
+    for (const word of words) next.add(wordKey(word));
+    minedWords.value = next;
+    if (filters.hideInAnki) await loadAnkiWords(true);
+    search(true);
   }
 
   // ---- English ----
@@ -502,6 +547,7 @@
     <template v-else>
       <Card>
         <template #content>
+          <MineSavedSearches v-model:selected="savedSearchId" :query="filterQuery()" class="mb-4 pb-4 border-b border-surface-200 dark:border-surface-700" @apply="applySearch" />
           <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-x-4 gap-y-3">
             <label class="flex flex-col gap-1">
               <span class="text-sm font-medium">Titles</span>
@@ -685,7 +731,10 @@
           </div>
           <div class="flex flex-wrap items-center justify-between gap-3 mt-4">
             <SelectButton v-model="filters.layout" :options="layoutOptions" option-label="label" option-value="value" :allow-empty="false" />
-            <Button label="Reset filters" size="small" severity="secondary" text @click="resetFilters" />
+            <div class="flex flex-wrap items-center gap-2">
+              <Button label="Run on all results…" icon="pi pi-play" size="small" severity="secondary" outlined @click="runVisible = true" />
+              <Button label="Reset filters" size="small" severity="secondary" text @click="resetFilters" />
+            </div>
           </div>
         </template>
       </Card>
@@ -804,5 +853,6 @@
     </template>
 
     <MiningCardSettingsDialog v-model:visible="cardSettingsVisible" />
+    <MineRunDialog v-model:visible="runVisible" :search-body="runSearchBody" :saved-search-id="savedSearchId" @finished="onRunFinished" />
   </div>
 </template>
