@@ -17,7 +17,8 @@ namespace Jiten.Api.Services.Mining;
 /// <param name="Statuses">new, learning, young, mature: the target word's status; none means new and learning.</param>
 /// <param name="OthersKnownAt">young or mature: how well every other content word must be known; none means young.</param>
 /// <param name="Layout">word (one row per word with its best sentences) or sentence.</param>
-/// <param name="IncludeTerms">When sent, only words with a written form among these (the client sends the words of an Anki deck).</param>
+/// <param name="IncludeTerms">When sent, only words whose form in the sentence, or main form, is among these (the client sends the
+/// words of an Anki deck).</param>
 /// <param name="UnlearnedMin">Bounds (0 to 5) on the sentence's New content words, the target included. Setting any of the four
 /// count bounds lifts the one-weak-word rule; an unset bound is 0 or 5.</param>
 /// <param name="LearningMin">The same for Learning (due or suspended) content words.</param>
@@ -303,8 +304,9 @@ public class MiningSentenceService(
         var wordForms = await context.WordForms.AsNoTracking().Where(f => wordIds.Contains(f.WordId))
                                      .Select(f => new { f.WordId, f.ReadingIndex, f.Text, f.FormType }).ToListAsync(ct);
         var formType = wordForms.ToDictionary(f => (f.WordId, f.ReadingIndex), f => f.FormType);
+        var formText = wordForms.ToDictionary(f => (f.WordId, f.ReadingIndex), f => f.Text);
         var excluded = WordsWithAFormIn(request.ExcludeTerms) ?? [];
-        var included = WordsWithAFormIn(request.IncludeTerms);
+        var includeTerms = TermSet(request.IncludeTerms);
 
         var words = forms.ToDictionary(f => f.Key, f =>
         {
@@ -313,17 +315,27 @@ public class MiningSentenceService(
                                 ClassifyWordType(partsOfSpeech.GetValueOrDefault(f.Form.WordId) ?? []),
                                 formType.GetValueOrDefault(key) == JmDictFormType.KanaForm,
                                 excluded.Contains(f.Form.WordId),
-                                included?.Contains(f.Form.WordId) ?? true);
+                                includeTerms == null || IsInTerms(includeTerms, formText.GetValueOrDefault(key), formText.GetValueOrDefault((f.Form.WordId, (short)0))));
         });
         return (words, rankSource);
 
         HashSet<int>? WordsWithAFormIn(List<string>? terms)
         {
-            if (terms == null) return null;
-            var termSet = terms.Select(t => t.Trim()).Where(t => t.Length > 0).ToHashSet();
-            return wordForms.Where(f => termSet.Contains(f.Text)).Select(f => f.WordId).ToHashSet();
+            var termSet = TermSet(terms);
+            return termSet == null ? null : wordForms.Where(f => termSet.Contains(f.Text)).Select(f => f.WordId).ToHashSet();
         }
     }
+
+    private static HashSet<string>? TermSet(List<string>? terms) =>
+        terms?.Select(t => t.Trim()).Where(t => t.Length > 0).ToHashSet();
+
+    /// <summary>
+    /// Whether a sentence's word is among a deck's words: the deck has the form the sentence uses, or the word's main
+    /// form. Any other form isn't enough, since JMDict lists other words' spellings as rare forms (本 is a form of 元 もと,
+    /// so a deck with 本 ほん would otherwise take in 元).
+    /// </summary>
+    public static bool IsInTerms(IReadOnlySet<string> terms, string? usedForm, string? mainForm) =>
+        usedForm != null && terms.Contains(usedForm) || mainForm != null && terms.Contains(mainForm);
 
     /// <summary>A coarse word type from JMDict part-of-speech tags, checked in this order (a suru-verb noun counts as a noun).</summary>
     public static string ClassifyWordType(IReadOnlyCollection<string> tags)
