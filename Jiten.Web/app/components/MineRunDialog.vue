@@ -50,6 +50,8 @@
   const whenAsked = ref<WhenAsked>('existing');
   const pipeline = computed(() => ordered.value.find((p) => p.id === pipelineId.value) ?? ordered.value[0] ?? null);
   const canAsk = computed(() => !!pipeline.value && pipelineCanAsk(pipeline.value.steps));
+  // Any Anki step asks when only another entry of the word's spelling has a card (GDR-061).
+  const showWhenAsked = computed(() => !!pipeline.value && hasAnkiStep(pipeline.value));
   const whenAskedOptions = (Object.keys(WHEN_ASKED_LABELS) as WhenAsked[]).map((value) => ({ value, label: WHEN_ASKED_LABELS[value] }));
   const perWordOptions = Array.from({ length: MAX_RUN_SENTENCES_PER_WORD }, (_, i) => ({ value: i + 1, label: String(i + 1) }));
   const savedSearch = computed(() => saved.searches.value.find((s) => s.id === props.savedSearchId) ?? null);
@@ -131,6 +133,7 @@
     [
       { title: 'Failed', items: runner.tally.value.failed },
       { title: 'Fields left empty', items: runner.tally.value.warned },
+      { title: 'Another word spelt the same has the card', items: runner.tally.value.otherEntry },
     ].filter((g) => g.items.length)
   );
 
@@ -179,8 +182,8 @@
           <span class="text-sm font-medium">Sentences per word</span>
           <Select v-model="perWord" :options="perWordOptions" option-label="label" option-value="value" class="w-full" />
         </label>
-        <label v-if="canAsk" class="flex flex-col gap-1">
-          <span class="text-sm font-medium">If the word already has a card</span>
+        <label v-if="showWhenAsked" class="flex flex-col gap-1">
+          <span class="text-sm font-medium">{{ canAsk ? 'If the word, or another word spelt the same, has a card' : 'If only another word spelt the same has a card' }}</span>
           <Select v-model="whenAsked" :options="whenAskedOptions" option-label="label" option-value="value" class="w-full" />
         </label>
       </div>

@@ -67,8 +67,25 @@ public record MinedWordDto(long MinedWordId, int? WordId, byte? ReadingIndex, st
 /// <param name="AnkiNoteId">A note of the word, as found in Anki; the sentence goes to the word, so any of its notes will do.</param>
 /// <param name="Sentence">The sentence as card HTML, the word in bold.</param>
 /// <param name="EnglishOrigin">"subtitles", "ai" or "user" (a fix's English).</param>
+/// <param name="ParsedWordId">The entry the line was mined for, when the user chose a note of another entry of the same spelling:
+/// the line's Jiten-only copy is taken off that entry's list.</param>
 public record AddSentenceRequest(long AnkiNoteId, long ExampleSentenceId, string Sentence, string? Furigana, string? English, string? EnglishOrigin,
-                                 string? SourceTitle, string? AudioFilename, string? PictureFilename, string? VideoFilename = null);
+                                 string? SourceTitle, string? AudioFilename, string? PictureFilename, string? VideoFilename = null,
+                                 int? ParsedWordId = null, byte? ParsedReadingIndex = null);
+
+/// <summary>A word's notes, given the note ids a search of the Word fields by its spelling found (<paramref name="Candidates"/>).</summary>
+public record WordNotesRequest(int WordId, byte ReadingIndex, List<long> Candidates);
+
+public record WordNoteDto(long AnkiNoteId, string ModelName);
+
+/// <summary>A candidate stored on another entry of the same spelling (or on no entry, <paramref name="WordId"/> null).</summary>
+public record OtherEntryNoteDto(long AnkiNoteId, string ModelName, int? WordId, byte? ReadingIndex, string Expression, string? Meaning,
+                                string? WordMatch);
+
+/// <param name="Own">The notes stored on the word's entry, oldest first, found by the search or not; notes being folded away are left out.</param>
+/// <param name="Others">Candidates stored on another entry, oldest first.</param>
+/// <param name="Unstored">Candidates not in the store yet: import them, and ask again.</param>
+public record WordNotesResult(List<WordNoteDto> Own, List<OtherEntryNoteDto> Others, List<long> Unstored);
 
 /// <summary>One of Jiten's lines to save to a word's list, the word at <paramref name="Position"/> in the line's text.</summary>
 public record SaveToListRequest(int WordId, byte ReadingIndex, long ExampleSentenceId, int Position, int Length);
@@ -393,6 +410,20 @@ public class MinedSentenceService(
             await userContext.SaveChangesAsync(ct);
         }
 
+        if (request.ParsedWordId is { } parsedId && (parsedId != word.WordId || request.ParsedReadingIndex != word.ReadingIndex))
+        {
+            // The sentence is on the card by now; a stray copy left behind is tidied by hand on /mined, so it doesn't fail the add.
+            try
+            {
+                await DropParsedCopyAsync(userId, parsedId, request.ParsedReadingIndex ?? 0, request.ExampleSentenceId, ct);
+            }
+            catch (DbUpdateException e)
+            {
+                userContext.ChangeTracker.Clear();
+                logger.LogWarning(e, "Couldn't drop the parsed word's copy of line {Line}", request.ExampleSentenceId);
+            }
+        }
+
         var write = added ? (await sync.NoteWritesAsync(userId, word.MinedWordId, ct)).FirstOrDefault() : null;
         var kept = write?.AnkiNoteId ?? word.Notes.Where(n => n.FoldingInto == null).Min(n => n.AnkiNoteId);
         return new AddSentenceResult(kept, sentence.MinedSentenceId, added, word.Sentences.Count(s => !s.JitenOnly), write);
@@ -711,6 +742,57 @@ public class MinedSentenceService(
                          .ExecuteUpdateAsync(u => u.SetProperty(w => w.UpdatedAt, DateTime.UtcNow), ct);
         await userContext.SaveChangesAsync(ct);
         return true;
+    }
+
+    /// <summary>
+    /// The line went onto a note of another entry, so it wasn't the parsed entry's word: its Jiten-only copy there goes, and the
+    /// parsed word too if that leaves it with no sentences and no notes. A copy on a card is never touched.
+    /// </summary>
+    private async Task DropParsedCopyAsync(string userId, int wordId, byte readingIndex, long exampleSentenceId, CancellationToken ct)
+    {
+        var parsed = await userContext.MinedWords.AsSplitQuery().Include(w => w.Notes).Include(w => w.Sentences)
+                                      .FirstOrDefaultAsync(w => w.UserId == userId && w.WordId == wordId && w.ReadingIndex == readingIndex, ct);
+        var copy = parsed?.Sentences.FirstOrDefault(s => s.ExampleSentenceId == exampleSentenceId && s.JitenOnly);
+        if (parsed == null || copy == null) return;
+
+        userContext.MinedSentences.Remove(copy);
+        if (parsed.Notes.Count == 0 && parsed.Sentences.Count == 1) userContext.MinedWords.Remove(parsed);
+        else parsed.UpdatedAt = DateTime.UtcNow;
+        await userContext.SaveChangesAsync(ct);
+    }
+
+    /// <summary>Sorts the notes a spelling search found into the word's own, other entries' and not yet stored (GDR-061).</summary>
+    public async Task<WordNotesResult> WordNotesAsync(string userId, WordNotesRequest request, CancellationToken ct)
+    {
+        var candidates = (request.Candidates ?? []).Distinct().ToList();
+        var own = await userContext.MinedNotes.AsNoTracking()
+                                   .Where(n => n.UserId == userId && n.FoldingInto == null)
+                                   .Join(userContext.MinedWords.Where(w => w.UserId == userId && w.WordId == request.WordId
+                                                                           && w.ReadingIndex == request.ReadingIndex),
+                                         n => n.MinedWordId, w => w.MinedWordId, (n, _) => n)
+                                   .OrderBy(n => n.AnkiNoteId)
+                                   .Select(n => new WordNoteDto(n.AnkiNoteId, n.ModelName))
+                                   .ToListAsync(ct);
+
+        var stored = await userContext.MinedNotes.AsNoTracking()
+                                      .Where(n => n.UserId == userId && candidates.Contains(n.AnkiNoteId))
+                                      .Join(userContext.MinedWords, n => n.MinedWordId, w => w.MinedWordId,
+                                            (n, w) => new { n.AnkiNoteId, n.ModelName, n.WordMatch, n.FoldingInto, w.WordId, w.ReadingIndex, w.Expression })
+                                      .ToListAsync(ct);
+        var others = stored.Where(n => n.FoldingInto == null && !(n.WordId == request.WordId && n.ReadingIndex == request.ReadingIndex))
+                           .OrderBy(n => n.AnkiNoteId).ToList();
+        var entries = others.Where(n => n.WordId != null).Select(n => (n.WordId!.Value, n.ReadingIndex ?? (byte)0)).Distinct().ToList();
+        var meanings = entries.Count == 0
+            ? []
+            : (await WordSummariesAsync(entries, ct)).ToDictionary(w => (w.WordId, (byte)w.ReadingIndex), w => w.MainDefinition);
+
+        var storedIds = stored.Select(n => n.AnkiNoteId).ToHashSet();
+        return new WordNotesResult(
+            own,
+            others.Select(n => new OtherEntryNoteDto(n.AnkiNoteId, n.ModelName, n.WordId, n.ReadingIndex, n.Expression,
+                                                     n.WordId is { } id ? meanings.GetValueOrDefault((id, n.ReadingIndex ?? 0)) : null, n.WordMatch))
+                  .ToList(),
+            candidates.Where(id => !storedIds.Contains(id)).ToList());
     }
 
     private async Task SaveNewSentenceAsync(MinedWord word, MinedSentence sentence, CancellationToken ct)

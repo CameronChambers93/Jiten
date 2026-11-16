@@ -1,8 +1,9 @@
 import { useToast } from 'primevue/usetoast';
 import type { ExampleSentence, WordSummary } from '~/types';
 import { MineDenied } from '~/utils/miningWarnings';
-import { runPick, type WhenAsked } from '~/utils/mineSearches';
+import { otherEntryAnswer, runPick, type WhenAsked } from '~/utils/mineSearches';
 import type { NewCardTarget } from '~/utils/ankiSetups';
+import type { OtherEntryNote } from '~/composables/useMiningCards';
 import { buildChoice, firstStep, hasAnkiStep, pipelineTags, stepTarget, type Pipeline, type PipelineContext } from '~/utils/pipelines';
 import { getMediaTypeText } from '~/utils/mediaTypeMapper';
 
@@ -11,9 +12,9 @@ import { getMediaTypeText } from '~/utils/mediaTypeMapper';
  * matched, or it skipped), so the sentence stays kept for Jiten. `warnings` lists fields left empty.
  */
 export type MineOutcome =
-  | { kind: 'created'; noteId: number; warnings: string[] }
-  | { kind: 'existing'; noteId: number; added: boolean; sentences: number; warnings: string[] }
-  | { kind: 'kept'; skipped?: boolean };
+  | { kind: 'created'; noteId: number; warnings: string[]; otherEntry?: OtherEntryNote }
+  | { kind: 'existing'; noteId: number; added: boolean; sentences: number; warnings: string[]; otherEntry?: OtherEntryNote }
+  | { kind: 'kept'; skipped?: boolean; otherEntry?: OtherEntryNote };
 
 /**
  * How a bulk run calls `mine` (GDR-059): no toasts, errors thrown to the caller, no dialog (`whenAsked` answers a step
@@ -23,16 +24,25 @@ export interface MineRunOptions {
   whenAsked: WhenAsked;
   /** The note this run already gave the word, if any: its later sentences go there, even if findNotes doesn't see it. */
   cardNoteId: number | null;
+  /** Set when that note is another entry's (the run added the word's first sentence to it): later ones go the same way. */
+  cardOtherEntry?: OtherEntryNote;
 }
 
-/** A word already in Anki, waiting for the user to choose between its existing card and a new note. */
+/**
+ * A word already in Anki, waiting for the user to choose between its existing card and a new note. With `other`, the word
+ * has no card of its own but another entry of its spelling does (GDR-061): `target` is null when no new note can be made.
+ */
 export interface MineChoice {
   word: WordSummary;
-  notes: number[];
+  notes: readonly number[];
   /** The note type of the card that would get the sentence (the word's oldest note); empty when it couldn't be read. */
   modelName: string;
   /** Where a new note would go. */
-  target: NewCardTarget;
+  target: NewCardTarget | null;
+  /** The other entry's oldest note, when the card isn't the word's own. */
+  other?: OtherEntryNote;
+  /** How many more notes other entries have. */
+  moreOthers?: number;
 }
 
 /**
@@ -97,11 +107,12 @@ export function useMineSentence() {
       if (!run) done(summary, warnings, severity);
     };
     let notes: number[];
+    let others: OtherEntryNote[];
     let kept: Awaited<ReturnType<typeof keptNote>> = null;
     try {
-      notes = await existingNotes(word.reading);
+      ({ own: notes, others } = await existingNotes(word));
       // The run's own note first, so it is the one kept and written to.
-      if (run?.cardNoteId != null) notes = [run.cardNoteId, ...notes.filter((n) => n !== run.cardNoteId)];
+      if (run?.cardNoteId != null && !run.cardOtherEntry) notes = [run.cardNoteId, ...notes.filter((n) => n !== run.cardNoteId)];
       if (notes.length) kept = await keptNote(notes);
     } catch (e) {
       report(e, "Couldn't check Anki for the word");
@@ -117,6 +128,21 @@ export function useMineSentence() {
     const target = stepTarget(step, sentence, pipelineTags(pipeline, ctx, (t) => getMediaTypeText(t)));
     const noBuild = buildStep ? [] : [`No Build step in ${pipeline.name} matched this line, so the card has text only.`];
 
+    if (run?.cardOtherEntry) return toExisting([run.cardOtherEntry.ankiNoteId], undefined, run.cardOtherEntry);
+
+    // No card of its own, but another entry of its spelling has one: the line's word may have been picked wrong, so ask.
+    const other = !notes.length ? others[0] : undefined;
+    if (other) {
+      const canNew = !!target && step.noCard !== 'skip';
+      let answer: 'existing' | 'new' | 'skip' | null;
+      if (run) answer = otherEntryAnswer(run.whenAsked, canNew);
+      else answer = await ask({ word, notes: [other.ankiNoteId], modelName: other.modelName, target: canNew ? target : null, other, moreOthers: others.length - 1 });
+      if (answer === 'skip') return { kind: 'kept', skipped: true, otherEntry: other };
+      if (answer == null) return null;
+      if (answer === 'existing') return toExisting([other.ankiNoteId], undefined, other);
+      return toNew(other);
+    }
+
     let pick: 'existing' | 'new' | null;
     if (notes.length && run) {
       const picked = runPick(step.hasCard, !!target, run.whenAsked, run.cardNoteId != null);
@@ -126,12 +152,16 @@ export function useMineSentence() {
       if (step.hasCard === 'skip') return { kind: 'kept' };
       // A step with no targets can't make a new note, so asking would offer nothing.
       pick = step.hasCard === 'add' || (step.hasCard === 'ask' && !target) ? 'existing' : step.hasCard === 'new' ? 'new' : null;
-      if (pick == null) pick = await ask({ word, notes, modelName, target: target! });
+      if (pick == null) pick = await ask({ word, notes, modelName, target });
     } else {
       if (step.noCard === 'skip') return { kind: 'kept', skipped: !!run };
       pick = 'new';
     }
-    if (pick === 'new') {
+    if (pick === 'new') return toNew();
+    if (pick === 'existing') return toExisting(notes, kept);
+    return null;
+
+    async function toNew(otherEntry?: OtherEntryNote): Promise<MineOutcome | null> {
       if (!target) {
         report(new Error(`${pipeline.name}'s Anki step has no target for new cards.`), "Couldn't add the card");
         return null;
@@ -140,30 +170,32 @@ export function useMineSentence() {
         const result = await addCard({ word, sentence, wordSentences: 0 }, modelName || null, { target, build });
         result.warnings.push(...noBuild);
         tell(`Added ${word.reading} to Anki`, result.warnings);
-        return { kind: 'created', noteId: result.ankiNoteId, warnings: result.warnings };
+        return { kind: 'created', noteId: result.ankiNoteId, warnings: result.warnings, otherEntry };
       } catch (e) {
         report(e, e instanceof MineDenied ? `Didn't add ${word.reading} to Anki` : "Couldn't add the card");
         return null;
       }
     }
-    if (pick === 'existing') {
+
+    async function toExisting(noteIds: number[], keptInfo: typeof kept | undefined, otherEntry?: OtherEntryNote): Promise<MineOutcome | null> {
+      const parsed = otherEntry ? { wordId: word.wordId, readingIndex: word.readingIndex } : undefined;
+      const on = otherEntry?.modelName ?? modelName;
       try {
-        const result = await addToExistingNote(sentence, notes, kept, build);
+        const result = await addToExistingNote(sentence, noteIds, keptInfo, build, parsed);
         result.warnings.push(...noBuild);
         tell(
           result.added
-            ? `Added to ${word.reading}${modelName ? ` on ${modelName}` : ''}, now ${result.sentences} sentences`
+            ? `Added to ${word.reading}${on ? ` on ${on}` : ''}, now ${result.sentences} sentences`
             : `${word.reading} already has this sentence (${result.sentences} sentences)`,
           result.warnings,
           result.added ? 'success' : 'info'
         );
-        return { kind: 'existing', noteId: result.ankiNoteId, added: result.added, sentences: result.sentences, warnings: result.warnings };
+        return { kind: 'existing', noteId: result.ankiNoteId, added: result.added, sentences: result.sentences, warnings: result.warnings, otherEntry };
       } catch (e) {
         report(e, e instanceof MineDenied ? `Didn't add the sentence to ${word.reading}` : "Couldn't add the sentence to the card");
         return null;
       }
     }
-    return null;
   }
 
   return { mine, choice: readonly(choice), answer };

@@ -22,6 +22,7 @@ public class MinedWordsController(MinedSentenceService mined, MinedSyncService s
     private const int MaxMatches = 500;
     private const int MaxWordSummaries = 100;
     private const int MaxListStates = 200;
+    private const int MaxWordNoteCandidates = 200;
 
     [HttpGet("settings")]
     [SwaggerOperation(Summary = "The user's sentence store settings")]
@@ -145,6 +146,15 @@ public class MinedWordsController(MinedSentenceService mined, MinedSyncService s
         {
             return BadRequest(new { message = e.Message });
         }
+    }
+
+    [HttpPost("word-notes")]
+    [SwaggerOperation(Summary = "A word's notes by its dictionary entry: those stored on it, which of the notes found by its spelling are on another entry, and which aren't stored yet")]
+    public async Task<IActionResult> WordNotes([FromBody] WordNotesRequest request, CancellationToken ct)
+    {
+        if (userService.UserId is not { } userId) return Unauthorized();
+        if ((request.Candidates?.Count ?? 0) > MaxWordNoteCandidates) return BadRequest(new { message = $"At most {MaxWordNoteCandidates} candidate notes." });
+        return Ok(await mined.WordNotesAsync(userId, request, ct));
     }
 
     [HttpGet("list/state")]

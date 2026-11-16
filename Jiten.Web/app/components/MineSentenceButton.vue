@@ -204,7 +204,9 @@
         if (saved) keptToast();
         return;
       }
-      if (canSave.value) list.setState(wordId, readingIndex, props.sentence.sentenceId, 'card');
+      // On another entry's card, the line left this word's list (GDR-061).
+      if (canSave.value && outcome.kind === 'existing' && outcome.otherEntry) list.forget(wordId, readingIndex, props.sentence.sentenceId);
+      else if (canSave.value) list.setState(wordId, readingIndex, props.sentence.sentenceId, 'card');
       if (!hasOwnWord.value) pickedState.value = 'card';
       emit('mined', word, outcome);
     } finally {
