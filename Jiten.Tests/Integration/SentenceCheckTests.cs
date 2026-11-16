@@ -4,6 +4,8 @@ using System.Text.Json;
 using FluentAssertions;
 using Jiten.Core;
 using Jiten.Core.Data;
+using Jiten.Api.Services.Translation;
+using Microsoft.Extensions.Caching.Memory;
 using Jiten.Parser.Tests.Integration.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,6 +26,15 @@ public class SentenceCheckTests(JitenWebApplicationFactory factory) : IClassFixt
         await factory.ResetDatabaseAsync();
 
         using var scope = factory.Services.CreateScope();
+        // The app (and its memory cache) outlives each test's data
+        var cache = scope.ServiceProvider.GetRequiredService<IMemoryCache>();
+        foreach (var deckId in new[] { 1, 2, 3, 4 })
+        {
+            cache.Remove($"check-english:{deckId}");
+            SentenceTranslationService.InvalidateEnglish(cache, deckId);
+            cache.Remove($"sentence-cues:{deckId}");
+        }
+
         var db = scope.ServiceProvider.GetRequiredService<JitenDbContext>();
         await db.SentenceCorrections.ExecuteDeleteAsync();
         await db.ExampleSentences.IgnoreQueryFilters().ExecuteDeleteAsync();
@@ -77,12 +88,19 @@ public class SentenceCheckTests(JitenWebApplicationFactory factory) : IClassFixt
         return await response.Content.ReadFromJsonAsync<JsonElement>();
     }
 
-    private Task<JsonElement> Next(string query = "") => Json(HttpMethod.Get, $"/api/admin/sentence-checks/next?size=50{query}");
-
     private static List<long> Ids(JsonElement item) => item.GetProperty("ids").EnumerateArray().Select(i => i.GetInt64()).ToList();
 
+    private Guid _lease;
+
+    private async Task<JsonElement> Next(string query = "")
+    {
+        var batch = await Json(HttpMethod.Get, $"/api/admin/sentence-checks/next?size=50{query}");
+        _lease = batch.GetProperty("leaseId").GetGuid();
+        return batch;
+    }
+
     private Task<JsonElement> Post(params object[] results) =>
-        Json(HttpMethod.Post, "/api/admin/sentence-checks", new { checker = "test", results });
+        Json(HttpMethod.Post, "/api/admin/sentence-checks", new { leaseId = _lease, checker = "test", results });
 
     private static object Finding(string kind, string? english = null, string? text = null) =>
         new { kind, note = "wrong", suggestedEnglish = english, suggestedText = text };
@@ -142,7 +160,7 @@ public class SentenceCheckTests(JitenWebApplicationFactory factory) : IClassFixt
     {
         await Next();
         var response = await Send(HttpMethod.Post, "/api/admin/sentence-checks",
-                                  new { checker = "test", results = new[] { new { ids = new[] { 1L }, findings = new[] { Finding("style") } } } });
+                                  new { leaseId = _lease, checker = "test", results = new[] { new { ids = new[] { 1L }, findings = new[] { Finding("style") } } } });
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
@@ -222,5 +240,59 @@ public class SentenceCheckTests(JitenWebApplicationFactory factory) : IClassFixt
     public async Task OnlyAdminsCanUseChecks()
     {
         (await Send(HttpMethod.Get, "/api/admin/sentence-checks/next", user: TestUsers.UserA)).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task AVerdictFromAnOlderLeaseIsRefused()
+    {
+        await Next();
+        var old = _lease;
+        await InDb(db => db.SentenceChecks.ExecuteUpdateAsync(u => u.SetProperty(c => c.LeasedUntil, DateTime.UtcNow.AddMinutes(-1))));
+        await Next();
+        var newer = _lease;
+
+        _lease = old;
+        (await Post(new { ids = new[] { 1L }, findings = Array.Empty<object>() })).GetProperty("rejected").GetInt32().Should().Be(1);
+        _lease = newer;
+        (await Post(new { ids = new[] { 1L }, findings = Array.Empty<object>() })).GetProperty("passed").GetInt32().Should().Be(1);
+    }
+
+    [Fact]
+    public async Task AcceptingAiEnglishLeavesOtherKindsOfFindingOnSameTextLinesForReview()
+    {
+        await Next();
+        await Post(new { ids = new[] { 2L }, findings = new[] { Finding("english-quality", "Huh? What's with your head?") } },
+                   new { ids = new[] { 6L }, findings = new[] { Finding("english-quality", "Huh? What's with your head?"), Finding("japanese", text: "えっ、なに、その髪！") } });
+
+        (await Send(HttpMethod.Post, "/api/admin/sentence-checks/2/accept", new { english = "Huh? What's with your head?" })).StatusCode
+            .Should().Be(HttpStatusCode.NoContent);
+
+        var other = await InDb(db => db.SentenceChecks.SingleAsync(c => c.ExampleSentenceId == 6));
+        other.Status.Should().Be(SentenceCheckStatus.Flagged);
+        other.GetFindings().Select(f => f.Kind).Should().Equal("japanese");
+        other.CheckedEnglish.Should().Be("Huh? What's with your head?");
+    }
+
+    [Fact]
+    public async Task AcceptingIsRefusedWhenTheEnglishChangedSinceTheCheck()
+    {
+        await Next();
+        await Post(new { ids = new[] { 2L, 6L }, findings = new[] { Finding("english-quality", "Huh? What's with your head?") } });
+        await InDb(db => db.ExampleSentenceTranslations.ExecuteUpdateAsync(u => u.SetProperty(t => t.Text, "Someone changed it")));
+
+        (await Send(HttpMethod.Post, "/api/admin/sentence-checks/2/accept", new { english = "Huh? What's with your head?" })).StatusCode
+            .Should().Be(HttpStatusCode.Conflict);
+        (await InDb(db => db.ExampleSentenceTranslations.SingleAsync())).Text.Should().Be("Someone changed it");
+    }
+
+    [Fact]
+    public async Task TheEstimateCountsEachTextOnce()
+    {
+        await InDb(db => db.ExampleSentenceTranslations.ExecuteDeleteAsync());
+
+        var estimate = await Json(HttpMethod.Get, "/api/admin/translation/titles/1/estimate");
+        estimate.GetProperty("needAi").GetInt32().Should().Be(3, "lines 2, 5 and 6 have no subtitle English");
+        estimate.GetProperty("needAiCalls").GetInt32().Should().Be(2, "lines 2 and 6 share a text");
+        estimate.GetProperty("needAiChars").GetInt32().Should().Be(Line.Length + "いや～ん".Length);
     }
 }

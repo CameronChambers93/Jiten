@@ -240,7 +240,8 @@ public class AdminTranslationController(
     [HttpGet("titles/{deckId:int}/estimate")]
     public async Task<IActionResult> Estimate(int deckId, CancellationToken ct)
     {
-        int sentences = 0, fromSubtitles = 0, cachedAi = 0, needAi = 0, needAiChars = 0;
+        int sentences = 0, fromSubtitles = 0, cachedAi = 0, needAi = 0;
+        var needAiIds = new List<long>();
         foreach (var id in await DeckAndChildren(deckId, ct))
         {
             var coverage = await translations.CoverageAsync(id, ct);
@@ -248,19 +249,22 @@ public class AdminTranslationController(
             fromSubtitles += coverage.FromSubtitles;
             cachedAi += coverage.CachedAi;
             needAi += coverage.NeedAi.Count;
-            // Characters matter for providers billed by them (DeepL); context lines are not counted there.
-            needAiChars += await context.ExampleSentences.AsNoTracking().Where(s => coverage.NeedAi.Contains(s.SentenceId))
-                                        .SumAsync(s => s.Text.Length, ct);
+            needAiIds.AddRange(coverage.NeedAi);
         }
+
+        // What the run sends: one call per distinct text. Characters matter for providers billed by them (DeepL); context
+        // lines are not counted there.
+        var calls = await SentenceTranslationJob.DistinctTextsAsync(context, needAiIds, ct);
+        var needAiChars = await context.ExampleSentences.AsNoTracking().Where(s => calls.Contains(s.SentenceId)).SumAsync(s => s.Text.Length, ct);
 
         var active = await translations.ActiveProviderAsync(ct);
         var model = active?.Config.Get("model");
         var price = active != null && model != null ? active.Value.Provider.PriceFor(model) : null;
-        decimal? cost = price == null ? null : needAi * (EstimatedInputTokens * price.Input + EstimatedOutputTokens * price.Output) / 1_000_000m;
+        decimal? cost = price == null ? null : calls.Count * (EstimatedInputTokens * price.Input + EstimatedOutputTokens * price.Output) / 1_000_000m;
 
         return Ok(new
         {
-            sentences, fromSubtitles, cachedAi, needAi, needAiChars,
+            sentences, fromSubtitles, cachedAi, needAi, needAiCalls = calls.Count, needAiChars,
             provider = active?.Provider.Name, model, estimatedCostUsd = cost,
             progress = cache.Get<TranslationJobProgress>(SentenceTranslationJob.ProgressKey(deckId))
         });
@@ -303,8 +307,9 @@ public class AdminTranslationController(
         var deckIds = request.DeckIds.Distinct().ToList();
         if (deckIds.Count == 0) return BadRequest(new { message = "Pick at least one title." });
         if (await translations.ActiveProviderAsync(ct) == null) return BadRequest(new { message = "Choose a provider and save its API key first." });
-        if (deckIds.Any(id => cache.Get<TranslationJobProgress>(SentenceTranslationJob.ProgressKey(id)) is { Running: true }))
-            return Conflict(new { message = "One of these titles is already being translated." });
+        var allTitles = await context.Decks.AsNoTracking().Where(d => d.ParentDeckId == null).Select(d => d.DeckId).ToListAsync(ct);
+        if (SentenceTranslationJob.AnyRunning(cache, allTitles))
+            return Conflict(new { message = "A translation run is already going. Wait for it to finish." });
 
         foreach (var id in deckIds) SentenceTranslationJob.MarkQueued(cache, id);
         backgroundJobs.Enqueue<SentenceTranslationJob>(job => job.TranslateTitles(deckIds, CancellationToken.None));

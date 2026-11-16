@@ -410,6 +410,8 @@
         </template>
       </Card>
 
+      <BulkTranslationCard />
+
       <AnkiEnglishBackfill />
     </div>
   </div>

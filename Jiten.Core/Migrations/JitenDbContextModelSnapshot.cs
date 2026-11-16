@@ -2490,6 +2490,9 @@ namespace Jiten.Core.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("LeaseId")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTime?>("LeasedUntil")
                         .HasColumnType("timestamp with time zone");
 

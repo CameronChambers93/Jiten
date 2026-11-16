@@ -23,6 +23,7 @@ namespace Jiten.Core.Migrations
                     EnglishOrigin = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: true),
                     Status = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: false),
                     LeasedUntil = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
+                    LeaseId = table.Column<Guid>(type: "uuid", nullable: true),
                     FindingsJson = table.Column<string>(type: "text", nullable: false),
                     Checker = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: true),
                     CheckedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),

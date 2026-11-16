@@ -58,6 +58,9 @@ public class SentenceCheck
     public string Status { get; set; } = SentenceCheckStatus.Leased;
     public DateTime? LeasedUntil { get; set; }
 
+    /// <summary>The batch it was last leased in; a verdict must name it.</summary>
+    public Guid? LeaseId { get; set; }
+
     public string FindingsJson { get; set; } = "[]";
 
     /// <summary>Who checked it, e.g. "claude-code/sonnet rubric 1".</summary>

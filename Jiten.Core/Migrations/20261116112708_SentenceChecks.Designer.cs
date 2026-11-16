@@ -14,7 +14,7 @@ using NpgsqlTypes;
 namespace Jiten.Core.Migrations
 {
     [DbContext(typeof(JitenDbContext))]
-    [Migration("20261116111422_SentenceChecks")]
+    [Migration("20261116112708_SentenceChecks")]
     partial class SentenceChecks
     {
         /// <inheritdoc />
@@ -2492,6 +2492,9 @@ namespace Jiten.Core.Migrations
                     b.Property<string>("FindingsJson")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<Guid?>("LeaseId")
+                        .HasColumnType("uuid");
 
                     b.Property<DateTime?>("LeasedUntil")
                         .HasColumnType("timestamp with time zone");

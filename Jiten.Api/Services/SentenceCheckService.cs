@@ -3,6 +3,7 @@ using Jiten.Api.Services.Translation;
 using Jiten.Core;
 using Jiten.Core.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace Jiten.Api.Services;
 
@@ -13,11 +14,12 @@ public record CheckBatchItem(List<long> Ids, string Title, string? Episode, stri
                              List<CheckContextLine> Before, List<CheckContextLine> After);
 
 /// <param name="Exhausted">Fewer lines than asked for were left to do in the decks scanned.</param>
-public record CheckBatch(List<CheckBatchItem> Items, int Lines, bool Exhausted, DateTime LeasedUntil);
+/// <param name="LeaseId">Sent back with the verdicts: a verdict for a line leased again since is refused.</param>
+public record CheckBatch(Guid LeaseId, List<CheckBatchItem> Items, int Lines, bool Exhausted, DateTime LeasedUntil);
 
 public record CheckResult(List<long> Ids, List<SentenceCheckFinding>? Findings);
 
-public record CheckResultsRequest(string Checker, List<CheckResult> Results);
+public record CheckResultsRequest(Guid LeaseId, string Checker, List<CheckResult> Results);
 
 /// <param name="Rejected">Lines not leased, or whose text or English changed since they were leased.</param>
 public record CheckResultsSummary(int Passed, int Flagged, int Rejected);
@@ -42,11 +44,18 @@ public class SentenceCheckService(
     UserDbContext userContext,
     SentenceTranslationService translations,
     SentenceFixService fixes,
+    IMemoryCache cache,
     ILogger<SentenceCheckService> logger)
 {
     public const int MaxBatch = 100;
     public const int ContextLines = 3;
     public static readonly TimeSpan LeaseTime = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// How long a deck's English is reused while picking lines. Leasing a line with English that changed in this window is
+    /// harmless: the verdict is refused (the English is compared afresh) and the line comes back.
+    /// </summary>
+    private static readonly TimeSpan EnglishReuse = TimeSpan.FromMinutes(10);
 
     public const string ReviewedProvider = "reviewed";
 
@@ -67,6 +76,7 @@ public class SentenceCheckService(
         {
             var now = DateTime.UtcNow;
             var leasedUntil = now + LeaseTime;
+            var leaseId = Guid.NewGuid();
             var picked = new List<(ExampleSentenceLine Line, SentenceTranslationDto English, DeckInfo Deck, List<ExampleSentenceLine> Neighbours,
                                    Dictionary<long, SentenceTranslationDto> DeckEnglish)>();
 
@@ -76,12 +86,12 @@ public class SentenceCheckService(
                 var lines = await context.ExampleSentences.AsNoTracking().Where(s => s.DeckId == deck.DeckId).OrderBy(s => s.Position)
                                          .Select(s => new ExampleSentenceLine(s.SentenceId, s.Text, s.Position)).ToListAsync(ct);
                 var checks = await context.SentenceChecks.AsNoTracking().Where(c => c.DeckId == deck.DeckId).ToDictionaryAsync(c => c.ExampleSentenceId, ct);
-                // Most decks are fully checked on later runs: skip the English pass when nothing can be to do.
-                if (checks.Count >= lines.Count && checks.Values.All(c => c.Status != SentenceCheckStatus.Leased || c.LeasedUntil > now) &&
-                    lines.All(l => checks.TryGetValue(l.Id, out var c) && c.CheckedText == l.Text) && !await EnglishMayHaveChangedAsync(deck.DeckId, checks.Values, ct))
-                    continue;
-
-                var english = await translations.EnglishForDeckAsync(deck.DeckId, ct);
+                // Aligning a deck's subtitles is the costly part; later runs walk past mostly checked decks, so reuse it briefly
+                var english = (await cache.GetOrCreateAsync($"check-english:{deck.DeckId}", entry =>
+                {
+                    entry.AbsoluteExpirationRelativeToNow = EnglishReuse;
+                    return translations.EnglishForDeckAsync(deck.DeckId, ct);
+                }))!;
                 foreach (var line in lines)
                 {
                     if (picked.Count >= size) break;
@@ -103,6 +113,7 @@ public class SentenceCheckService(
                 row.EnglishOrigin = en.Origin;
                 row.Status = SentenceCheckStatus.Leased;
                 row.LeasedUntil = leasedUntil;
+                row.LeaseId = leaseId;
                 row.FindingsJson = "[]";
                 (row.Checker, row.CheckedAt, row.ResolvedAt, row.ResolvedBy, row.ResolutionNote) = (null, null, null, null, null);
             }
@@ -123,7 +134,7 @@ public class SentenceCheckService(
                               .ToList();
 
             logger.LogInformation("Leased {Lines} lines ({Items} distinct) for checking", picked.Count, items.Count);
-            return new CheckBatch(items, picked.Count, picked.Count < size, leasedUntil);
+            return new CheckBatch(leaseId, items, picked.Count, picked.Count < size, leasedUntil);
         }
         finally
         {
@@ -156,7 +167,7 @@ public class SentenceCheckService(
             var findings = (result.Findings ?? []).Select(Clean).ToList();
             foreach (var id in result.Ids.Distinct())
             {
-                if (!rows.TryGetValue(id, out var row) || row.Status != SentenceCheckStatus.Leased ||
+                if (!rows.TryGetValue(id, out var row) || row.Status != SentenceCheckStatus.Leased || row.LeaseId != request.LeaseId ||
                     texts.GetValueOrDefault(id)?.Text != row.CheckedText || english.GetValueOrDefault(id)?.Text != row.CheckedEnglish)
                 {
                     rejected++;
@@ -165,7 +176,7 @@ public class SentenceCheckService(
 
                 row.SetFindings(findings);
                 row.Status = findings.Count == 0 ? SentenceCheckStatus.Passed : SentenceCheckStatus.Flagged;
-                (row.LeasedUntil, row.Checker, row.CheckedAt) = (null, Truncate(request.Checker, 100), now);
+                (row.LeasedUntil, row.LeaseId, row.Checker, row.CheckedAt) = (null, null, Truncate(request.Checker, 100), now);
                 if (findings.Count == 0) passed++;
                 else flagged++;
             }
@@ -219,8 +230,11 @@ public class SentenceCheckService(
 
         var text = Blank(request.Text) is { } t && t != line.Text ? t : null;
         var english = Blank(request.English) is { } e && e != row.CheckedEnglish ? e : null;
-        if (text != null && line.Text != row.CheckedText)
-            throw new SentenceCheckException("The line's text changed since it was checked. Check it again.");
+        if (line.Text != row.CheckedText)
+            throw new SentenceCheckException("The line's text changed since it was checked. Dismiss this and check it again.");
+        if (english != null && line.DeckId is { } deckId &&
+            (await translations.EnglishForDeckAsync(deckId, ct)).GetValueOrDefault(sentenceId)?.Text != row.CheckedEnglish)
+            throw new SentenceCheckException("The line's English changed since it was checked. Dismiss this and check it again.");
 
         var replacedCache = false;
         if (english != null && text == null && row.EnglishOrigin == TranslationOrigin.Ai && line.CentralSentenceId is { } centralId)
@@ -246,14 +260,18 @@ public class SentenceCheckService(
                                     .Where(c => c.ExampleSentenceId != sentenceId && c.Status == SentenceCheckStatus.Flagged &&
                                                 c.EnglishOrigin == TranslationOrigin.Ai && c.CheckedText == row.CheckedText)
                                     .ToListAsync(ct);
+            // Only their English findings are answered; any other finding stays for review
             foreach (var other in same)
             {
-                Resolve(other, SentenceCheckStatus.Accepted, adminId, now, $"Same text as line {sentenceId}");
                 other.CheckedEnglish = english;
+                var rest = other.GetFindings().Where(f => f.Kind is not (SentenceCheckKind.EnglishFit or SentenceCheckKind.EnglishQuality)).ToList();
+                other.SetFindings(rest);
+                if (rest.Count == 0) Resolve(other, SentenceCheckStatus.Accepted, adminId, now, $"Same text as line {sentenceId}");
             }
         }
 
         await context.SaveChangesAsync(ct);
+        if (line.DeckId is { } changedDeck) cache.Remove($"check-english:{changedDeck}");
         logger.LogInformation("Check of sentence {SentenceId} accepted by {UserId} (text {Text}, English {English})", sentenceId, adminId,
                               text != null, english != null);
         return true;
@@ -315,22 +333,6 @@ public class SentenceCheckService(
         check.Status == SentenceCheckStatus.Leased
             ? check.LeasedUntil <= now
             : check.CheckedText != text || check.CheckedEnglish != english;
-
-    /// <summary>
-    /// Whether a fully checked deck's English may differ from what was checked: its English track or a cached translation
-    /// of its texts is newer than the newest check. Shared-fix English is caught by the text-equal test failing only when
-    /// the text changed, so a line whose shared English was set after its check also counts.
-    /// </summary>
-    private async Task<bool> EnglishMayHaveChangedAsync(int deckId, IEnumerable<SentenceCheck> checks, CancellationToken ct)
-    {
-        var oldest = checks.Min(c => c.CheckedAt ?? DateTime.MinValue);
-        if (await context.DeckEnglishTracks.AsNoTracking().AnyAsync(t => t.DeckId == deckId && t.SavedAt > oldest, ct)) return true;
-        if (await context.ExampleSentences.AsNoTracking().Where(s => s.DeckId == deckId)
-                         .Join(context.ExampleSentenceTranslations.AsNoTracking(), s => s.CentralSentenceId, t => (long?)t.CentralSentenceId, (s, t) => t.CreatedAt)
-                         .AnyAsync(created => created > oldest, ct))
-            return true;
-        return await context.SentenceCorrections.AsNoTracking().AnyAsync(c => c.DeckId == deckId && c.English != null && c.CreatedAt > oldest, ct);
-    }
 
     private async Task MarkRebuildAsync(IQueryable<long> sentenceIds, CancellationToken ct)
     {
