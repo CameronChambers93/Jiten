@@ -457,8 +457,8 @@ public class SentenceFixTests(JitenWebApplicationFactory factory) : IClassFixtur
         public string Name => "Fake";
         public IReadOnlyList<SettingField> Fields => [];
         public Task<IReadOnlyList<string>> ListModelsAsync(ProviderConfig config, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(["m"]);
-        public Task<TranslationResult> TranslateAsync(ProviderConfig config, string prompt, CancellationToken ct) =>
-            Task.FromResult(new TranslationResult(prompt.Contains("本の新しい行") ? "A new line of the book" : "A line of the book", "m", null, null));
+        public Task<TranslationResult> TranslateAsync(ProviderConfig config, TranslationRequest request, CancellationToken ct) =>
+            Task.FromResult(new TranslationResult(request.Sentence.Contains("本の新しい行") ? "A new line of the book" : "A line of the book", "m", null, null));
         public ModelPrice? PriceFor(string model) => null;
     }
 
