@@ -1,4 +1,4 @@
-import type { DeckIPlusOneSentence, ExampleSentence, Word } from '~/types';
+import type { DeckIPlusOneSentence, ExampleSentence, Word, WordSummary } from '~/types';
 import { ankiConnect } from '~/composables/useAnkiConnect';
 import { ankiPitchCategories, ankiPitchPositions } from '~/utils/pitchAccent';
 import {
@@ -70,6 +70,34 @@ export interface AddedSentence {
   sentences: number;
   /** What to write to the kept note now; null when its note type has nothing to write. */
   write: NoteWrite | null;
+}
+
+/** The server's limit on the spelling matches sent to `mined/word-notes`. */
+const MAX_WORD_NOTE_CANDIDATES = 200;
+
+/** A note of the word's spelling that the store has on another dictionary entry, or on none (`wordId` null). */
+export interface OtherEntryNote {
+  ankiNoteId: number;
+  modelName: string;
+  wordId: number | null;
+  readingIndex: number | null;
+  expression: string;
+  /** The entry's first meaning; null for a note on no entry. */
+  meaning: string | null;
+  /** How the note was matched (`MinedWordMatch`): "guessed" is worth a second look. */
+  wordMatch: string | null;
+}
+
+interface WordNotesResponse {
+  own: { ankiNoteId: number; modelName: string }[];
+  others: OtherEntryNote[];
+  unstored: number[];
+}
+
+/** A word's notes in Anki: on its own entry, and of its spelling on other entries (GDR-061). */
+export interface WordNotes {
+  own: number[];
+  others: OtherEntryNote[];
 }
 
 /** What mining a sentence did, with a line for each field it left empty that the card settings warn about. */
@@ -377,23 +405,46 @@ export function useMiningCards() {
   }
 
   /**
-   * The word's notes in Anki, oldest first: notes of every note type with sentence actions (within its filter) whose
-   * Word field holds it, the check "Hide words already in Anki" makes.
+   * The word's notes in Anki by its dictionary entry (GDR-061). Notes of every note type with sentence actions (within its
+   * filter) whose Word field holds the word's spelling are found first, as "Hide words already in Anki" finds them; those
+   * not in the store yet are imported, so Sync's matching puts each on an entry. `own` are the notes stored on this
+   * entry, oldest first, found by spelling or not, that are still in Anki; `others` are spelling matches stored on
+   * another entry (or on none), oldest first.
    */
-  async function existingNotes(word: string): Promise<number[]> {
+  async function existingNotes(word: WordSummary): Promise<WordNotes> {
     await anki.load();
     const setups = wordSetups();
-    if (!setups.length || !word) return [];
+    if (!setups.length || !word.reading) return { own: [], others: [] };
     const query = setups
       .map((s) => {
         const fields = fieldsFor(s.fieldRoles, 'word')
-          .map((f) => `"${ankiSearchValue(f)}:${ankiSearchValue(word)}"`)
+          .map((f) => `"${ankiSearchValue(f)}:${ankiSearchValue(word.reading)}"`)
           .join(' OR ');
         return `(${setupQuery(s, `(${fields})`)})`;
       })
       .join(' OR ');
-    const ids = await ankiConnect<number[]>('findNotes', { query });
-    return ids.sort((a, b) => a - b);
+    // The newest, when there are too many: a note not yet stored is most likely a recent one.
+    const found = (await ankiConnect<number[]>('findNotes', { query })).sort((a, b) => a - b).slice(-MAX_WORD_NOTE_CANDIDATES);
+    const classify = () =>
+      $api<WordNotesResponse>('mined/word-notes', { method: 'POST', body: { wordId: word.wordId, readingIndex: word.readingIndex, candidates: found } });
+
+    let result = await classify();
+    // Only a word with no note of its own needs the rest sorted; a note that can't be imported is left out, as it can't
+    // be told apart from another word's.
+    if (!result.own.length && result.unstored.length) {
+      const imported = await importNotes(result.unstored);
+      if (imported.some((r) => r.status !== 'failed')) result = await classify();
+    }
+
+    // Stored notes the search didn't find may have been deleted in Anki, or be outside the setups now (INV-006).
+    let own = result.own.map((n) => n.ankiNoteId);
+    const unseen = own.filter((id) => !found.includes(id));
+    if (unseen.length) {
+      const inSetups = setups.map((s) => `(${setupQuery(s)})`).join(' OR ');
+      const alive = new Set(await ankiConnect<number[]>('findNotes', { query: `nid:${unseen.join(',')} (${inSetups})` }));
+      own = own.filter((id) => found.includes(id) || alive.has(id));
+    }
+    return { own, others: result.others };
   }
 
   type WordNote = { modelName: string; fields: Record<string, { value: string; order: number }> };
@@ -491,7 +542,14 @@ export function useMiningCards() {
    * store yet (a Yomitan card never synced) are imported first, so their own sentence stays on the card, first in the
    * rotation. The pipeline's Build step decides the parts built; the kept note's note type, the empty-field policies.
    */
-  async function addToExistingNote(sentence: ExampleSentence, noteIds: number[], keptInfo: AnkiNoteInfo | null | undefined, build: BuildChoice): Promise<MinedResult> {
+  async function addToExistingNote(
+    sentence: ExampleSentence,
+    noteIds: number[],
+    keptInfo: AnkiNoteInfo | null | undefined,
+    build: BuildChoice,
+    /** The entry the line was mined for, when the note is another entry's: its Jiten-only copy there is removed. */
+    parsed?: { wordId: number; readingIndex: number }
+  ): Promise<MinedResult> {
     const kept = keptInfo !== undefined ? keptInfo : await keptNote(noteIds);
     const modelName = kept?.modelName ?? '';
     const { parts } = build;
@@ -524,7 +582,8 @@ export function useMiningCards() {
       if (lines.length) throw new MineDenied(lines);
     }
 
-    const result = await $api<AddedSentence>('mined/sentences', { method: 'POST', body: { ankiNoteId: noteIds[0], ...built.body } });
+    const result = await $api<AddedSentence>('mined/sentences', { method: 'POST', body: { ankiNoteId: noteIds[0], ...built.body, parsedWordId: parsed?.wordId, parsedReadingIndex: parsed?.readingIndex },
+    });
     const warnings = result.added ? await writeAndCheck(result.write, built.reasons, builtParts, modelName, parts) : [];
     return { ankiNoteId: result.ankiNoteId, added: result.added, sentences: result.sentences, warnings };
   }

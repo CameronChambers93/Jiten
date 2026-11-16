@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { emptyTally, nameProblem, pipelineCanAsk, runPick, runSteps, sameQuery, searchQuery, tallyLine } from '../app/utils/mineSearches';
+import { emptyTally, nameProblem, otherEntryAnswer, otherEntryReason, pipelineCanAsk, runPick, runSteps, sameQuery, searchQuery, tallyLine } from '../app/utils/mineSearches';
 
 describe('runPick', () => {
   it('sends a word this run already carded to its card, whatever the step says (one note per word)', () => {
@@ -65,5 +65,23 @@ describe('tallyLine', () => {
     t.failed.push({ word: 'x', wordId: 1, readingIndex: 0, reason: 'r' });
     expect(tallyLine(t)).toBe('2 new notes · 1 added to a card · 1 failed');
     expect(tallyLine(emptyTally())).toBe('Nothing to do');
+  });
+});
+
+describe('otherEntryAnswer', () => {
+  it('takes "When asked", but skips a new note the step cannot make', () => {
+    expect(otherEntryAnswer('existing', false)).toBe('existing');
+    expect(otherEntryAnswer('new', true)).toBe('new');
+    expect(otherEntryAnswer('new', false)).toBe('skip');
+    expect(otherEntryAnswer('skip', true)).toBe('skip');
+  });
+});
+
+describe('otherEntryReason', () => {
+  const how = { expression: 'どう', meaning: 'how; in what way', modelName: 'Lapis+', wordMatch: 'gloss' };
+  it('names the card and what the run did', () => {
+    expect(otherEntryReason('existing', how)).toBe('sent to the Lapis+ card of どう (how; in what way)');
+    expect(otherEntryReason('new', how)).toBe('new note; どう (how; in what way) has a card');
+    expect(otherEntryReason('skip', { ...how, meaning: null, wordMatch: 'guessed' })).toBe('skipped; どう (no dictionary entry), matched by guess, has a card');
   });
 });

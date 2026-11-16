@@ -119,6 +119,8 @@ export interface RunTally {
   failed: RunProblem[];
   /** Mined, but with fields left empty (the Warn policies a single click shows as a toast). */
   warned: RunProblem[];
+  /** Words with no card of their own whose spelling another entry has a card for, answered by "When asked" (GDR-061). */
+  otherEntry: RunProblem[];
 }
 
 export interface RunProblem {
@@ -129,7 +131,26 @@ export interface RunProblem {
 }
 
 export function emptyTally(): RunTally {
-  return { created: 0, added: 0, alreadyOnCard: 0, kept: 0, skipped: 0, alreadyDone: 0, failed: [], warned: [] };
+  return { created: 0, added: 0, alreadyOnCard: 0, kept: 0, skipped: 0, alreadyDone: 0, failed: [], warned: [], otherEntry: [] };
+}
+
+/**
+ * A run's answer for a word whose only card is another entry's of the same spelling: "When asked", except that a new
+ * note the step can't make is a skip.
+ */
+export function otherEntryAnswer(whenAsked: WhenAsked, canNew: boolean): WhenAsked {
+  return whenAsked === 'new' && !canNew ? 'skip' : whenAsked;
+}
+
+/** What a run did with such a word, for its summary: どう (how; in what way) and the answer. */
+export function otherEntryReason(
+  done: WhenAsked,
+  other: { expression: string; meaning: string | null; modelName: string; wordMatch: string | null }
+): string {
+  const card = `${other.expression} (${other.meaning ?? 'no dictionary entry'})${other.wordMatch === 'guessed' ? ', matched by guess,' : ''}`;
+  if (done === 'existing') return `sent to the ${other.modelName ? `${other.modelName} ` : ''}card of ${card}`;
+  if (done === 'new') return `new note; ${card} has a card`;
+  return `skipped; ${card} has a card`;
 }
 
 /** The run's summary in one line, e.g. "12 new notes · 3 added to cards · 1 failed". */

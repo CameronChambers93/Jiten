@@ -54,6 +54,12 @@ export function useSentenceList() {
     states.value = { ...states.value, [keyOf(wordId, readingIndex, sentenceId)]: state };
   }
 
+  /** Drops what is known of the line on the word's list, after the server took it off (it went onto another entry's card). */
+  function forget(wordId: number, readingIndex: number, sentenceId: number) {
+    const { [keyOf(wordId, readingIndex, sentenceId)]: _, ...rest } = states.value;
+    states.value = rest;
+  }
+
   /** Saves the line to the word's list, kept for Jiten; a line already there keeps its state. Throws on failure. */
   async function save(wordId: number, readingIndex: number, sentenceId: number, position: number, length: number): Promise<ListSentenceState> {
     const result = await $api<{ minedSentenceId: number; added: boolean; state: ListSentenceState }>('mined/list', {
@@ -64,5 +70,5 @@ export function useSentenceList() {
     return result.state;
   }
 
-  return { watch, stateOf, setState, save };
+  return { watch, stateOf, setState, forget, save };
 }

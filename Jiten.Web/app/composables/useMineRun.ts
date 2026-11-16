@@ -1,7 +1,8 @@
 import type { ExampleSentence, WordSummary } from '~/types';
+import type { OtherEntryNote } from '~/composables/useMiningCards';
 import { ankiConnect } from '~/composables/useAnkiConnect';
 import { MineDenied, TargetNotReady } from '~/utils/miningWarnings';
-import { emptyTally, runSteps, type RunItem, type RunTally, type WhenAsked } from '~/utils/mineSearches';
+import { emptyTally, otherEntryReason, runSteps, type RunItem, type RunTally, type WhenAsked } from '~/utils/mineSearches';
 import { hasAnkiStep, type Pipeline } from '~/utils/pipelines';
 
 /**
@@ -61,6 +62,8 @@ export function useMineRun() {
     const t = tally.value;
     // The note this run gave each word (a new note or a sentence on an existing one): later sentences go to that note.
     const carded = new Map<string, number>();
+    // Words whose sentences this run put on another entry's card (GDR-061): later sentences go there too, and the word is listed once.
+    const cardedOther = new Map<string, OtherEntryNote>();
     const anki = hasAnkiStep(pipeline);
 
     try {
@@ -86,8 +89,12 @@ export function useMineRun() {
             t.kept++;
             continue;
           }
-          const outcome = await mine(word, sentence, pipeline, { whenAsked, cardNoteId: carded.get(key) ?? null });
+          const outcome = await mine(word, sentence, pipeline, { whenAsked, cardNoteId: carded.get(key) ?? null, cardOtherEntry: cardedOther.get(key) });
           if (!outcome) continue;
+          if (outcome.otherEntry && !cardedOther.has(key)) {
+            const done = outcome.kind === 'kept' ? 'skip' : outcome.kind === 'created' ? 'new' : 'existing';
+            t.otherEntry.push({ word: word.reading, wordId: word.wordId, readingIndex: word.readingIndex, reason: otherEntryReason(done, outcome.otherEntry) });
+          }
           if (outcome.kind === 'kept') {
             if (outcome.skipped) t.skipped++;
             else t.kept++;
@@ -96,7 +103,11 @@ export function useMineRun() {
           if (!carded.has(key)) cardedWords.value.push(word);
           carded.set(key, outcome.noteId);
           if (outcome.warnings.length) t.warned.push({ word: word.reading, wordId: word.wordId, readingIndex: word.readingIndex, reason: outcome.warnings.join(' ') });
-          list.setState(word.wordId, word.readingIndex, sentence.sentenceId, 'card');
+          if (outcome.kind === 'existing' && outcome.otherEntry) {
+            // On another entry's card: the line left this word's list (the server dropped its copy), and the word's later sentences follow it.
+            cardedOther.set(key, outcome.otherEntry);
+            list.forget(word.wordId, word.readingIndex, sentence.sentenceId);
+          } else list.setState(word.wordId, word.readingIndex, sentence.sentenceId, 'card');
           if (outcome.kind === 'created') t.created++;
           else if (outcome.added) t.added++;
           else t.alreadyOnCard++;
