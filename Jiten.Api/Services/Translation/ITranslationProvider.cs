@@ -33,3 +33,6 @@ public interface ITranslationProvider
 
 /// <summary>A provider refused or returned nothing usable; the message is shown to the admin.</summary>
 public class TranslationProviderException(string message, Exception? inner = null) : Exception(message, inner);
+
+/// <summary>The provider's quota for the billing period is used up: a bulk run stops rather than counting failures.</summary>
+public class TranslationQuotaException(string message) : TranslationProviderException(message);

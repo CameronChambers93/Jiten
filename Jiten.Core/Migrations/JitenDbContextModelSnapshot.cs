@@ -2460,6 +2460,62 @@ namespace Jiten.Core.Migrations
                     b.ToTable("Sentences", "jiten");
                 });
 
+            modelBuilder.Entity("Jiten.Core.Data.SentenceCheck", b =>
+                {
+                    b.Property<long>("ExampleSentenceId")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime?>("CheckedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("CheckedEnglish")
+                        .HasColumnType("text");
+
+                    b.Property<string>("CheckedText")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Checker")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<int>("DeckId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("EnglishOrigin")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("FindingsJson")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("LeasedUntil")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ResolutionNote")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<DateTime?>("ResolvedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ResolvedBy")
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.HasKey("ExampleSentenceId");
+
+                    b.HasIndex("Status", "DeckId");
+
+                    b.ToTable("SentenceChecks", "jiten");
+                });
+
             modelBuilder.Entity("Jiten.Core.Data.SentenceCorrection", b =>
                 {
                     b.Property<long>("SentenceCorrectionId")
@@ -3726,6 +3782,15 @@ namespace Jiten.Core.Migrations
                     b.HasOne("Jiten.Core.Data.Poll", null)
                         .WithMany()
                         .HasForeignKey("PollId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Jiten.Core.Data.SentenceCheck", b =>
+                {
+                    b.HasOne("Jiten.Core.Data.ExampleSentence", null)
+                        .WithOne()
+                        .HasForeignKey("Jiten.Core.Data.SentenceCheck", "ExampleSentenceId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

@@ -106,6 +106,7 @@ public partial class DeepLTranslationProvider(IHttpClientFactory httpClientFacto
                 429 => "too many requests; try again shortly",
                 _ => TryParse(content)?["message"]?.GetValue<string>() ?? content
             };
+            if ((int)response.StatusCode == 456) throw new TranslationQuotaException($"DeepL: 456 {message}");
             throw new TranslationProviderException($"DeepL: {(int)response.StatusCode} {message}");
         }
 

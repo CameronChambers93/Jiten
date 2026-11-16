@@ -36,6 +36,8 @@ public record SubtitlePreviewRequest(List<PreviewRequestItem> Items);
 
 public record SubtitleSaveRequest(List<SaveRequestItem> Items);
 
+public record BulkTranslateRequest(List<int> DeckIds);
+
 /// <summary>Admin translation settings, English subtitle lookup per title, and bulk AI translation.</summary>
 [ApiController]
 [Route("api/admin/translation")]
@@ -238,7 +240,7 @@ public class AdminTranslationController(
     [HttpGet("titles/{deckId:int}/estimate")]
     public async Task<IActionResult> Estimate(int deckId, CancellationToken ct)
     {
-        int sentences = 0, fromSubtitles = 0, cachedAi = 0, needAi = 0;
+        int sentences = 0, fromSubtitles = 0, cachedAi = 0, needAi = 0, needAiChars = 0;
         foreach (var id in await DeckAndChildren(deckId, ct))
         {
             var coverage = await translations.CoverageAsync(id, ct);
@@ -246,6 +248,9 @@ public class AdminTranslationController(
             fromSubtitles += coverage.FromSubtitles;
             cachedAi += coverage.CachedAi;
             needAi += coverage.NeedAi.Count;
+            // Characters matter for providers billed by them (DeepL); context lines are not counted there.
+            needAiChars += await context.ExampleSentences.AsNoTracking().Where(s => coverage.NeedAi.Contains(s.SentenceId))
+                                        .SumAsync(s => s.Text.Length, ct);
         }
 
         var active = await translations.ActiveProviderAsync(ct);
@@ -255,7 +260,7 @@ public class AdminTranslationController(
 
         return Ok(new
         {
-            sentences, fromSubtitles, cachedAi, needAi,
+            sentences, fromSubtitles, cachedAi, needAi, needAiChars,
             provider = active?.Provider.Name, model, estimatedCostUsd = cost,
             progress = cache.Get<TranslationJobProgress>(SentenceTranslationJob.ProgressKey(deckId))
         });
@@ -270,6 +275,39 @@ public class AdminTranslationController(
 
         cache.Set(SentenceTranslationJob.ProgressKey(deckId), new TranslationJobProgress(0, 0, 0, null, true, DateTime.UtcNow), TimeSpan.FromDays(1));
         backgroundJobs.Enqueue<SentenceTranslationJob>(job => job.TranslateTitle(deckId, CancellationToken.None));
+        return Accepted();
+    }
+
+    /// <summary>Titles (parent decks) that have stored sentences, for the bulk picker, with any run's progress.</summary>
+    [HttpGet("titles")]
+    public async Task<IActionResult> Titles(CancellationToken ct)
+    {
+        var counts = await context.ExampleSentences.AsNoTracking().Where(s => s.DeckId != null && !s.RemovedFromDeck)
+                                  .GroupBy(s => s.Deck!.ParentDeckId ?? s.DeckId!.Value)
+                                  .Select(g => new { DeckId = g.Key, Sentences = g.Count() }).ToListAsync(ct);
+        var ids = counts.Select(c => c.DeckId).ToList();
+        var titles = await context.Decks.AsNoTracking().Where(d => ids.Contains(d.DeckId))
+                                  .Select(d => new { d.DeckId, d.OriginalTitle, d.EnglishTitle, d.MediaType }).ToListAsync(ct);
+        return Ok(titles.Join(counts, t => t.DeckId, c => c.DeckId, (t, c) => new
+                        {
+                            t.DeckId, title = t.OriginalTitle, t.EnglishTitle, mediaType = t.MediaType, c.Sentences,
+                            progress = cache.Get<TranslationJobProgress>(SentenceTranslationJob.ProgressKey(t.DeckId))
+                        })
+                        .OrderBy(t => t.title));
+    }
+
+    /// <summary>Translates several titles one after another in one background job.</summary>
+    [HttpPost("titles/translate")]
+    public async Task<IActionResult> TranslateTitles([FromBody] BulkTranslateRequest request, CancellationToken ct)
+    {
+        var deckIds = request.DeckIds.Distinct().ToList();
+        if (deckIds.Count == 0) return BadRequest(new { message = "Pick at least one title." });
+        if (await translations.ActiveProviderAsync(ct) == null) return BadRequest(new { message = "Choose a provider and save its API key first." });
+        if (deckIds.Any(id => cache.Get<TranslationJobProgress>(SentenceTranslationJob.ProgressKey(id)) is { Running: true }))
+            return Conflict(new { message = "One of these titles is already being translated." });
+
+        foreach (var id in deckIds) SentenceTranslationJob.MarkQueued(cache, id);
+        backgroundJobs.Enqueue<SentenceTranslationJob>(job => job.TranslateTitles(deckIds, CancellationToken.None));
         return Accepted();
     }
 

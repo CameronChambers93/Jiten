@@ -101,13 +101,13 @@ public class DeepLTranslationTests
     }
 
     [Fact]
-    public async Task QuotaExceeded_IsAProviderError()
+    public async Task QuotaExceeded_IsAQuotaError_SoABulkRunStops()
     {
         var (provider, _) = Provider(_ => "", (HttpStatusCode)456);
 
         var act = () => provider.TranslateAsync(Config("k"), Request("行こう", []), default);
 
-        (await act.Should().ThrowAsync<TranslationProviderException>()).WithMessage("*quota*");
+        (await act.Should().ThrowAsync<TranslationQuotaException>()).WithMessage("*quota*");
     }
 
     private record Sent(string Url, string? Auth, JsonNode Body);
