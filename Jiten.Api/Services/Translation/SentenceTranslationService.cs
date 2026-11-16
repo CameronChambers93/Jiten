@@ -83,6 +83,49 @@ public class SentenceTranslationService(
 
     private static SentenceTranslationDto Ai(ExampleSentenceTranslation t) => new(t.Text, TranslationOrigin.Ai, t.Provider, t.Model, null);
 
+    /// <summary>
+    /// The shared English of every line of a deck (episode), as everyone sees it without a fix of their own: the shared
+    /// fix's English, else subtitle English, else the cached AI translation. Lines with none are left out.
+    /// </summary>
+    public async Task<Dictionary<long, SentenceTranslationDto>> EnglishForDeckAsync(int deckId, CancellationToken ct)
+    {
+        var lines = await context.ExampleSentences.AsNoTracking().Where(s => s.DeckId == deckId)
+                                 .Select(s => new { s.SentenceId, s.Text, s.SourceText, s.Position, s.English }).ToListAsync(ct);
+        var sentenceCount = await context.Decks.AsNoTracking().Where(d => d.DeckId == deckId).Select(d => d.SentenceCount).FirstOrDefaultAsync(ct);
+        var cached = (await CachedAsync(s => s.DeckId == deckId, ct)).ToDictionary(c => c.SentenceId, c => c.Translation);
+        var matcher = await cueLookup.MatcherAsync(deckId, ct);
+        var english = await EnglishAsync(deckId, ct);
+
+        var result = new Dictionary<long, SentenceTranslationDto>();
+        foreach (var line in lines)
+        {
+            if (!string.IsNullOrWhiteSpace(line.English))
+            {
+                result[line.SentenceId] = new SentenceTranslationDto(line.English, TranslationOrigin.Fix, null, null, null);
+                continue;
+            }
+
+            var relative = sentenceCount > 0 ? Math.Clamp(line.Position / (double)sentenceCount, 0, 1) : 0;
+            if (english != null && matcher?.Locate(line.SourceText ?? line.Text, relative) is { } match
+                                && english.Aligner.TextFor(matcher.Cues[match.First].StartMs, matcher.Cues[match.Last].EndMs, match.From, match.To) is { } text)
+                result[line.SentenceId] = new SentenceTranslationDto(text, TranslationOrigin.Subtitles, null, null, english.Source);
+            else if (cached.GetValueOrDefault(line.SentenceId) is { } t)
+                result[line.SentenceId] = Ai(t);
+        }
+
+        return result;
+    }
+
+    /// <summary>Replaces the cached AI translation of a text (a reviewed correction), so every line with that text gets it.</summary>
+    public async Task ReplaceCachedAsync(long centralSentenceId, string text, string provider, string model, CancellationToken ct)
+    {
+        var row = await context.ExampleSentenceTranslations.FirstOrDefaultAsync(t => t.CentralSentenceId == centralSentenceId, ct);
+        if (row == null)
+            context.ExampleSentenceTranslations.Add(row = new ExampleSentenceTranslation { CentralSentenceId = centralSentenceId });
+        (row.Text, row.Provider, row.Model, row.CreatedAt) = (text, provider, model, DateTime.UtcNow);
+        await context.SaveChangesAsync(ct);
+    }
+
     /// <summary>Whether a sentence would be translated from subtitles (used to count what a title still needs from the AI).</summary>
     public async Task<bool> HasSubtitleEnglishAsync(long sentenceId, CancellationToken ct) =>
         await FromSubtitlesAsync(await cueLookup.FindAsync(sentenceId, ct), ct) != null;
@@ -143,15 +186,14 @@ public class SentenceTranslationService(
                                     .FirstOrDefaultAsync(ct)
                        ?? throw new KeyNotFoundException($"Sentence {sentenceId} not found");
 
-        var contextLines = cues == null
-            ? []
-            : cues.Cues.Skip(Math.Max(0, cues.First - settings.ContextLines))
-                  .Take(cues.Last - Math.Max(0, cues.First - settings.ContextLines) + 1 + settings.ContextLines)
-                  .Select(c => c.Text)
-                  .ToList();
-
-        var prompt = TranslationPrompt.Render(settings.EffectivePrompt, sentence.Title, contextLines, fixedText ?? sentence.Text);
-        var result = await active.Provider.TranslateAsync(active.Config, prompt, ct);
+        var text = fixedText ?? sentence.Text;
+        var (before, own, after) = SplitContext(cues, settings.ContextLines);
+        // A sentence that starts partway through a cue: the cue's earlier text is context too.
+        var ownText = string.Concat(own);
+        var at = ownText.IndexOf(sentence.Text, StringComparison.Ordinal);
+        var directBefore = at > 0 ? [..before, ownText[..at].Trim()] : before;
+        var prompt = TranslationPrompt.Render(settings.EffectivePrompt, sentence.Title, [..before, ..own, ..after], text);
+        var result = await active.Provider.TranslateAsync(active.Config, new TranslationRequest(prompt, text, directBefore, after), ct);
         await using var hold = fixedText != null ? await JitenHelper.HoldSentenceRowsAsync(context, ct) : null;
         var centralId = fixedText != null ? await CentralSentenceRows.EnsureAsync(context, fixedText, ct) : sentence.CentralSentenceId!.Value;
 
@@ -173,6 +215,19 @@ public class SentenceTranslationService(
         }
 
         return new SentenceTranslationDto(result.Text, TranslationOrigin.Ai, active.Provider.Id, result.Model, null);
+    }
+
+    /// <summary>
+    /// The subtitle lines around a sentence: up to <paramref name="lines"/> before its first cue, its own cues, and up to
+    /// <paramref name="lines"/> after its last.
+    /// </summary>
+    public static (List<string> Before, List<string> Own, List<string> After) SplitContext(SentenceCues? cues, int lines)
+    {
+        if (cues == null) return ([], [], []);
+        var start = Math.Max(0, cues.First - lines);
+        return (cues.Cues.Skip(start).Take(cues.First - start).Select(c => c.Text).ToList(),
+                cues.Cues.Skip(cues.First).Take(cues.Last - cues.First + 1).Select(c => c.Text).ToList(),
+                cues.Cues.Skip(cues.Last + 1).Take(lines).Select(c => c.Text).ToList());
     }
 
     /// <summary>The cached translations of deck occurrences' texts; a private line's id finds nothing.</summary>

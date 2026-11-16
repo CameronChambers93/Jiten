@@ -488,6 +488,7 @@ builder.Services.AddScoped<ISentenceStatsService, SentenceStatsService>();
 builder.Services.AddScoped<SentenceCueLookup>();
 builder.Services.AddScoped<SentenceFixStore>();
 builder.Services.AddScoped<SentenceFixService>();
+builder.Services.AddScoped<SentenceCheckService>();
 builder.Services.AddScoped<SentenceSubmissionService>();
 builder.Services.AddScoped<Jiten.Api.Helpers.ISentenceTextParser, Jiten.Api.Helpers.SentenceTextParser>();
 builder.Services.AddScoped<SentenceDetailService>();
@@ -497,6 +498,7 @@ builder.Services.AddScoped<Jiten.Api.Services.Translation.SentenceTranslationSer
 // AI translation providers and English subtitle sources: add one by registering another implementation here.
 builder.Services.AddSingleton<Jiten.Api.Services.Translation.ITranslationProvider, Jiten.Api.Services.Translation.ClaudeTranslationProvider>();
 builder.Services.AddSingleton<Jiten.Api.Services.Translation.ITranslationProvider, Jiten.Api.Services.Translation.GeminiTranslationProvider>();
+builder.Services.AddSingleton<Jiten.Api.Services.Translation.ITranslationProvider, Jiten.Api.Services.Translation.DeepLTranslationProvider>();
 builder.Services.AddScoped<Jiten.Api.Services.Translation.Subtitles.ISubtitleSource, Jiten.Api.Services.Translation.Subtitles.EmbeddedSubtitleSource>();
 builder.Services.AddScoped<Jiten.Api.Services.Translation.Subtitles.ISubtitleSource, Jiten.Api.Services.Translation.Subtitles.SubDlSubtitleSource>();
 builder.Services.AddScoped<Jiten.Api.Services.Translation.Subtitles.ISubtitleSource, Jiten.Api.Services.Translation.Subtitles.OpenSubtitlesSource>();

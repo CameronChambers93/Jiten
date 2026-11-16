@@ -71,6 +71,7 @@ public class JitenDbContext : DbContext
     public DbSet<DeckVideoSource> DeckVideoSources { get; set; }
     public DbSet<DeckEnglishTrack> DeckEnglishTracks { get; set; }
     public DbSet<ExampleSentenceTranslation> ExampleSentenceTranslations { get; set; }
+    public DbSet<SentenceCheck> SentenceChecks { get; set; }
     public DbSet<SentenceCorrection> SentenceCorrections { get; set; }
     public DbSet<SentenceSubmission> SentenceSubmissions { get; set; }
     public DbSet<AppSetting> AppSettings { get; set; }
@@ -448,6 +449,23 @@ public class JitenDbContext : DbContext
             entity.HasOne<Sentence>()
                   .WithOne()
                   .HasForeignKey<ExampleSentenceTranslation>(t => t.CentralSentenceId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<SentenceCheck>(entity =>
+        {
+            entity.ToTable("SentenceChecks", "jiten");
+            entity.HasKey(c => c.ExampleSentenceId);
+            entity.Property(c => c.ExampleSentenceId).ValueGeneratedNever();
+            entity.Property(c => c.EnglishOrigin).HasMaxLength(20);
+            entity.Property(c => c.Status).HasMaxLength(20);
+            entity.Property(c => c.Checker).HasMaxLength(100);
+            entity.Property(c => c.ResolvedBy).HasMaxLength(450);
+            entity.Property(c => c.ResolutionNote).HasMaxLength(1000);
+            entity.HasIndex(c => new { c.Status, c.DeckId });
+            entity.HasOne<ExampleSentence>()
+                  .WithOne()
+                  .HasForeignKey<SentenceCheck>(c => c.ExampleSentenceId)
                   .OnDelete(DeleteBehavior.Cascade);
         });
 

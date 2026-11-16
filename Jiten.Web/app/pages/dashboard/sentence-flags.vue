@@ -49,9 +49,13 @@
   const fixing = ref<number | null>(null);
   const corrected = ref<CorrectedTitle[]>([]);
   const reparsing = ref(false);
-  /** Flagged lines, or fixes users submitted for review. */
-  const tab = ref<'flags' | 'submissions'>(useRoute().query.tab === 'submissions' ? 'submissions' : 'flags');
+  /** Flagged lines, fixes users submitted for review, or lines a Claude Code check flagged. */
+  const route = useRoute();
+  const tab = ref<'flags' | 'submissions' | 'checks'>(route.query.tab === 'submissions' || route.query.tab === 'checks' ? route.query.tab : 'flags');
+  /** The Checks tab can open on one title, from the translation page's progress table. */
+  const checksDeckId = computed(() => (route.query.deckId ? Number(route.query.deckId) : null));
   const pendingSubmissions = ref(0);
+  const flaggedChecks = ref(0);
 
   function reasonLabel(value: string) {
     return FLAG_REASONS.find((r) => r.value === value)?.label ?? 'No reason yet';
@@ -133,6 +137,10 @@
       $api<{ pending: number }>('admin/sentence-submissions/count')
         .then((r) => (pendingSubmissions.value = r.pending))
         .catch(() => {});
+    if (tab.value !== 'checks')
+      $api<{ total: number }>('admin/sentence-checks?limit=1')
+        .then((r) => (flaggedChecks.value = r.total))
+        .catch(() => {});
   });
 </script>
 
@@ -149,10 +157,16 @@
           Submitted fixes
           <Tag v-if="pendingSubmissions" :value="String(pendingSubmissions)" class="ml-1" />
         </Tab>
+        <Tab value="checks">
+          Checks
+          <Tag v-if="flaggedChecks" :value="String(flaggedChecks)" class="ml-1" />
+        </Tab>
       </TabList>
     </Tabs>
 
     <SentenceSubmissionQueue v-if="tab === 'submissions'" @count="(n) => (pendingSubmissions = n)" />
+
+    <SentenceCheckQueue v-else-if="tab === 'checks'" :deck-id="checksDeckId" @count="(n) => (flaggedChecks = n)" />
 
     <template v-else>
       <p class="text-sm text-gray-600 dark:text-gray-300 mb-4">
