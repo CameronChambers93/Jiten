@@ -24,7 +24,7 @@ public record UpdateTranslationSettingsRequest(string CardMode, string PageMode,
                                                string? Prompt, Dictionary<string, Dictionary<string, string?>>? Providers,
                                                Dictionary<string, Dictionary<string, string?>>? SubtitleSources);
 
-public record TranslationTestRequest(string? Sentence, string? Title);
+public record TranslationTestRequest(string? Sentence, string? Title, string? Context = null);
 
 /// <param name="Source">Where the sentence came from, for the prompt ("an NHK News Web Easy article").</param>
 /// <param name="Context">Lines before the sentence, oldest first.</param>
@@ -120,11 +120,13 @@ public class AdminTranslationController(
         if (active == null) return BadRequest(new { message = "Choose a provider and save its API key first." });
 
         var settings = await settingsStore.GetAsync(ct);
-        var prompt = TranslationPrompt.Render(settings.EffectivePrompt, request.Title ?? "おそ松さん", [], request.Sentence ?? TestSentence);
+        var sentence = request.Sentence ?? TestSentence;
+        List<string> before = string.IsNullOrWhiteSpace(request.Context) ? [] : [request.Context.Trim()];
+        var prompt = TranslationPrompt.Render(settings.EffectivePrompt, request.Title ?? "おそ松さん", before.Count == 0 ? [] : [..before, sentence], sentence);
         var watch = Stopwatch.StartNew();
         try
         {
-            var result = await active.Value.Provider.TranslateAsync(active.Value.Config, prompt, ct);
+            var result = await active.Value.Provider.TranslateAsync(active.Value.Config, new TranslationRequest(prompt, sentence, before, []), ct);
             return Ok(new { result.Text, result.Model, result.InputTokens, result.OutputTokens, ElapsedMs = watch.ElapsedMilliseconds });
         }
         catch (TranslationProviderException e)
@@ -160,7 +162,7 @@ public class AdminTranslationController(
         var prompt = TranslationPrompt.RenderText(source, context, request.Sentence);
         try
         {
-            var result = await active.Value.Provider.TranslateAsync(active.Value.Config, prompt, ct);
+            var result = await active.Value.Provider.TranslateAsync(active.Value.Config, new TranslationRequest(prompt, request.Sentence, context, []), ct);
             return Ok(new { result.Text, result.Model, Provider = active.Value.Provider.Id });
         }
         catch (TranslationProviderException e)

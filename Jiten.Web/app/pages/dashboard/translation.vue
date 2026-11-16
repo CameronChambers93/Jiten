@@ -84,6 +84,7 @@
   const loadingModels = ref<string | null>(null);
   const saving = ref(false);
   const testSentence = ref('お前ならできる！');
+  const testContext = ref('');
   const testing = ref(false);
   const testResult = ref<TestResult | null>(null);
   const stats = ref<Stats | null>(null);
@@ -176,7 +177,7 @@
     testing.value = true;
     testResult.value = null;
     try {
-      testResult.value = await $api<TestResult>('admin/translation/test', { method: 'POST', body: { sentence: testSentence.value } });
+      testResult.value = await $api<TestResult>('admin/translation/test', { method: 'POST', body: { sentence: testSentence.value, context: testContext.value || null } });
     } catch (e) {
       toast.add({ severity: 'error', summary: 'Test failed', detail: extractApiError(e, 'The provider returned an error'), life: 8000 });
     } finally {
@@ -304,7 +305,7 @@
             <div>
               <label class="font-semibold block mb-1" for="context-lines">Context lines</label>
               <InputNumber v-model="settings.contextLines" input-id="context-lines" :min="0" :max="20" show-buttons class="w-32" />
-              <p class="text-xs text-gray-500 mt-1">Japanese lines sent before and after the sentence, from the episode's subtitles.</p>
+              <p class="text-xs text-gray-500 mt-1">Japanese lines sent before and after the sentence, from the episode's subtitles. DeepL uses its own Lines before setting instead.</p>
             </div>
 
             <div>
@@ -321,7 +322,7 @@
               </div>
               <Textarea id="prompt" v-model="settings.prompt" rows="14" class="w-full font-mono text-xs" />
               <p class="text-xs text-gray-500 mt-1">
-                GameSentenceMiner's translation prompt. <code>{title}</code>, <code>{context}</code> and <code>{sentence}</code> are filled in per sentence.
+                GameSentenceMiner's translation prompt. <code>{title}</code>, <code>{context}</code> and <code>{sentence}</code> are filled in per sentence. Not used by DeepL, which translates the sentence directly.
               </p>
             </div>
           </div>
@@ -373,6 +374,7 @@
           <p class="text-sm text-gray-600 dark:text-gray-300 mb-3">
             Translates a line with the saved settings{{ activeProvider ? ` (${activeProvider.name})` : '' }}. Save changes first.
           </p>
+          <InputText v-model="testContext" class="w-full mb-2" lang="ja" placeholder="Previous line (optional), sent as context" />
           <div class="flex flex-col sm:flex-row gap-2">
             <InputText v-model="testSentence" class="flex-1" lang="ja" />
             <Button label="Translate" icon="pi pi-language" :loading="testing" :disabled="!settings.activeProvider" @click="test" />
