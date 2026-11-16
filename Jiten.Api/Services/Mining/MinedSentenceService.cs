@@ -40,7 +40,7 @@ public record ImportNoteResult(long AnkiNoteId, string Status, long? MinedWordId
                                string? WordMatch = null, bool Moved = false);
 
 public record MinedWordSummaryDto(long MinedWordId, int? WordId, byte? ReadingIndex, string Expression, string Reading, int Sentences, int Notes,
-                                  int Flagged, string? MainSentence, DateTime UpdatedAt, int Guessed = 0);
+                                  int Flagged, string? MainSentence, DateTime UpdatedAt, int Guessed = 0, int Auto = 0);
 
 public record MinedWordsPage(List<MinedWordSummaryDto> Words, int Total);
 
@@ -58,7 +58,8 @@ public record SetNoteWordResult(long MinedWordId, bool Moved);
 /// <param name="AudioUrl">The stored copy's URL; null for Jiten sentences (cut from the episode on demand) and sentences without audio.</param>
 public record MinedSentenceDto(long MinedSentenceId, string Text, string? English, string? EnglishOrigin, string Origin, long? ExampleSentenceId,
                                string? SourceTitle, string? SourceUrl, string? PreviousLine, DateTime? MinedAt, string? AudioUrl, string? PictureUrl,
-                               bool IsMain, int SortOrder, bool Flagged, bool Removable = true, string ClipKey = "", string PictureKey = "");
+                               bool IsMain, int SortOrder, bool Flagged, bool Removable = true, string ClipKey = "", string PictureKey = "",
+                               DateTime? AutoAddedAt = null);
 
 public record MinedWordDto(long MinedWordId, int? WordId, byte? ReadingIndex, string Expression, string Reading, List<MinedNoteDto> Notes,
                            List<MinedSentenceDto> Sentences);
@@ -67,11 +68,12 @@ public record MinedWordDto(long MinedWordId, int? WordId, byte? ReadingIndex, st
 /// <param name="AnkiNoteId">A note of the word, as found in Anki; the sentence goes to the word, so any of its notes will do.</param>
 /// <param name="Sentence">The sentence as card HTML, the word in bold.</param>
 /// <param name="EnglishOrigin">"subtitles", "ai" or "user" (a fix's English).</param>
+/// <param name="Auto">Sync is adding it by itself (automatic sentences): it's marked so, and refused if the user removed it before.</param>
 /// <param name="ParsedWordId">The entry the line was mined for, when the user chose a note of another entry of the same spelling:
 /// the line's Jiten-only copy is taken off that entry's list.</param>
 public record AddSentenceRequest(long AnkiNoteId, long ExampleSentenceId, string Sentence, string? Furigana, string? English, string? EnglishOrigin,
                                  string? SourceTitle, string? AudioFilename, string? PictureFilename, string? VideoFilename = null,
-                                 int? ParsedWordId = null, byte? ParsedReadingIndex = null);
+                                 int? ParsedWordId = null, byte? ParsedReadingIndex = null, bool Auto = false);
 
 /// <summary>A word's notes, given the note ids a search of the Word fields by its spelling found (<paramref name="Candidates"/>).</summary>
 public record WordNotesRequest(int WordId, byte ReadingIndex, List<long> Candidates);
@@ -398,10 +400,16 @@ public class MinedSentenceService(
                                     .FirstAsync(w => w.MinedWordId == note.MinedWordId, ct);
         await sync.FillAsync(userId, word.Sentences, ct);
         var sentence = word.Sentences.FirstOrDefault(s => s.ExampleSentenceId == request.ExampleSentenceId || PlainText(s.Shown) == text);
+        // An automatic line never promotes one kept for Jiten (the user kept it off the card) or comes back once removed.
+        if (request.Auto && (sentence != null || await userContext.MinedSentenceRejections.AnyAsync(
+                                 r => r.UserId == userId && r.MinedWordId == word.MinedWordId && r.ExampleSentenceId == request.ExampleSentenceId, ct)))
+            return new AddSentenceResult(note.AnkiNoteId, sentence?.MinedSentenceId ?? 0, false, word.Sentences.Count(s => !s.JitenOnly), null);
+
         var added = sentence == null || sentence.JitenOnly;
         if (sentence == null)
         {
             sentence = NewJitenSentence(userId, word, request, null);
+            if (request.Auto) sentence.AutoAddedAt = DateTime.UtcNow;
             await SaveNewSentenceAsync(word, sentence, ct);
         }
         else if (sentence.JitenOnly)
@@ -737,6 +745,11 @@ public class MinedSentenceService(
         if (sentence == null) return null;
         if (!await CanRemoveAsync(userContext, minedSentenceId, ct)) return false;
 
+        // A line Sync added by itself isn't added again.
+        if (sentence.AutoAddedAt != null && sentence.ExampleSentenceId is { } line &&
+            !await userContext.MinedSentenceRejections.AnyAsync(r => r.UserId == userId && r.MinedWordId == sentence.MinedWordId && r.ExampleSentenceId == line, ct))
+            userContext.MinedSentenceRejections.Add(new MinedSentenceRejection { UserId = userId, MinedWordId = sentence.MinedWordId, ExampleSentenceId = line });
+
         userContext.MinedSentences.Remove(sentence);
         await userContext.MinedWords.Where(w => w.MinedWordId == sentence.MinedWordId)
                          .ExecuteUpdateAsync(u => u.SetProperty(w => w.UpdatedAt, DateTime.UtcNow), ct);
@@ -795,6 +808,24 @@ public class MinedSentenceService(
             candidates.Where(id => !storedIds.Contains(id)).ToList());
     }
 
+    /// <summary>
+    /// Records that a line Sync picked for a word's card can't be used (no English where English is needed), so it isn't
+    /// picked again. False when the note isn't in the store.
+    /// </summary>
+    public async Task<bool> SkipAutoAsync(string userId, long ankiNoteId, long exampleSentenceId, CancellationToken ct)
+    {
+        var wordId = await userContext.MinedNotes.AsNoTracking().Where(n => n.UserId == userId && n.AnkiNoteId == ankiNoteId)
+                                      .Select(n => (long?)n.MinedWordId).FirstOrDefaultAsync(ct);
+        if (wordId is not { } id) return false;
+        if (!await userContext.MinedSentenceRejections.AnyAsync(r => r.UserId == userId && r.MinedWordId == id && r.ExampleSentenceId == exampleSentenceId, ct))
+        {
+            userContext.MinedSentenceRejections.Add(new MinedSentenceRejection { UserId = userId, MinedWordId = id, ExampleSentenceId = exampleSentenceId });
+            await userContext.SaveChangesAsync(ct);
+        }
+
+        return true;
+    }
+
     private async Task SaveNewSentenceAsync(MinedWord word, MinedSentence sentence, CancellationToken ct)
     {
         word.Sentences.Add(sentence);
@@ -841,10 +872,18 @@ public class MinedSentenceService(
         userContext.MinedNotes.AsNoTracking().Where(n => n.UserId == userId && n.WordMatch == null).Select(n => n.AnkiNoteId).ToListAsync(ct);
 
     /// <param name="guessed">Only words with a note whose word was guessed.</param>
-    public async Task<MinedWordsPage> ListAsync(string userId, string? search, int page, CancellationToken ct, bool guessed = false)
+    /// <param name="auto">Only words with a sentence Sync added by itself, at or after <paramref name="autoSince"/> when given, the latest first.</param>
+    public async Task<MinedWordsPage> ListAsync(string userId, string? search, int page, CancellationToken ct, bool guessed = false, bool auto = false,
+                                                DateTime? autoSince = null)
     {
         var query = userContext.MinedWords.AsNoTracking().Where(w => w.UserId == userId);
         if (guessed) query = query.Where(w => w.Notes.Any(n => n.WordMatch == MinedWordMatch.Guessed));
+        if (auto && autoSince is { } t)
+        {
+            var since = DateTime.SpecifyKind(t.ToUniversalTime(), DateTimeKind.Utc);
+            query = query.Where(w => w.Sentences.Any(s => s.AutoAddedAt != null && s.AutoAddedAt >= since));
+        }
+        else if (auto) query = query.Where(w => w.Sentences.Any(s => s.AutoAddedAt != null));
         if (!string.IsNullOrWhiteSpace(search))
         {
             var term = search.Trim();
@@ -852,14 +891,18 @@ public class MinedSentenceService(
         }
 
         var total = await query.CountAsync(ct);
-        var words = await query.OrderByDescending(w => w.UpdatedAt).ThenByDescending(w => w.MinedWordId)
+        var ordered = auto
+            ? query.OrderByDescending(w => w.Sentences.Max(s => s.AutoAddedAt)).ThenByDescending(w => w.MinedWordId)
+            : query.OrderByDescending(w => w.UpdatedAt).ThenByDescending(w => w.MinedWordId);
+        var words = await ordered
                                .Skip(Math.Max(page, 0) * PageSize).Take(PageSize)
                                .Select(w => new MinedWordSummaryDto(
                                    w.MinedWordId, w.WordId, w.ReadingIndex, w.Expression, w.Reading,
                                    w.Sentences.Count, w.Notes.Count,
                                    w.Sentences.Count(s => userContext.SentenceFlags.Any(f => f.UserId == userId && f.ResolvedAt == null
                                                                                              && f.ExampleSentenceId == s.ExampleSentenceId)),
-                                   null, w.UpdatedAt, w.Notes.Count(n => n.WordMatch == MinedWordMatch.Guessed)))
+                                   null, w.UpdatedAt, w.Notes.Count(n => n.WordMatch == MinedWordMatch.Guessed),
+                                   w.Sentences.Count(s => s.AutoAddedAt != null)))
                                .ToListAsync(ct);
 
         var ids = words.Select(w => w.MinedWordId).ToList();
@@ -892,7 +935,7 @@ public class MinedSentenceService(
                 s.JitenOnly || (!word.Notes.Any(n => n.AnkiNoteId == s.SourceAnkiNoteId) &&
                                 (word.Notes.Count == 0 || word.Sentences.Count(x => !x.JitenOnly) > 1)),
                 SentenceMediaNames.RangeSuffix(s.ExampleSentenceId is { } a ? fixes.GetValueOrDefault(a) : null),
-                SentenceMediaNames.PictureSuffix(s.ExampleSentenceId is { } b ? fixes.GetValueOrDefault(b) : null))).ToList());
+                SentenceMediaNames.PictureSuffix(s.ExampleSentenceId is { } b ? fixes.GetValueOrDefault(b) : null), s.AutoAddedAt)).ToList());
     }
 
     private async Task<MinedWord> FindOrCreateWordAsync(string userId, string expression, string reading, int? wordId, byte? readingIndex,

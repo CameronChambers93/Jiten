@@ -63,6 +63,7 @@ public class UserDbContext : IdentityDbContext<User>
     public DbSet<SentenceFlag> SentenceFlags { get; set; }
     public DbSet<SentenceFix> SentenceFixes { get; set; }
     public DbSet<AnkiNoteTypeSetup> AnkiNoteTypeSetups { get; set; }
+    public DbSet<MinedSentenceRejection> MinedSentenceRejections { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -190,6 +191,7 @@ public class UserDbContext : IdentityDbContext<User>
             entity.HasKey(us => us.UserId);
             entity.Property(us => us.TargetWordTemplate).HasMaxLength(TargetWordMarkup.MaxTemplateLength);
             entity.Property(us => us.ApprovedFixMode).HasMaxLength(10);
+            entity.Property(us => us.AutoSentencesMaxPerSync).HasDefaultValue(100);
             if (isNpgsql)
             {
                 entity.Property(us => us.UserId).HasConversion(guidToString).HasColumnType("uuid").IsRequired();
@@ -793,6 +795,15 @@ public class UserDbContext : IdentityDbContext<User>
             entity.HasIndex(s => new { s.UserId, s.SourceAnkiNoteId });
         });
 
+        modelBuilder.Entity<MinedSentenceRejection>(entity =>
+        {
+            entity.HasKey(r => r.MinedSentenceRejectionId);
+            if (isNpgsql)
+                entity.Property(r => r.UserId).HasConversion(guidToString).HasColumnType("uuid").IsRequired();
+            entity.HasIndex(r => new { r.UserId, r.MinedWordId, r.ExampleSentenceId }).IsUnique();
+            entity.HasOne<MinedWord>().WithMany().HasForeignKey(r => r.MinedWordId).OnDelete(DeleteBehavior.Cascade);
+        });
+
         modelBuilder.Entity<AnkiNoteTypeSetup>(entity =>
         {
             entity.HasKey(s => s.AnkiNoteTypeSetupId);
@@ -801,6 +812,7 @@ public class UserDbContext : IdentityDbContext<User>
                 entity.Property(s => s.UserId).HasConversion(guidToString).HasColumnType("uuid").IsRequired();
                 entity.Property(s => s.FieldRolesJson).HasColumnType("jsonb").HasDefaultValue("{}");
                 entity.Property(s => s.MiningJson).HasColumnType("jsonb");
+                entity.Property(s => s.AutoSentencesJson).HasColumnType("jsonb");
             }
             else
                 entity.Property(s => s.FieldRolesJson).HasDefaultValue("{}");

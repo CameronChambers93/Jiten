@@ -32,6 +32,8 @@
     updatedAt: string;
     /** Notes whose word was guessed among entries sharing its spelling. */
     guessed: number;
+    /** Sentences Sync added by itself (automatic sentences). */
+    auto: number;
   }
 
   interface MinedSentence {
@@ -55,6 +57,8 @@
     /** Fixed clip and frame keys, for their URLs (see ExampleSentence.clipKey). */
     clipKey: string;
     pictureKey: string;
+    /** When Sync added it by itself; null for one you picked or imported. */
+    autoAddedAt: string | null;
   }
 
   interface MinedNote {
@@ -167,7 +171,9 @@
   function removeSentence(s: MinedSentence, expression: string) {
     confirm.require({
       header: `Remove from ${expression}`,
-      message: `Take this sentence off ${expression}'s list? The next Sync takes it off the card too.`,
+      message: s.autoAddedAt
+        ? `Take this sentence off ${expression}'s list? The next Sync takes it off the card too, and won't add it again.`
+        : `Take this sentence off ${expression}'s list? The next Sync takes it off the card too.`,
       acceptProps: { label: 'Remove', severity: 'danger' },
       rejectProps: { label: 'Cancel', severity: 'secondary', outlined: true },
       accept: async () => {
@@ -185,6 +191,10 @@
   // Words
   const search = ref('');
   const guessedOnly = ref(false);
+  const route = useRoute();
+  /** Words with sentences Sync added by itself; `?auto=<time>` (Sync's result link) shows only those added since then. */
+  const autoOnly = ref(route.query.auto != null);
+  const autoSince = ref(typeof route.query.auto === 'string' && route.query.auto !== '1' ? route.query.auto : null);
   const page = ref(0);
   const words = ref<MinedWordSummary[]>([]);
   const total = ref(0);
@@ -195,7 +205,13 @@
     loading.value = true;
     try {
       const data = await $api<{ words: MinedWordSummary[]; total: number }>('mined/words', {
-        query: { search: search.value || undefined, page: page.value, guessed: guessedOnly.value || undefined },
+        query: {
+          search: search.value || undefined,
+          page: page.value,
+          guessed: guessedOnly.value || undefined,
+          auto: autoOnly.value || undefined,
+          autoSince: (autoOnly.value && autoSince.value) || undefined,
+        },
       });
       words.value = data.words;
       total.value = data.total;
@@ -222,9 +238,28 @@
     loadWords();
   });
 
+  watch(autoOnly, (on) => {
+    if (!on) autoSince.value = null;
+    page.value = 0;
+    loadWords();
+  });
+
+  /** Sync added sentences: list the words that got them in that Sync. */
+  async function showAutoAdded(since: string) {
+    guessedOnly.value = false;
+    search.value = '';
+    clearTimeout(searchTimer);
+    autoSince.value = since;
+    if (autoOnly.value) {
+      page.value = 0;
+      await loadWords();
+    } else autoOnly.value = true;
+  }
+
   /** Sync's fold dialog asks to check a word first: list it, open. */
   async function checkWord(expression: string) {
     guessedOnly.value = false;
+    autoOnly.value = false;
     search.value = expression;
     clearTimeout(searchTimer);
     page.value = 0;
@@ -373,13 +408,16 @@
       </template>
     </Card>
 
-    <MinedAnkiSync @changed="refresh" @check="checkWord" />
+    <MinedAnkiSync @changed="refresh" @check="checkWord" @auto-added="showAutoAdded" />
 
     <SentenceFlagList ref="flagList" @changed="refresh" />
 
     <div class="flex items-center gap-3 mb-3">
       <InputText v-model="search" placeholder="Search words" class="w-full sm:w-72" lang="ja" />
       <label class="flex items-center gap-2 text-sm shrink-0"><Checkbox v-model="guessedOnly" binary /> Guessed only</label>
+      <label class="flex items-center gap-2 text-sm shrink-0">
+        <Checkbox v-model="autoOnly" binary /> {{ autoSince ? 'Auto-added in the last Sync' : 'Auto-added' }}
+      </label>
       <span class="text-sm text-gray-500">{{ total }} words</span>
     </div>
 
@@ -404,6 +442,7 @@
             <div v-if="w.notes > 1" class="text-orange-600">{{ w.notes }} Anki notes</div>
             <div v-if="w.flagged" class="text-red-600">{{ w.flagged }} flagged</div>
             <div v-if="w.guessed" class="text-orange-600">guessed word</div>
+            <div v-if="w.auto">{{ w.auto }} auto</div>
           </div>
         </button>
 
@@ -428,6 +467,7 @@
                   <div class="flex flex-wrap items-center gap-2 mt-1 text-xs text-gray-500">
                     <Tag :value="ORIGIN_LABELS[s.origin]" severity="secondary" />
                     <Tag v-if="s.isMain" value="Main" severity="info" />
+                    <Tag v-if="s.autoAddedAt" v-tooltip.top="`Added by Sync on ${new Date(s.autoAddedAt).toLocaleDateString()}`" value="Auto" severity="contrast" />
                     <Tag v-if="s.flagged" value="Flagged" severity="danger" />
                     <button v-else-if="s.exampleSentenceId" class="underline hover:text-red-500" @click="flagging = s">Flag</button>
                     <NuxtLink v-if="s.exampleSentenceId" :to="`/sentences/${s.exampleSentenceId}/fix`" class="underline hover:text-primary-500">Fix</NuxtLink>

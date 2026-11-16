@@ -170,6 +170,19 @@ public class MinedSentence
     /// <summary>The first sentence of a word is its main one, shown in the note's main Sentence fields.</summary>
     public int SortOrder { get; set; }
 
+    /// <summary>When Sync added it by itself (automatic sentences); null for a sentence the user picked or imported.</summary>
+    public DateTime? AutoAddedAt { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>A line the user removed from a word's list after Sync added it by itself, so it isn't added again.</summary>
+public class MinedSentenceRejection
+{
+    public long MinedSentenceRejectionId { get; set; }
+    public string UserId { get; set; } = default!;
+    public long MinedWordId { get; set; }
+    public long ExampleSentenceId { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }

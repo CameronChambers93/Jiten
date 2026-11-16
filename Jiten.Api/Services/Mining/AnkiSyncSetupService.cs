@@ -20,7 +20,8 @@ public record AnkiNoteTypeSetupDto(
     bool UpdateMainFields,
     string SentenceList,
     int? ScriptVersion,
-    AnkiMiningSettingsDto? Mining = null);
+    AnkiMiningSettingsDto? Mining = null,
+    AnkiAutoSentencesDto? AutoSentences = null);
 
 public record AnkiSetupsDto(List<AnkiNoteTypeSetupDto> Setups, DateTime? KnownWordsSyncedAt);
 
@@ -34,6 +35,28 @@ public record AnkiMiningPartsDto(bool Audio = true, bool Picture = true, bool En
 /// </summary>
 public record AnkiMiningSettingsDto(string Existing = AnkiMiningExisting.Ask, AnkiMiningPartsDto? Parts = null,
                                     Dictionary<string, string>? EmptyFields = null);
+
+/// <summary>
+/// How Sync tops up a note type's cards with lines from imported anime, TV and film: each card gets up to
+/// <c>PerCard</c> sentences, at most <c>PerSync</c> more in one Sync. A line qualifies when the word is its only word not
+/// known (other words Young or better, or Mature with <c>OthersMature</c>), it has a clip and English when those are
+/// needed, and its length is within range. <c>English</c> is a pipeline English choice: subtitlesOnly, subtitlesThenAi
+/// or none. Null on a save leaves the settings as they are; <c>Enabled</c> false keeps them but turns it off.
+/// </summary>
+public record AnkiAutoSentencesDto(
+    bool Enabled = false,
+    int PerCard = 5,
+    int PerSync = 2,
+    bool OthersMature = false,
+    bool NeedsClip = true,
+    bool NeedsEnglish = true,
+    int LengthMin = 6,
+    int LengthMax = 40,
+    bool Audio = true,
+    bool Picture = true,
+    bool Video = true,
+    string English = "subtitlesOnly",
+    List<AnkiRuleTitleDto>? ExcludedTitles = null);
 
 /// <summary>A title a rule matches, with its name for showing the rule.</summary>
 public record AnkiRuleTitleDto(int DeckId, string Title);
@@ -93,6 +116,7 @@ public class AnkiSyncSetupService(UserDbContext userContext)
         if (!AnkiSentenceListFormat.All.Contains(setup.SentenceList)) return "Unknown sentence list format.";
         if (setup.Preset is { Length: > 50 }) return "The preset name is too long.";
         if (setup.Mining is { } m && !AnkiMiningExisting.All.Contains(m.Existing)) return "Unknown choice for a word's existing card.";
+        if (setup.AutoSentences is { } auto && ValidateAuto(auto) is { } autoError) return autoError;
 
         var roles = setup.FieldRoles.Values.ToHashSet();
         if ((setup.KnownWords != null || setup.ImportSentences) && !roles.Contains("word")) return "Map a field to Word first.";
@@ -101,7 +125,57 @@ public class AnkiSyncSetupService(UserDbContext userContext)
         if (setup.SentenceList != AnkiSentenceListFormat.None && !roles.Contains("sentenceList")) return "Choose the field the sentence list goes in.";
         if (setup.UpdateMainFields && !roles.Overlaps(["sentence", "sentencePlain", "sentenceFurigana"]))
             return "Updating main fields needs a Sentence field.";
+        if (setup.AutoSentences is { Enabled: true } && (setup.SentenceList == AnkiSentenceListFormat.None || !roles.Contains("sentenceList")))
+            return "Automatic sentences need a sentence list (the rotation script or a plain list).";
         return null;
+    }
+
+    public const int MaxAutoPerCard = 20;
+    public const int MaxAutoPerSync = 1000;
+    public static readonly string[] AutoEnglish = ["subtitlesOnly", "subtitlesThenAi", "none"];
+
+    private static string? ValidateAuto(AnkiAutoSentencesDto auto)
+    {
+        if (auto.PerCard is < 1 or > MaxAutoPerCard) return $"Sentences per card must be 1 to {MaxAutoPerCard}.";
+        if (auto.PerSync is < 1 or > MaxAutoPerCard) return $"Sentences added per word in one Sync must be 1 to {MaxAutoPerCard}.";
+        if (auto.LengthMin < 0 || auto.LengthMax < 1 || auto.LengthMin > auto.LengthMax || auto.LengthMax > 500) return "The length range isn't valid.";
+        if (!AutoEnglish.Contains(auto.English)) return "Unknown English choice.";
+        if (auto.ExcludedTitles is { Count: > MaxRuleItems }) return $"At most {MaxRuleItems} titles can be left out.";
+        return null;
+    }
+
+    private static AnkiAutoSentencesDto CleanAuto(AnkiAutoSentencesDto a) =>
+        a with
+        {
+            ExcludedTitles = (a.ExcludedTitles ?? []).Where(t => t.DeckId > 0).DistinctBy(t => t.DeckId).Take(MaxRuleItems)
+                                                     .Select(t => t with { Title = Truncate((t.Title ?? "").Trim(), 300) }).ToList()
+        };
+
+    /// <summary>The setup's automatic sentences settings, or null when it has none (off).</summary>
+    public static AnkiAutoSentencesDto? AutoSentences(AnkiNoteTypeSetup setup)
+    {
+        if (string.IsNullOrEmpty(setup.AutoSentencesJson)) return null;
+        try
+        {
+            var a = JsonSerializer.Deserialize<AnkiAutoSentencesDto>(setup.AutoSentencesJson, Json);
+            return a == null || ValidateAuto(a) != null ? null : CleanAuto(a);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The most sentences one Sync adds automatically, across every note type.</summary>
+    public async Task<int> AutoMaxPerSyncAsync(string userId, CancellationToken ct) =>
+        await userContext.UserSettings.AsNoTracking().Where(s => s.UserId == userId).Select(s => (int?)s.AutoSentencesMaxPerSync).FirstOrDefaultAsync(ct) ?? 100;
+
+    public async Task SaveAutoMaxPerSyncAsync(string userId, int max, CancellationToken ct)
+    {
+        if (max is < 1 or > MaxAutoPerSync) throw new ArgumentException($"The limit per Sync must be 1 to {MaxAutoPerSync}.");
+        var settings = await SettingsAsync(userId, ct);
+        settings.AutoSentencesMaxPerSync = max;
+        await userContext.SaveChangesAsync(ct);
     }
 
     public async Task<AnkiNoteTypeSetupDto> SaveAsync(string userId, AnkiNoteTypeSetupDto dto, CancellationToken ct)
@@ -136,6 +210,7 @@ public class AnkiSyncSetupService(UserDbContext userContext)
         setup.SentenceList = dto.SentenceList;
         setup.ScriptVersion = dto.ScriptVersion;
         if (dto.Mining != null) setup.MiningJson = JsonSerializer.Serialize(CleanMining(dto.Mining), Json);
+        if (dto.AutoSentences != null) setup.AutoSentencesJson = JsonSerializer.Serialize(CleanAuto(dto.AutoSentences), Json);
         setup.UpdatedAt = DateTime.UtcNow;
         await userContext.SaveChangesAsync(ct);
         return ToDto(setup);
@@ -296,7 +371,7 @@ public class AnkiSyncSetupService(UserDbContext userContext)
 
     private static AnkiNoteTypeSetupDto ToDto(AnkiNoteTypeSetup s) =>
         new(s.ModelName, s.Filter, Roles(s), s.Preset, s.KnownWords, s.ImportSentences, s.TakeFlags, s.FoldDuplicates, s.UpdateMainFields,
-            s.SentenceList, s.ScriptVersion, Mining(s));
+            s.SentenceList, s.ScriptVersion, Mining(s), AutoSentences(s));
 
     private static string Truncate(string value, int max) => value.Length <= max ? value : value[..max];
 }

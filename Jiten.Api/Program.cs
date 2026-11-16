@@ -508,6 +508,7 @@ builder.Services.AddSingleton<Jiten.Api.Services.EpisodeImport.EpisodeImportTrac
 builder.Services.AddScoped<Jiten.Api.Services.Mining.FrequencyDictionaryService>();
 builder.Services.AddScoped<Jiten.Api.Services.Mining.MiningSentenceService>();
 builder.Services.AddScoped<Jiten.Api.Services.Mining.MinedSentenceService>();
+builder.Services.AddScoped<Jiten.Api.Services.Mining.MinedAutoSentenceService>();
 builder.Services.AddScoped<Jiten.Api.Services.Mining.WordMatchService>();
 builder.Services.AddScoped<Jiten.Api.Services.Mining.MinedSyncService>();
 builder.Services.AddScoped<Jiten.Api.Services.Mining.AnkiSyncSetupService>();

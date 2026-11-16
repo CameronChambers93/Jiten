@@ -2,12 +2,14 @@
   import { ankiConnect } from '~/composables/useAnkiConnect';
   import {
     allowedActions,
+    autoSentencesOf,
     KNOWN_WORDS_OPTIONS,
     matchPreset,
     ROLE_OPTIONS,
     SENTENCE_LIST_OPTIONS,
     setupQuery,
     type AnkiNoteTypeSetup,
+    type AutoSentences,
     type FieldRole,
   } from '~/utils/ankiSetups';
   import { useToast } from 'primevue/usetoast';
@@ -36,6 +38,12 @@
   const roles = computed(() => draft.value.fieldRoles as Record<string, FieldRole | ''>);
   const allowed = computed(() => allowedActions(roles.value));
   const dirty = computed(() => JSON.stringify(draft.value) !== JSON.stringify(props.setup));
+  const autoSentences = computed<AutoSentences>({
+    get: () => autoSentencesOf(draft.value),
+    set: (v) => (draft.value.autoSentences = v),
+  });
+  /** The saved setup has automatic sentences as the draft does, so the preview counts what's shown. */
+  const autoSaved = computed(() => JSON.stringify(autoSentencesOf(props.setup)) === JSON.stringify(autoSentences.value));
   const preset = computed(() => (fieldOrder.value.length ? matchPreset(draft.value.modelName, fieldOrder.value) : null));
 
   /** The fields in Anki's order, with any role on a field Anki no longer has listed after them. */
@@ -96,6 +104,14 @@
     if (!a.updateMainFields) draft.value.updateMainFields = false;
     if (!a.sentenceList) draft.value.sentenceList = 'none';
   });
+
+  // Automatic sentences reach the card through its sentence list.
+  watch(
+    () => draft.value.sentenceList,
+    (list) => {
+      if (list === 'none' && draft.value.autoSentences?.enabled) draft.value.autoSentences = { ...draft.value.autoSentences, enabled: false };
+    }
+  );
 
   async function save() {
     saving.value = true;
@@ -219,6 +235,13 @@
         </div>
 
         <AnkiRotationScriptPanel v-if="draft.sentenceList === 'script' && allowed.sentenceList" :setup="setup" :field-order="fieldOrder" />
+
+        <AnkiAutoSentencesPanel
+          v-if="draft.sentenceList !== 'none' && allowed.sentenceList"
+          v-model="autoSentences"
+          :model-name="setup.modelName"
+          :saved="autoSaved"
+        />
 
         <div>
           <Button

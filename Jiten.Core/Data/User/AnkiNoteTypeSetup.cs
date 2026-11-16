@@ -41,6 +41,12 @@ public class AnkiNoteTypeSetup
     /// </summary>
     public string? MiningJson { get; set; }
 
+    /// <summary>
+    /// JSON of the automatic sentences settings: how Sync tops up this note type's cards with lines from imported media
+    /// (see <c>AnkiAutoSentencesDto</c>); null when off.
+    /// </summary>
+    public string? AutoSentencesJson { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
